@@ -8,7 +8,6 @@ import (
 	"syscall"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/joshkerr/goplexcli/internal/cache"
 	"github.com/joshkerr/goplexcli/internal/config"
@@ -308,6 +307,30 @@ func selectMediaTypeManual() (string, error) {
 	}
 }
 
+func selectMediaManual(media []plex.MediaItem) (*plex.MediaItem, error) {
+	fmt.Println(infoStyle.Render("\nAvailable media:"))
+	for i, item := range media {
+		if i >= 20 {
+			fmt.Printf("  ... and %d more items\n", len(media)-20)
+			break
+		}
+		fmt.Printf("  %d. %s\n", i+1, item.FormatMediaTitle())
+	}
+	fmt.Printf("\nEnter number (1-%d): ", len(media))
+	
+	var choice int
+	if _, err := fmt.Scanln(&choice); err != nil {
+		return nil, fmt.Errorf("failed to read selection: %w", err)
+	}
+	
+	if choice < 1 || choice > len(media) {
+		return nil, fmt.Errorf("invalid selection")
+	}
+	
+	return &media[choice-1], nil
+}
+
+
 func runBrowse(cmd *cobra.Command, args []string) error {
 	// Load config
 	cfg, err := config.Load()
@@ -333,10 +356,24 @@ func runBrowse(cmd *cobra.Command, args []string) error {
 	fmt.Println(infoStyle.Render(fmt.Sprintf("Loaded %d media items from cache", len(mediaCache.Media))))
 	fmt.Println(infoStyle.Render(fmt.Sprintf("Last updated: %s", mediaCache.LastUpdated.Format(time.RFC822))))
 
-	// Ask user to select media type
-	mediaType, err := selectMediaTypeManual()
-	if err != nil {
-		return err
+	// Ask user to select media type using fzf if available
+	var mediaType string
+	if ui.IsAvailable(cfg.FzfPath) {
+		var err error
+		mediaType, err = ui.SelectMediaType(cfg.FzfPath)
+		if err != nil {
+			if err.Error() == "cancelled by user" {
+				return nil
+			}
+			return fmt.Errorf("media type selection failed: %w", err)
+		}
+	} else {
+		// Fallback to manual selection
+		var err error
+		mediaType, err = selectMediaTypeManual()
+		if err != nil {
+			return err
+		}
 	}
 
 	// Filter media by type
@@ -367,22 +404,29 @@ func runBrowse(cmd *cobra.Command, args []string) error {
 
 	fmt.Println(infoStyle.Render(fmt.Sprintf("\nBrowsing %d items...\n", len(filteredMedia))))
 
-	// Launch Bubble Tea browser
-	browser := ui.NewBrowser(filteredMedia, cfg.PlexURL, cfg.PlexToken)
-	p := tea.NewProgram(browser, tea.WithAltScreen())
-	
-	finalModel, err := p.Run()
-	if err != nil {
-		return fmt.Errorf("browser error: %w", err)
-	}
-
-	// Get selected media
-	browserModel := finalModel.(*ui.BrowserModel)
-	selectedMedia := browserModel.GetSelected()
-	
-	if selectedMedia == nil {
-		// User quit without selecting
-		return nil
+	// Use fzf with preview to select media if fzf available, otherwise use manual selection
+	var selectedMedia *plex.MediaItem
+	if ui.IsAvailable(cfg.FzfPath) {
+		selectedIndex, err := ui.SelectMediaWithPreview(filteredMedia, "Select media:", cfg.FzfPath, cfg.PlexURL, cfg.PlexToken)
+		if err != nil {
+			if err.Error() == "cancelled by user" {
+				return nil
+			}
+			return fmt.Errorf("media selection failed: %w", err)
+		}
+		
+		if selectedIndex < 0 || selectedIndex >= len(filteredMedia) {
+			return fmt.Errorf("invalid selection")
+		}
+		
+		selectedMedia = &filteredMedia[selectedIndex]
+	} else {
+		// Fallback to manual selection (no fzf required)
+		var err error
+		selectedMedia, err = selectMediaManual(filteredMedia)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Ask what to do
