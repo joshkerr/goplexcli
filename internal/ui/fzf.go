@@ -282,8 +282,9 @@ echo "  - ~/bin/goplexcli-preview"
 		// Windows batch file
 		scriptPath = filepath.Join(tmpDir, "goplexcli-preview.bat")
 		// Escape special characters for batch files
-		escapedBinary := previewBinary
-		escapedDataPath := dataPath
+		// In batch files, % needs to be escaped as %%, and quotes are handled by outer quotes
+		escapedBinary := strings.ReplaceAll(previewBinary, "%", "%%")
+		escapedDataPath := strings.ReplaceAll(dataPath, "%", "%%")
 		script = fmt.Sprintf(`@echo off
 "%s" "%s" %%1
 `, escapedBinary, escapedDataPath)

@@ -44,9 +44,9 @@ install: build
 clean:
 	@echo "Cleaning build artifacts..."
 ifeq ($(OS),Windows_NT)
-	@if exist goplexcli.exe del goplexcli.exe
-	@if exist goplexcli-preview.exe del goplexcli-preview.exe
-	@if exist build rmdir /s /q build
+	@cmd /c "if exist goplexcli.exe del /q goplexcli.exe"
+	@cmd /c "if exist goplexcli-preview.exe del /q goplexcli-preview.exe"
+	@cmd /c "if exist build rmdir /s /q build"
 else
 	@rm -f goplexcli goplexcli-preview
 	@rm -rf build/
@@ -61,7 +61,7 @@ test:
 # Run the application
 run: build
 ifeq ($(OS),Windows_NT)
-	@.\goplexcli.exe
+	@cmd /c goplexcli.exe
 else
 	@./goplexcli
 endif
