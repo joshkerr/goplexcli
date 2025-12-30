@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"syscall"
 	"time"
 
@@ -133,9 +134,21 @@ func runLogin(cmd *cobra.Command, args []string) error {
 
 	// Select server
 	var selectedServer plex.Server
+	var selectedURL string
+	
 	if len(servers) == 1 {
 		selectedServer = servers[0]
 		fmt.Println(infoStyle.Render(fmt.Sprintf("\nFound server: %s", selectedServer.Name)))
+		
+		// If server has multiple connections, let user choose
+		if len(selectedServer.Connections) > 1 {
+			selectedURL, err = selectConnection(selectedServer)
+			if err != nil {
+				return err
+			}
+		} else {
+			selectedURL = selectedServer.URL
+		}
 	} else {
 		// Multiple servers - let user choose
 		fmt.Println(infoStyle.Render(fmt.Sprintf("\nFound %d servers", len(servers))))
@@ -150,11 +163,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 			if server.Owned {
 				owned = " (owned)"
 			}
-			local := ""
-			if server.Local {
-				local = " [local]"
-			}
-			serverNames = append(serverNames, fmt.Sprintf("%d. %s%s%s", i+1, server.Name, owned, local))
+			serverNames = append(serverNames, fmt.Sprintf("%d. %s%s", i+1, server.Name, owned))
 		}
 
 		// Check if fzf is available
@@ -183,13 +192,23 @@ func runLogin(cmd *cobra.Command, args []string) error {
 			}
 			selectedServer = servers[choice-1]
 		}
+		
+		// Now select connection for the chosen server
+		if len(selectedServer.Connections) > 1 {
+			selectedURL, err = selectConnection(selectedServer)
+			if err != nil {
+				return err
+			}
+		} else {
+			selectedURL = selectedServer.URL
+		}
 	}
 
 	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Selected server: %s", selectedServer.Name)))
 
 	// Save to config
 	cfg := &config.Config{
-		PlexURL:      selectedServer.URL,
+		PlexURL:      selectedURL,
 		PlexToken:    token,
 		PlexUsername: username,
 	}
@@ -199,15 +218,65 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Println(successStyle.Render("✓ Configuration saved"))
-	fmt.Println(infoStyle.Render("\nServer: " + selectedServer.URL))
-	if selectedServer.Local {
-		fmt.Println(infoStyle.Render("Connection: Local"))
-	} else {
-		fmt.Println(infoStyle.Render("Connection: Remote"))
-	}
+	fmt.Println(infoStyle.Render("\nServer URL: " + selectedURL))
 	fmt.Println(infoStyle.Render("\nRun 'goplexcli cache reindex' to build your media cache"))
 
 	return nil
+}
+
+func selectConnection(server plex.Server) (string, error) {
+	fmt.Println(infoStyle.Render(fmt.Sprintf("\nServer '%s' has %d available connections:", server.Name, len(server.Connections))))
+	
+	// Load config to check for fzf
+	cfg, _ := config.Load()
+	
+	// Format connections for selection
+	var connectionDescs []string
+	for i, conn := range server.Connections {
+		connType := "Remote"
+		if i == 0 && server.Local {
+			connType = "Local"
+		} else {
+			// Check if this connection looks local (private IP)
+			if strings.HasPrefix(conn, "http://192.168.") || 
+			   strings.HasPrefix(conn, "http://10.") || 
+			   strings.HasPrefix(conn, "http://172.") {
+				connType = "Local"
+			}
+		}
+		connectionDescs = append(connectionDescs, fmt.Sprintf("%d. %s [%s]", i+1, conn, connType))
+	}
+	
+	var selectedIdx int
+	
+	// Check if fzf is available
+	if ui.IsAvailable(cfg.FzfPath) {
+		_, idx, err := ui.SelectWithFzf(connectionDescs, "Select connection:", cfg.FzfPath)
+		if err != nil {
+			return "", fmt.Errorf("connection selection failed: %w", err)
+		}
+		selectedIdx = idx
+	} else {
+		// Fallback to manual selection
+		for _, desc := range connectionDescs {
+			fmt.Println("  " + desc)
+		}
+		fmt.Print("\nSelect connection number: ")
+		var choice int
+		if _, err := fmt.Scanln(&choice); err != nil {
+			return "", fmt.Errorf("failed to read selection: %w", err)
+		}
+		if choice < 1 || choice > len(server.Connections) {
+			return "", fmt.Errorf("invalid selection")
+		}
+		selectedIdx = choice - 1
+	}
+	
+	if selectedIdx < 0 || selectedIdx >= len(server.Connections) {
+		return "", fmt.Errorf("invalid connection selection")
+	}
+	
+	return server.Connections[selectedIdx], nil
 }
 
 func runBrowse(cmd *cobra.Command, args []string) error {
