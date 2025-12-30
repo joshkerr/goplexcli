@@ -307,6 +307,30 @@ func selectMediaTypeManual() (string, error) {
 	}
 }
 
+func selectMediaManual(media []plex.MediaItem) (*plex.MediaItem, error) {
+	fmt.Println(infoStyle.Render("\nAvailable media:"))
+	for i, item := range media {
+		if i >= 20 {
+			fmt.Printf("  ... and %d more items\n", len(media)-20)
+			break
+		}
+		fmt.Printf("  %d. %s\n", i+1, item.FormatMediaTitle())
+	}
+	fmt.Printf("\nEnter number (1-%d): ", len(media))
+	
+	var choice int
+	if _, err := fmt.Scanln(&choice); err != nil {
+		return nil, fmt.Errorf("failed to read selection: %w", err)
+	}
+	
+	if choice < 1 || choice > len(media) {
+		return nil, fmt.Errorf("invalid selection")
+	}
+	
+	return &media[choice-1], nil
+}
+
+
 func runBrowse(cmd *cobra.Command, args []string) error {
 	// Load config
 	cfg, err := config.Load()
@@ -338,6 +362,9 @@ func runBrowse(cmd *cobra.Command, args []string) error {
 		var err error
 		mediaType, err = ui.SelectMediaType(cfg.FzfPath)
 		if err != nil {
+			if err.Error() == "cancelled by user" {
+				return nil
+			}
 			return fmt.Errorf("media type selection failed: %w", err)
 		}
 	} else {
@@ -377,20 +404,30 @@ func runBrowse(cmd *cobra.Command, args []string) error {
 
 	fmt.Println(infoStyle.Render(fmt.Sprintf("\nBrowsing %d items...\n", len(filteredMedia))))
 
-	// Use fzf with preview to select media
-	selectedIndex, err := ui.SelectMediaWithPreview(filteredMedia, "Select media:", cfg.FzfPath, cfg.PlexURL, cfg.PlexToken)
-	if err != nil {
-		if err.Error() == "cancelled by user" {
-			return nil
+	// Use fzf with preview to select media if fzf available, otherwise use manual selection
+	var selectedMedia *plex.MediaItem
+	if ui.IsAvailable(cfg.FzfPath) {
+		selectedIndex, err := ui.SelectMediaWithPreview(filteredMedia, "Select media:", cfg.FzfPath, cfg.PlexURL, cfg.PlexToken)
+		if err != nil {
+			if err.Error() == "cancelled by user" {
+				return nil
+			}
+			return fmt.Errorf("media selection failed: %w", err)
 		}
-		return fmt.Errorf("media selection failed: %w", err)
+		
+		if selectedIndex < 0 || selectedIndex >= len(filteredMedia) {
+			return fmt.Errorf("invalid selection")
+		}
+		
+		selectedMedia = &filteredMedia[selectedIndex]
+	} else {
+		// Fallback to manual selection (no fzf required)
+		var err error
+		selectedMedia, err = selectMediaManual(filteredMedia)
+		if err != nil {
+			return err
+		}
 	}
-	
-	if selectedIndex < 0 || selectedIndex >= len(filteredMedia) {
-		return fmt.Errorf("invalid selection")
-	}
-	
-	selectedMedia := &filteredMedia[selectedIndex]
 
 	// Ask what to do
 	action, err := ui.PromptAction(cfg.FzfPath)
