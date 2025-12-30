@@ -1,176 +1,187 @@
 package plex
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
+	"strconv"
 	"strings"
 
-	"github.com/jrudio/go-plex-client"
+	"github.com/LukeHagar/plexgo"
+	"github.com/LukeHagar/plexgo/models/operations"
 )
 
 type Client struct {
-	plex *plex.Plex
+	sdk       *plexgo.PlexAPI
+	serverURL string
+	token     string
 }
 
 type MediaItem struct {
-	Key          string
-	Title        string
-	Year         int
-	Type         string // movie, show, season, episode
-	Summary      string
-	Rating       float64
-	Duration     int
-	FilePath     string
-	RclonePath   string
-	ParentTitle  string // For episodes: show name
-	GrandTitle   string // For episodes: season name
-	Index        int64  // Episode or season number
-	ParentIndex  int64  // Season number for episodes
+	Key         string
+	Title       string
+	Year        int
+	Type        string // movie, show, season, episode
+	Summary     string
+	Rating      float64
+	Duration    int
+	FilePath    string
+	RclonePath  string
+	ParentTitle string // For episodes: show name
+	GrandTitle  string // For episodes: season name
+	Index       int64  // Episode or season number
+	ParentIndex int64  // Season number for episodes
 }
 
 // New creates a new Plex client
 func New(serverURL, token string) (*Client, error) {
-	plexClient, err := plex.New(serverURL, token)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create plex client: %w", err)
-	}
-	
-	return &Client{plex: plexClient}, nil
+	sdk := plexgo.New(
+		plexgo.WithServerURL(serverURL),
+		plexgo.WithSecurity(token),
+		plexgo.WithClientIdentifier("goplexcli"),
+		plexgo.WithProduct("GoplexCLI"),
+		plexgo.WithVersion("1.0"),
+	)
+
+	return &Client{
+		sdk:       sdk,
+		serverURL: serverURL,
+		token:     token,
+	}, nil
 }
 
 // Test validates the connection to the Plex server
 func (c *Client) Test() error {
-	_, err := c.plex.GetServers()
+	ctx := context.Background()
+	_, err := c.sdk.General.GetIdentity(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to connect to plex server: %w", err)
 	}
 	return nil
 }
 
+// Library represents a Plex library section
+type Library struct {
+	Key   string
+	Title string
+	Type  string
+}
+
 // GetLibraries returns all library sections
-func (c *Client) GetLibraries() ([]plex.Directory, error) {
-	sections, err := c.plex.GetLibraries()
+func (c *Client) GetLibraries() ([]Library, error) {
+	ctx := context.Background()
+	res, err := c.sdk.Library.GetSections(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get libraries: %w", err)
 	}
-	return sections.MediaContainer.Directory, nil
+
+	var libraries []Library
+	if res.Object != nil && res.Object.MediaContainer != nil {
+		for _, dir := range res.Object.MediaContainer.Directory {
+			libraries = append(libraries, Library{
+				Key:   valueOrEmpty(dir.Key),
+				Title: valueOrEmpty(dir.Title),
+				Type:  string(dir.Type),
+			})
+		}
+	}
+
+	return libraries, nil
 }
 
 // GetAllMedia returns all media items from all libraries
 func (c *Client) GetAllMedia(ctx context.Context) ([]MediaItem, error) {
-	sections, err := c.GetLibraries()
+	libraries, err := c.GetLibraries()
 	if err != nil {
 		return nil, err
 	}
-	
+
 	var allMedia []MediaItem
-	
-	for _, section := range sections {
-		if section.Type == "movie" || section.Type == "show" {
-			media, err := c.GetMediaFromSection(ctx, section.Key, section.Type)
+
+	for _, lib := range libraries {
+		if lib.Type == "movie" || lib.Type == "show" {
+			media, err := c.GetMediaFromSection(ctx, lib.Key, lib.Type)
 			if err != nil {
-				return nil, fmt.Errorf("failed to get media from section %s: %w", section.Title, err)
+				return nil, fmt.Errorf("failed to get media from section %s: %w", lib.Title, err)
 			}
 			allMedia = append(allMedia, media...)
 		}
 	}
-	
+
 	return allMedia, nil
 }
 
 // GetMediaFromSection returns media items from a specific library section
 func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionType string) ([]MediaItem, error) {
 	var items []MediaItem
-	
+
+	// Get all items in the library section
+	res, err := c.sdk.Library.GetAllItemLeaves(ctx, operations.GetAllItemLeavesRequest{
+		Ids: sectionKey,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get library items: %w", err)
+	}
+
+	if res.MediaContainerWithMetadata == nil || res.MediaContainerWithMetadata.MediaContainer == nil {
+		return items, nil
+	}
+
 	if sectionType == "movie" {
-		metadata, err := c.plex.GetLibraryContent(sectionKey, "")
-		if err != nil {
-			return nil, err
-		}
-		
-		for _, video := range metadata.MediaContainer.Metadata {
+		// Process movies
+		for _, metadata := range res.MediaContainerWithMetadata.MediaContainer.Metadata {
 			item := MediaItem{
-				Key:      video.Key,
-				Title:    video.Title,
-				Year:     video.Year,
+				Key:      metadata.Key,
+				Title:    metadata.Title,
+				Year:     valueOrZeroInt(metadata.Year),
 				Type:     "movie",
-				Summary:  video.Summary,
-				Rating:   video.Rating,
-				Duration: video.Duration,
+				Summary:  valueOrEmpty(metadata.Summary),
+				Rating:   float64(valueOrZeroFloat32(metadata.Rating)),
+				Duration: valueOrZeroInt(metadata.Duration),
 			}
-			
+
 			// Get file path
-			if len(video.Media) > 0 && len(video.Media[0].Part) > 0 {
-				item.FilePath = video.Media[0].Part[0].File
+			if len(metadata.Media) > 0 && len(metadata.Media[0].Part) > 0 {
+				item.FilePath = valueOrEmpty(metadata.Media[0].Part[0].File)
 				item.RclonePath = convertToRclonePath(item.FilePath)
 			}
-			
+
 			items = append(items, item)
 		}
 	} else if sectionType == "show" {
-		// Get all shows
-		metadata, err := c.plex.GetLibraryContent(sectionKey, "")
-		if err != nil {
-			return nil, err
-		}
-		
-		for _, show := range metadata.MediaContainer.Metadata {
-			// Get all seasons for this show
-			seasons, err := c.plex.GetMetadata(show.Key)
-			if err != nil {
-				continue
+		// For TV shows, we need to get all episodes
+		// GetAllItemLeaves with a show section returns all episodes
+		for _, metadata := range res.MediaContainerWithMetadata.MediaContainer.Metadata {
+			item := MediaItem{
+				Key:         metadata.Key,
+				Title:       metadata.Title,
+				Year:        valueOrZeroInt(metadata.Year),
+				Type:        "episode",
+				Summary:     valueOrEmpty(metadata.Summary),
+				Rating:      float64(valueOrZeroFloat32(metadata.Rating)),
+				Duration:    valueOrZeroInt(metadata.Duration),
+				ParentTitle: valueOrEmpty(metadata.GrandparentTitle),
+				GrandTitle:  valueOrEmpty(metadata.ParentTitle),
+				Index:       int64(valueOrZeroInt(metadata.Index)),
+				ParentIndex: int64(valueOrZeroInt(metadata.ParentIndex)),
 			}
-			
-			for _, season := range seasons.MediaContainer.Metadata {
-				// Get all episodes for this season
-				episodes, err := c.plex.GetMetadata(season.Key)
-				if err != nil {
-					continue
-				}
-				
-				for _, episode := range episodes.MediaContainer.Metadata {
-					item := MediaItem{
-						Key:         episode.Key,
-						Title:       episode.Title,
-						Year:        episode.Year,
-						Type:        "episode",
-						Summary:     episode.Summary,
-						Rating:      episode.Rating,
-						Duration:    episode.Duration,
-						ParentTitle: show.Title,
-						GrandTitle:  season.Title,
-						Index:       episode.Index,
-						ParentIndex: season.Index,
-					}
-					
-					// Get file path
-					if len(episode.Media) > 0 && len(episode.Media[0].Part) > 0 {
-						item.FilePath = episode.Media[0].Part[0].File
-						item.RclonePath = convertToRclonePath(item.FilePath)
-					}
-					
-					items = append(items, item)
-				}
+
+			// Get file path
+			if len(metadata.Media) > 0 && len(metadata.Media[0].Part) > 0 {
+				item.FilePath = valueOrEmpty(metadata.Media[0].Part[0].File)
+				item.RclonePath = convertToRclonePath(item.FilePath)
 			}
+
+			items = append(items, item)
 		}
 	}
-	
+
 	return items, nil
 }
 
 // GetStreamURL returns the direct stream URL for a media item
 func (c *Client) GetStreamURL(mediaKey string) (string, error) {
-	// Get the server URL
-	serverURL := c.plex.URL
-	
 	// Build the stream URL
-	streamURL := fmt.Sprintf("%s%s?download=1&X-Plex-Token=%s", serverURL, mediaKey, c.plex.Token)
-	
+	streamURL := fmt.Sprintf("%s%s?download=1&X-Plex-Token=%s", c.serverURL, mediaKey, c.token)
 	return streamURL, nil
 }
 
@@ -181,19 +192,19 @@ func convertToRclonePath(filePath string) string {
 	if filePath == "" {
 		return ""
 	}
-	
+
 	// Remove /home/joshkerr/ prefix
 	path := strings.TrimPrefix(filePath, "/home/joshkerr/")
-	
+
 	// Find the first directory component (plexcloudservers or plexcloudservers2)
 	parts := strings.SplitN(path, "/", 2)
 	if len(parts) < 2 {
 		return ""
 	}
-	
+
 	remoteName := parts[0]
 	remotePath := parts[1]
-	
+
 	// Format as rclone remote path
 	return fmt.Sprintf("%s:%s", remoteName, remotePath)
 }
@@ -213,149 +224,110 @@ func (m *MediaItem) FormatMediaTitle() string {
 	}
 }
 
-// PlexAuthResponse represents the authentication response from Plex.tv
-type PlexAuthResponse struct {
-	User struct {
-		AuthToken string `json:"authToken"`
-		ID        int    `json:"id"`
-		UUID      string `json:"uuid"`
-		Email     string `json:"email"`
-		Username  string `json:"username"`
-	} `json:"user"`
-}
-
-// PlexDevice represents a Plex server device
-type PlexDevice struct {
-	Name       string `json:"name"`
-	Product    string `json:"product"`
-	Provides   string `json:"provides"`
-	Connection []struct {
-		Protocol string `json:"protocol"`
-		Address  string `json:"address"`
-		Port     int    `json:"port"`
-		URI      string `json:"uri"`
-		Local    int    `json:"local"`
-	} `json:"Connection"`
-}
-
 // Authenticate authenticates with Plex using username and password
 func Authenticate(username, password string) (string, string, error) {
-	// Make direct HTTP request to Plex.tv API
-	client := &http.Client{}
-	
-	// Create the authentication request
-	authURL := "https://plex.tv/api/v2/users/signin"
-	
-	authData := map[string]string{
-		"login":    username,
-		"password": password,
-	}
-	
-	authJSON, err := json.Marshal(authData)
+	// Create SDK client for authentication
+	sdk := plexgo.New(
+		plexgo.WithClientIdentifier("goplexcli"),
+		plexgo.WithProduct("GoplexCLI"),
+		plexgo.WithVersion("1.0"),
+	)
+
+	ctx := context.Background()
+
+	// Sign in
+	res, err := sdk.Authentication.PostUsersSignInData(ctx, operations.PostUsersSignInDataRequest{
+		RequestBody: &operations.PostUsersSignInDataRequestBody{
+			Login:    username,
+			Password: password,
+		},
+	})
 	if err != nil {
-		return "", "", fmt.Errorf("failed to marshal auth data: %w", err)
+		return "", "", fmt.Errorf("authentication failed: %w", err)
 	}
-	
-	req, err := http.NewRequest("POST", authURL, bytes.NewBuffer(authJSON))
-	if err != nil {
-		return "", "", fmt.Errorf("failed to create request: %w", err)
-	}
-	
-	// Set required headers
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("X-Plex-Product", "GoplexCLI")
-	req.Header.Set("X-Plex-Version", "1.0")
-	req.Header.Set("X-Plex-Client-Identifier", "goplexcli")
-	
-	// Make the request
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", "", fmt.Errorf("authentication request failed: %w", err)
-	}
-	defer resp.Body.Close()
-	
-	if resp.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(resp.Body)
-		return "", "", fmt.Errorf("authentication failed with status %d: %s", resp.StatusCode, string(body))
-	}
-	
-	// Parse the response
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to read response: %w", err)
-	}
-	
-	var authResp PlexAuthResponse
-	if err := json.Unmarshal(body, &authResp); err != nil {
-		return "", "", fmt.Errorf("failed to parse auth response: %w", err)
-	}
-	
-	if authResp.User.AuthToken == "" {
+
+	if res.UserPlexAccount == nil {
 		return "", "", fmt.Errorf("no auth token received")
 	}
-	
-	token := authResp.User.AuthToken
-	
-	// Get available servers using the token
-	devicesURL := "https://plex.tv/api/v2/resources?includeHttps=1&includeRelay=1"
-	
-	req, err = http.NewRequest("GET", devicesURL, nil)
+
+	token := res.UserPlexAccount.AuthToken
+
+	// Get available servers/resources using the token
+	// Create a new SDK instance with the auth token
+	authSDK := plexgo.New(
+		plexgo.WithSecurity(token),
+		plexgo.WithClientIdentifier("goplexcli"),
+		plexgo.WithProduct("GoplexCLI"),
+		plexgo.WithVersion("1.0"),
+	)
+
+	resourcesRes, err := authSDK.Plex.GetServerResources(ctx, operations.GetServerResourcesRequest{})
 	if err != nil {
-		return "", "", fmt.Errorf("failed to create devices request: %w", err)
+		return "", "", fmt.Errorf("failed to get servers: %w", err)
 	}
-	
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("X-Plex-Token", token)
-	req.Header.Set("X-Plex-Product", "GoplexCLI")
-	req.Header.Set("X-Plex-Version", "1.0")
-	req.Header.Set("X-Plex-Client-Identifier", "goplexcli")
-	
-	resp, err = client.Do(req)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to get devices: %w", err)
+
+	if len(resourcesRes.PlexDevices) == 0 {
+		return "", "", fmt.Errorf("no resources found")
 	}
-	defer resp.Body.Close()
-	
-	body, err = io.ReadAll(resp.Body)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to read devices response: %w", err)
-	}
-	
-	var devices []PlexDevice
-	if err := json.Unmarshal(body, &devices); err != nil {
-		return "", "", fmt.Errorf("failed to parse devices: %w", err)
-	}
-	
+
 	// Find a server device
 	var serverURL string
-	for _, device := range devices {
-		if strings.Contains(device.Provides, "server") {
-			if len(device.Connection) > 0 {
+	for _, device := range resourcesRes.PlexDevices {
+		if device.Provides != "" && strings.Contains(device.Provides, "server") {
+			if len(device.Connections) > 0 {
 				// Prefer local connection
-				for _, conn := range device.Connection {
-					if conn.Local == 1 {
+				for _, conn := range device.Connections {
+					if conn.Local {
 						serverURL = conn.URI
 						break
 					}
 				}
 				// Fallback to first connection
 				if serverURL == "" {
-					serverURL = device.Connection[0].URI
+					serverURL = device.Connections[0].URI
 				}
 				break
 			}
 		}
 	}
-	
+
 	if serverURL == "" {
 		return "", "", fmt.Errorf("no server found")
 	}
-	
-	// Ensure URL is properly formatted
-	if _, err := url.Parse(serverURL); err != nil {
-		return "", "", fmt.Errorf("invalid server URL: %w", err)
-	}
-	
+
 	return serverURL, token, nil
+}
+
+// Helper functions for handling pointer types
+func valueOrEmpty(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+func valueOrZeroInt(v *int) int {
+	if v == nil {
+		return 0
+	}
+	return *v
+}
+
+func valueOrZeroInt64(v *int64) int64 {
+	if v == nil {
+		return 0
+	}
+	return *v
+}
+
+func valueOrZeroFloat32(v *float32) float32 {
+	if v == nil {
+		return 0
+	}
+	return *v
+}
+
+func parseFloat(s string) float64 {
+	result, _ := strconv.ParseFloat(s, 64)
+	return result
 }
