@@ -300,8 +300,18 @@ func (m *MediaItem) FormatMediaTitle() string {
 	}
 }
 
+// Server represents a Plex server
+type Server struct {
+	Name        string
+	URL         string
+	Local       bool
+	Owned       bool
+	Connections []string
+}
+
 // Authenticate authenticates with Plex using username and password
-func Authenticate(username, password string) (string, string, error) {
+// Returns auth token and list of available servers
+func Authenticate(username, password string) (string, []Server, error) {
 	// Create SDK client for authentication
 	sdk := plexgo.New(
 		plexgo.WithClientIdentifier("goplexcli"),
@@ -319,11 +329,11 @@ func Authenticate(username, password string) (string, string, error) {
 		},
 	})
 	if err != nil {
-		return "", "", fmt.Errorf("authentication failed: %w", err)
+		return "", nil, fmt.Errorf("authentication failed: %w", err)
 	}
 
 	if res.UserPlexAccount == nil {
-		return "", "", fmt.Errorf("no auth token received")
+		return "", nil, fmt.Errorf("no auth token received")
 	}
 
 	token := res.UserPlexAccount.AuthToken
@@ -339,39 +349,49 @@ func Authenticate(username, password string) (string, string, error) {
 
 	resourcesRes, err := authSDK.Plex.GetServerResources(ctx, operations.GetServerResourcesRequest{})
 	if err != nil {
-		return "", "", fmt.Errorf("failed to get servers: %w", err)
+		return "", nil, fmt.Errorf("failed to get servers: %w", err)
 	}
 
 	if len(resourcesRes.PlexDevices) == 0 {
-		return "", "", fmt.Errorf("no resources found")
+		return "", nil, fmt.Errorf("no resources found")
 	}
 
-	// Find a server device
-	var serverURL string
+	// Build list of available servers
+	var servers []Server
 	for _, device := range resourcesRes.PlexDevices {
 		if device.Provides != "" && strings.Contains(device.Provides, "server") {
-			if len(device.Connections) > 0 {
-				// Prefer local connection
-				for _, conn := range device.Connections {
-					if conn.Local {
-						serverURL = conn.URI
-						break
-					}
+			server := Server{
+				Name:  device.Name,
+				Owned: device.Owned,
+			}
+
+			// Collect all connection URLs
+			var connections []string
+			for _, conn := range device.Connections {
+				connections = append(connections, conn.URI)
+				// Set the preferred URL (local first)
+				if server.URL == "" {
+					server.URL = conn.URI
+					server.Local = conn.Local
+				} else if conn.Local && !server.Local {
+					// Prefer local connection
+					server.URL = conn.URI
+					server.Local = conn.Local
 				}
-				// Fallback to first connection
-				if serverURL == "" {
-					serverURL = device.Connections[0].URI
-				}
-				break
+			}
+			server.Connections = connections
+
+			if server.URL != "" {
+				servers = append(servers, server)
 			}
 		}
 	}
 
-	if serverURL == "" {
-		return "", "", fmt.Errorf("no server found")
+	if len(servers) == 0 {
+		return "", nil, fmt.Errorf("no servers found")
 	}
 
-	return serverURL, token, nil
+	return token, servers, nil
 }
 
 // Helper functions for handling pointer types

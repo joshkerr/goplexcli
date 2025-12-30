@@ -120,16 +120,72 @@ func runLogin(cmd *cobra.Command, args []string) error {
 
 	fmt.Println(infoStyle.Render("\nAuthenticating..."))
 
-	serverURL, token, err := plex.Authenticate(username, password)
+	token, servers, err := plex.Authenticate(username, password)
 	if err != nil {
 		return fmt.Errorf("authentication failed: %w", err)
 	}
 
 	fmt.Println(successStyle.Render("✓ Authentication successful"))
 
+	// Select server
+	var selectedServer plex.Server
+	if len(servers) == 1 {
+		selectedServer = servers[0]
+		fmt.Println(infoStyle.Render(fmt.Sprintf("\nFound server: %s", selectedServer.Name)))
+	} else {
+		// Multiple servers - let user choose
+		fmt.Println(infoStyle.Render(fmt.Sprintf("\nFound %d servers", len(servers))))
+
+		// Load config to check for fzf
+		cfg, _ := config.Load()
+
+		// Format servers for selection
+		var serverNames []string
+		for i, server := range servers {
+			owned := ""
+			if server.Owned {
+				owned = " (owned)"
+			}
+			local := ""
+			if server.Local {
+				local = " [local]"
+			}
+			serverNames = append(serverNames, fmt.Sprintf("%d. %s%s%s", i+1, server.Name, owned, local))
+		}
+
+		// Check if fzf is available
+		if ui.IsAvailable(cfg.FzfPath) {
+			_, idx, err := ui.SelectWithFzf(serverNames, "Select server:", cfg.FzfPath)
+			if err != nil {
+				return fmt.Errorf("server selection failed: %w", err)
+			}
+			if idx >= 0 && idx < len(servers) {
+				selectedServer = servers[idx]
+			} else {
+				return fmt.Errorf("invalid server selection")
+			}
+		} else {
+			// Fallback to manual selection
+			for _, name := range serverNames {
+				fmt.Println("  " + name)
+			}
+			fmt.Print("\nSelect server number: ")
+			var choice int
+			if _, err := fmt.Scanln(&choice); err != nil {
+				return fmt.Errorf("failed to read selection: %w", err)
+			}
+			if choice < 1 || choice > len(servers) {
+				return fmt.Errorf("invalid selection")
+			}
+			selectedServer = servers[choice-1]
+		}
+	}
+
+	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Selected server: %s", selectedServer.Name)))
+
 	// Save to config
 	cfg := &config.Config{
-		PlexURL:      serverURL,
+		PlexURL:      selectedServer.URL,
 		PlexToken:    token,
 		PlexUsername: username,
 	}
@@ -139,7 +195,12 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Println(successStyle.Render("✓ Configuration saved"))
-	fmt.Println(infoStyle.Render("\nServer: " + serverURL))
+	fmt.Println(infoStyle.Render("\nServer: " + selectedServer.URL))
+	if selectedServer.Local {
+		fmt.Println(infoStyle.Render("Connection: Local"))
+	} else {
+		fmt.Println(infoStyle.Render("Connection: Remote"))
+	}
 	fmt.Println(infoStyle.Render("\nRun 'goplexcli cache reindex' to build your media cache"))
 
 	return nil
