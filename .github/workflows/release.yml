@@ -1,0 +1,98 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and Release
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+
+    - name: Build binaries
+      run: |
+        mkdir -p build
+        
+        # macOS AMD64
+        GOOS=darwin GOARCH=amd64 go build -o build/goplexcli-darwin-amd64 ./cmd/goplexcli
+        
+        # macOS ARM64
+        GOOS=darwin GOARCH=arm64 go build -o build/goplexcli-darwin-arm64 ./cmd/goplexcli
+        
+        # Linux AMD64
+        GOOS=linux GOARCH=amd64 go build -o build/goplexcli-linux-amd64 ./cmd/goplexcli
+        
+        # Linux ARM64
+        GOOS=linux GOARCH=arm64 go build -o build/goplexcli-linux-arm64 ./cmd/goplexcli
+        
+        # Windows AMD64
+        GOOS=windows GOARCH=amd64 go build -o build/goplexcli-windows-amd64.exe ./cmd/goplexcli
+        
+        # Create archives
+        cd build
+        tar czf goplexcli-darwin-amd64.tar.gz goplexcli-darwin-amd64
+        tar czf goplexcli-darwin-arm64.tar.gz goplexcli-darwin-arm64
+        tar czf goplexcli-linux-amd64.tar.gz goplexcli-linux-amd64
+        tar czf goplexcli-linux-arm64.tar.gz goplexcli-linux-arm64
+        zip goplexcli-windows-amd64.zip goplexcli-windows-amd64.exe
+
+    - name: Generate release notes
+      id: release_notes
+      run: |
+        echo "RELEASE_NOTES<<EOF" >> $GITHUB_OUTPUT
+        git log --pretty=format:"- %s" $(git describe --tags --abbrev=0 HEAD^)..HEAD >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          build/*.tar.gz
+          build/*.zip
+        body: |
+          ## Changes
+          
+          ${{ steps.release_notes.outputs.RELEASE_NOTES }}
+          
+          ## Installation
+          
+          Download the appropriate binary for your platform and extract it:
+          
+          **macOS (Intel)**
+          ```bash
+          tar xzf goplexcli-darwin-amd64.tar.gz
+          sudo mv goplexcli-darwin-amd64 /usr/local/bin/goplexcli
+          ```
+          
+          **macOS (Apple Silicon)**
+          ```bash
+          tar xzf goplexcli-darwin-arm64.tar.gz
+          sudo mv goplexcli-darwin-arm64 /usr/local/bin/goplexcli
+          ```
+          
+          **Linux (AMD64)**
+          ```bash
+          tar xzf goplexcli-linux-amd64.tar.gz
+          sudo mv goplexcli-linux-amd64 /usr/local/bin/goplexcli
+          ```
+          
+          **Windows**
+          Extract the zip file and add the directory to your PATH.
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
