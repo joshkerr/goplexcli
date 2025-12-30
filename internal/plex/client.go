@@ -168,8 +168,15 @@ func (c *Client) GetAllMedia(ctx context.Context, progressCallback ProgressCallb
 func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionType string) ([]MediaItem, error) {
 	var items []MediaItem
 
-	// Use direct HTTP request to get all items from a section
-	url := fmt.Sprintf("%s/library/sections/%s/all?X-Plex-Token=%s", c.serverURL, sectionKey, c.token)
+	// Build the URL based on section type
+	var url string
+	if sectionType == "show" {
+		// For TV shows, specifically request type=4 (episodes)
+		url = fmt.Sprintf("%s/library/sections/%s/all?type=4&X-Plex-Token=%s", c.serverURL, sectionKey, c.token)
+	} else {
+		// For movies, use the default all endpoint
+		url = fmt.Sprintf("%s/library/sections/%s/all?X-Plex-Token=%s", c.serverURL, sectionKey, c.token)
+	}
 	
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -242,8 +249,7 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 			items = append(items, item)
 		}
 	} else if sectionType == "show" {
-		// For TV shows, we need to get all episodes
-		// The /all endpoint with a show section returns all episodes
+		// For TV shows, we explicitly requested type=4 (episodes)
 		for _, metadata := range mediaResp.MediaContainer.Metadata {
 			item := MediaItem{
 				Key:         metadata.Key,
