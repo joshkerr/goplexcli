@@ -2,7 +2,10 @@ package plex
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -66,25 +69,58 @@ type Library struct {
 	Type  string
 }
 
-// GetLibraries returns all library sections
+// Custom response structures to handle Plex's inconsistent JSON
+type sectionsResponse struct {
+	MediaContainer struct {
+		Directory []struct {
+			Key   string `json:"key"`
+			Title string `json:"title"`
+			Type  string `json:"type"`
+		} `json:"Directory"`
+	} `json:"MediaContainer"`
+}
+
+// GetLibraries returns all library sections using direct HTTP to avoid unmarshaling issues
 func (c *Client) GetLibraries() ([]Library, error) {
-	ctx := context.Background()
-	res, err := c.sdk.Library.GetSections(ctx)
+	// Use direct HTTP request to avoid library's unmarshaling issues with hidden field
+	url := fmt.Sprintf("%s/library/sections?X-Plex-Token=%s", c.serverURL, c.token)
+	
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get libraries: %w", err)
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-
+	
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Plex-Client-Identifier", "goplexcli")
+	req.Header.Set("X-Plex-Product", "GoplexCLI")
+	req.Header.Set("X-Plex-Version", "1.0")
+	
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get sections: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+	
+	var sectionsResp sectionsResponse
+	if err := json.Unmarshal(body, &sectionsResp); err != nil {
+		return nil, fmt.Errorf("failed to parse sections: %w", err)
+	}
+	
 	var libraries []Library
-	if res.Object != nil && res.Object.MediaContainer != nil {
-		for _, dir := range res.Object.MediaContainer.Directory {
-			libraries = append(libraries, Library{
-				Key:   valueOrEmpty(dir.Key),
-				Title: valueOrEmpty(dir.Title),
-				Type:  string(dir.Type),
-			})
-		}
+	for _, dir := range sectionsResp.MediaContainer.Directory {
+		libraries = append(libraries, Library{
+			Key:   dir.Key,
+			Title: dir.Title,
+			Type:  dir.Type,
+		})
 	}
-
+	
 	return libraries, nil
 }
 
