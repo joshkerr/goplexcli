@@ -124,22 +124,40 @@ func (c *Client) GetLibraries() ([]Library, error) {
 	return libraries, nil
 }
 
+// ProgressCallback is called during media fetching to report progress
+type ProgressCallback func(libraryName string, itemCount int, totalLibraries int, currentLibrary int)
+
 // GetAllMedia returns all media items from all libraries
-func (c *Client) GetAllMedia(ctx context.Context) ([]MediaItem, error) {
+func (c *Client) GetAllMedia(ctx context.Context, progressCallback ProgressCallback) ([]MediaItem, error) {
 	libraries, err := c.GetLibraries()
 	if err != nil {
 		return nil, err
 	}
 
 	var allMedia []MediaItem
-
+	totalLibs := 0
+	
+	// Count libraries we'll actually process
 	for _, lib := range libraries {
 		if lib.Type == "movie" || lib.Type == "show" {
+			totalLibs++
+		}
+	}
+
+	currentLib := 0
+	for _, lib := range libraries {
+		if lib.Type == "movie" || lib.Type == "show" {
+			currentLib++
 			media, err := c.GetMediaFromSection(ctx, lib.Key, lib.Type)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get media from section %s: %w", lib.Title, err)
 			}
 			allMedia = append(allMedia, media...)
+			
+			// Report progress
+			if progressCallback != nil {
+				progressCallback(lib.Title, len(media), totalLibs, currentLib)
+			}
 		}
 	}
 

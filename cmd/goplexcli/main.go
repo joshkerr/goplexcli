@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
@@ -14,6 +15,7 @@ import (
 	"github.com/joshkerr/goplexcli/internal/plex"
 	"github.com/joshkerr/goplexcli/internal/ui"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var (
@@ -111,12 +113,14 @@ func runLogin(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to read username: %w", err)
 	}
 
-	// Get password
+	// Get password (hidden input)
 	fmt.Print("Password: ")
-	var password string
-	if _, err := fmt.Scanln(&password); err != nil {
+	passwordBytes, err := term.ReadPassword(int(syscall.Stdin))
+	if err != nil {
 		return fmt.Errorf("failed to read password: %w", err)
 	}
+	password := string(passwordBytes)
+	fmt.Println() // New line after password input
 
 	fmt.Println(infoStyle.Render("\nAuthenticating..."))
 
@@ -376,12 +380,25 @@ func updateCache(fullReindex bool) error {
 	fmt.Println(successStyle.Render("✓ Connected to Plex server"))
 	fmt.Println(infoStyle.Render("Fetching media library..."))
 
-	// Get all media
+	// Get all media with progress
 	ctx := context.Background()
-	media, err := client.GetAllMedia(ctx)
+	totalItems := 0
+	
+	media, err := client.GetAllMedia(ctx, func(libraryName string, itemCount, totalLibs, currentLib int) {
+		totalItems += itemCount
+		fmt.Printf("\r%s [%d/%d] %s: %d items (Total: %d)    ",
+			infoStyle.Render("Processing libraries"),
+			currentLib,
+			totalLibs,
+			libraryName,
+			itemCount,
+			totalItems,
+		)
+	})
 	if err != nil {
 		return fmt.Errorf("failed to get media: %w", err)
 	}
+	fmt.Println() // New line after progress
 
 	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Retrieved %d media items", len(media))))
 
@@ -395,7 +412,22 @@ func updateCache(fullReindex bool) error {
 	}
 
 	fmt.Println(successStyle.Render("✓ Cache saved successfully"))
+	
+	// Count by type
+	movieCount := 0
+	episodeCount := 0
+	for _, item := range media {
+		switch item.Type {
+		case "movie":
+			movieCount++
+		case "episode":
+			episodeCount++
+		}
+	}
+	
 	fmt.Println(infoStyle.Render(fmt.Sprintf("\nTotal items: %d", len(media))))
+	fmt.Println(infoStyle.Render(fmt.Sprintf("  Movies: %d", movieCount)))
+	fmt.Println(infoStyle.Render(fmt.Sprintf("  Episodes: %d", episodeCount)))
 
 	return nil
 }
