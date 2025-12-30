@@ -81,11 +81,11 @@ type sectionsResponse struct {
 }
 
 // GetLibraries returns all library sections using direct HTTP to avoid unmarshaling issues
-func (c *Client) GetLibraries() ([]Library, error) {
+func (c *Client) GetLibraries(ctx context.Context) ([]Library, error) {
 	// Use direct HTTP request to avoid library's unmarshaling issues with hidden field
 	url := fmt.Sprintf("%s/library/sections?X-Plex-Token=%s", c.serverURL, c.token)
 	
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -129,7 +129,7 @@ type ProgressCallback func(libraryName string, itemCount int, totalLibraries int
 
 // GetAllMedia returns all media items from all libraries
 func (c *Client) GetAllMedia(ctx context.Context, progressCallback ProgressCallback) ([]MediaItem, error) {
-	libraries, err := c.GetLibraries()
+	libraries, err := c.GetLibraries(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +178,7 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 		url = fmt.Sprintf("%s/library/sections/%s/all?X-Plex-Token=%s", c.serverURL, sectionKey, c.token)
 	}
 	
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
