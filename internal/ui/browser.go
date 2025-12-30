@@ -13,6 +13,17 @@ import (
 	"github.com/sahilm/fuzzy"
 )
 
+// Message types for async operations
+type posterDownloadedMsg struct {
+	thumbPath  string
+	posterPath string
+}
+
+type posterRenderedMsg struct {
+	posterPath     string
+	renderedOutput string
+}
+
 // Browser is a TUI browser for media items
 type BrowserModel struct {
 	media          []plex.MediaItem
@@ -26,6 +37,8 @@ type BrowserModel struct {
 	plexToken      string
 	showPoster     bool
 	posterCache    map[string]string // thumbPath -> localPath
+	posterLoading  map[string]bool   // thumbPath -> loading state
+	renderedPoster map[string]string // posterPath -> rendered output
 	quitting       bool
 	selected       *plex.MediaItem
 }
@@ -85,16 +98,37 @@ func NewBrowser(media []plex.MediaItem, plexURL, plexToken string) *BrowserModel
 		plexURL:       plexURL,
 		plexToken:     plexToken,
 		posterCache:   make(map[string]string),
+		posterLoading: make(map[string]bool),
+		renderedPoster: make(map[string]string),
 		showPoster:    true,
 	}
 }
 
 func (m *BrowserModel) Init() tea.Cmd {
-	return nil
+	// Start downloading poster for first item
+	return m.maybeDownloadPoster()
 }
 
 func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case posterDownloadedMsg:
+		// Store downloaded poster in cache
+		if msg.posterPath != "" {
+			m.posterCache[msg.thumbPath] = msg.posterPath
+			delete(m.posterLoading, msg.thumbPath)
+			// Trigger rendering
+			return m, m.renderPosterAsync(msg.posterPath)
+		}
+		delete(m.posterLoading, msg.thumbPath)
+		return m, nil
+	
+	case posterRenderedMsg:
+		// Store rendered poster
+		if msg.renderedOutput != "" {
+			m.renderedPoster[msg.posterPath] = msg.renderedOutput
+		}
+		return m, nil
+	
 	case tea.KeyMsg:
 		// If searching, handle search input
 		if m.searching {
@@ -127,10 +161,14 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cursor > 0 {
 				m.cursor--
 			}
+			// Trigger poster download for newly visible item
+			return m, m.maybeDownloadPoster()
 		case key.Matches(msg, keys.Down):
 			if m.cursor < len(m.filteredMedia)-1 {
 				m.cursor++
 			}
+			// Trigger poster download for newly visible item
+			return m, m.maybeDownloadPoster()
 		case key.Matches(msg, keys.Search):
 			m.searching = true
 			m.searchInput.Focus()
@@ -316,11 +354,15 @@ func (m *BrowserModel) renderDetails(item plex.MediaItem, width, height int) str
 
 	// Render poster if available
 	if m.showPoster && item.Thumb != "" {
-		posterPath := m.getPosterPath(item.Thumb)
-		if posterPath != "" {
-			details.WriteString("\n\n")
-			poster := m.renderPoster(posterPath, width-4)
-			details.WriteString(poster)
+		// Check if we have the rendered poster in cache
+		if posterPath, ok := m.posterCache[item.Thumb]; ok {
+			if rendered, ok := m.renderedPoster[posterPath]; ok {
+				details.WriteString("\n\n")
+				details.WriteString(rendered)
+			}
+		} else if !m.posterLoading[item.Thumb] {
+			// Show loading indicator
+			details.WriteString("\n\nLoading poster...")
 		}
 	}
 
@@ -353,6 +395,77 @@ func (m *BrowserModel) renderDetailsCompact(item plex.MediaItem) string {
 	return details.String()
 }
 
+// maybeDownloadPoster checks if current item needs poster download and triggers it
+func (m *BrowserModel) maybeDownloadPoster() tea.Cmd {
+	if !m.showPoster || len(m.filteredMedia) == 0 {
+		return nil
+	}
+	
+	item := m.filteredMedia[m.cursor]
+	if item.Thumb == "" {
+		return nil
+	}
+	
+	// Already cached or loading?
+	if _, ok := m.posterCache[item.Thumb]; ok {
+		return nil
+	}
+	if m.posterLoading[item.Thumb] {
+		return nil
+	}
+	
+	// Mark as loading and download
+	m.posterLoading[item.Thumb] = true
+	return m.downloadPosterAsync(item.Thumb)
+}
+
+// downloadPosterAsync downloads a poster in the background
+func (m *BrowserModel) downloadPosterAsync(thumbPath string) tea.Cmd {
+	return func() tea.Msg {
+		path := DownloadPoster(m.plexURL, thumbPath, m.plexToken)
+		return posterDownloadedMsg{
+			thumbPath:  thumbPath,
+			posterPath: path,
+		}
+	}
+}
+
+// renderPosterAsync renders a poster image in the background
+func (m *BrowserModel) renderPosterAsync(posterPath string) tea.Cmd {
+	return func() tea.Msg {
+		// Check if already rendered
+		if _, ok := m.renderedPoster[posterPath]; ok {
+			return posterRenderedMsg{}
+		}
+		
+		// Check if chafa is available
+		if _, err := exec.LookPath("chafa"); err != nil {
+			return posterRenderedMsg{}
+		}
+		
+		// Use fixed size for consistency
+		width := 40
+		height := int(float64(width) * 1.5) // 2:3 aspect ratio
+		
+		// Run chafa with better quality settings
+		cmd := exec.Command("chafa",
+			"--size", fmt.Sprintf("%dx%d", width, height),
+			"--format", "symbols",
+			"--symbols", "all",
+			"--dither", "ordered",
+			posterPath)
+		output, err := cmd.Output()
+		if err != nil {
+			return posterRenderedMsg{}
+		}
+		
+		return posterRenderedMsg{
+			posterPath:     posterPath,
+			renderedOutput: string(output),
+		}
+	}
+}
+
 func (m *BrowserModel) getPosterPath(thumbPath string) string {
 	// Check cache
 	if path, ok := m.posterCache[thumbPath]; ok {
@@ -365,32 +478,6 @@ func (m *BrowserModel) getPosterPath(thumbPath string) string {
 		m.posterCache[thumbPath] = path
 	}
 	return path
-}
-
-func (m *BrowserModel) renderPoster(posterPath string, maxWidth int) string {
-	// Check if chafa is available
-	if _, err := exec.LookPath("chafa"); err != nil {
-		return ""
-	}
-
-	// Use larger size for better quality
-	// Movie posters are typically 2:3 aspect ratio
-	width := min(maxWidth-2, 50)
-	height := int(float64(width) * 1.5) // 2:3 aspect ratio
-
-	// Run chafa with better quality settings
-	cmd := exec.Command("chafa", 
-		"--size", fmt.Sprintf("%dx%d", width, height),
-		"--format", "symbols",
-		"--symbols", "all",
-		"--dither", "ordered",
-		posterPath)
-	output, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-
-	return string(output)
 }
 
 func (m *BrowserModel) filterMedia() {

@@ -101,12 +101,16 @@ func SelectMediaWithPreview(media []plex.MediaItem, prompt string, fzfPath strin
 	}
 	input := strings.Join(items, "\n")
 	
-	// Create a temporary preview script
+	// Create a temporary preview script and data file
 	previewScript, err := createPreviewScript(media, plexURL, plexToken)
 	if err != nil {
 		return -1, fmt.Errorf("failed to create preview script: %w", err)
 	}
 	defer os.Remove(previewScript)
+	
+	// Also clean up the data file containing the token
+	dataPath := filepath.Join(os.TempDir(), "goplexcli-preview-data.json")
+	defer os.Remove(dataPath)
 	
 	// Build fzf command with preview
 	args := []string{
@@ -190,7 +194,8 @@ func createPreviewScript(media []plex.MediaItem, plexURL string, plexToken strin
 		return "", err
 	}
 	
-	if err := os.WriteFile(dataPath, jsonData, 0644); err != nil {
+	// Use restrictive permissions (0600) to protect the Plex token
+	if err := os.WriteFile(dataPath, jsonData, 0600); err != nil {
 		return "", err
 	}
 	

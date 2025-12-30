@@ -1,6 +1,6 @@
 module github.com/joshkerr/goplexcli
 
-go 1.25.5
+go 1.24.0
 
 require (
 	github.com/LukeHagar/plexgo v0.28.1
