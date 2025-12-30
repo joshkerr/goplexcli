@@ -5,9 +5,11 @@ A powerful, fast, and elegant command-line interface for browsing and streaming 
 ## Features
 
 - **Browse Media**: Quickly browse your entire Plex library using fzf's fuzzy finder
+- **Rich Previews**: View movie posters and detailed metadata in the preview window
 - **Stream with MPV**: Watch movies and TV shows directly with MPV player
 - **Download with Rclone**: Download media files to your local system with beautiful progress bars
 - **Smart Caching**: Cache your media library locally for instant browsing
+- **Media Type Filtering**: Filter by Movies, TV Shows, or browse all media
 - **Cross-Platform**: Works on macOS, Linux, and Windows
 - **Beautiful UI**: Built with Charm libraries for a polished terminal experience
 
@@ -28,6 +30,10 @@ Before using GoplexCLI, ensure you have the following installed:
   - macOS: `brew install rclone`
   - Linux: `sudo apt install rclone` or download from [rclone.org](https://rclone.org)
   - Windows: Download from [rclone.org](https://rclone.org)
+- **chafa** (optional) - For displaying movie posters in preview
+  - macOS: `brew install chafa`
+  - Linux: `sudo apt install chafa` or `sudo pacman -S chafa`
+  - Windows: Download from [chafa releases](https://github.com/hpjansson/chafa/releases)
 
 ## Installation
 
@@ -36,17 +42,22 @@ Before using GoplexCLI, ensure you have the following installed:
 ```bash
 git clone https://github.com/joshkerr/goplexcli.git
 cd goplexcli
-go build -o goplexcli ./cmd/goplexcli
+make build
 ```
 
-Then move the binary to your PATH:
+This builds both `goplexcli` (main application) and `goplexcli-preview` (preview helper).
+
+Then install to your PATH:
 
 ```bash
-# macOS/Linux
-sudo mv goplexcli /usr/local/bin/
+# Using make (installs to /usr/local/bin)
+make install
 
-# Or add to your local bin
-mv goplexcli ~/bin/
+# Or manually
+sudo cp goplexcli goplexcli-preview /usr/local/bin/
+
+# Or add project directory to PATH
+export PATH="$PATH:/path/to/goplexcli"
 ```
 
 ## Quick Start
@@ -102,6 +113,17 @@ Browse and play media from your Plex server.
 ```bash
 goplexcli browse
 ```
+
+**Features:**
+- Select media type (Movies, TV Shows, or All)
+- Fuzzy search across your entire library
+- Press **i** to toggle preview window with:
+  - Movie posters (if chafa installed)
+  - Year, rating, duration
+  - Plot summary
+  - File path
+- Press **Enter** to select media
+- Choose **Watch** to stream or **Download** to save locally
 
 ### `goplexcli cache`
 
@@ -174,6 +196,15 @@ GoplexCLI caches your media library locally to enable fast, offline browsing wit
 - TV show names, season and episode numbers
 - File paths for streaming and downloading
 - Rclone remote paths (automatically converted from Plex paths)
+- Poster/thumbnail URLs for preview display
+
+**Cache Location:**
+- macOS/Linux: `~/.config/goplexcli/cache/media.json`
+- Windows: `%APPDATA%\goplexcli\cache\media.json`
+
+**Poster Cache:**
+- Posters are cached in `/tmp/goplexcli-posters/` to avoid re-downloading
+- Cache persists until system reboot
 
 ### Rclone Path Conversion
 
@@ -231,6 +262,25 @@ rclone config
 
 Run `goplexcli cache reindex` to build your media cache.
 
+### Posters Not Showing
+
+If you don't see movie posters in the preview window:
+
+1. Install chafa: `brew install chafa` (macOS) or `sudo apt install chafa` (Linux)
+2. Rebuild cache to fetch poster URLs: `goplexcli cache reindex`
+3. Press **i** in browse mode to toggle the preview window
+4. Check that `goplexcli-preview` binary is in your PATH
+
+### "Preview binary not found"
+
+Ensure both binaries are installed:
+
+```bash
+make build
+make install
+# Or add the project directory to your PATH
+```
+
 ### Authentication Issues
 
 If you're having trouble logging in:
@@ -244,8 +294,10 @@ If you're having trouble logging in:
 ```
 goplexcli/
 ├── cmd/
-│   └── goplexcli/
-│       └── main.go          # Main CLI application
+│   ├── goplexcli/
+│   │   └── main.go          # Main CLI application
+│   └── preview/
+│       └── main.go          # Preview helper for fzf
 ├── internal/
 │   ├── cache/
 │   │   └── cache.go         # Media caching logic
@@ -259,6 +311,7 @@ goplexcli/
 │   │   └── client.go        # Plex API client
 │   └── ui/
 │       └── fzf.go           # fzf integration
+├── Makefile                 # Build automation
 ├── go.mod
 ├── go.sum
 ├── .gitignore
@@ -267,10 +320,18 @@ goplexcli/
 
 ## Dependencies
 
-- [jrudio/go-plex-client](https://github.com/jrudio/go-plex-client) - Plex API client
+- [LukeHagar/plexgo](https://github.com/LukeHagar/plexgo) - Plex API SDK
 - [charmbracelet/lipgloss](https://github.com/charmbracelet/lipgloss) - Terminal styling
+- [charmbracelet/bubbletea](https://github.com/charmbracelet/bubbletea) - TUI framework
 - [spf13/cobra](https://github.com/spf13/cobra) - CLI framework
 - [joshkerr/rclone-golib](https://github.com/joshkerr/rclone-golib) - Rclone integration with progress bars
+- [golang.org/x/term](https://golang.org/x/term) - Secure terminal input
+
+**External Tools:**
+- [fzf](https://github.com/junegunn/fzf) - Fuzzy finder
+- [mpv](https://mpv.io) - Media player
+- [rclone](https://rclone.org) - Cloud storage sync
+- [chafa](https://github.com/hpjansson/chafa) - Terminal image viewer (optional)
 
 ## Contributing
 
@@ -283,5 +344,6 @@ MIT License - See LICENSE file for details
 ## Acknowledgments
 
 - Built with [Charm](https://charm.sh/) libraries for beautiful terminal UIs
-- Plex API integration via [go-plex-client](https://github.com/jrudio/go-plex-client)
+- Plex API integration via [plexgo](https://github.com/LukeHagar/plexgo)
 - File downloads via [rclone-golib](https://github.com/joshkerr/rclone-golib)
+- Terminal images via [chafa](https://github.com/hpjansson/chafa)

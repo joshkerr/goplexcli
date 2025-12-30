@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/joshkerr/goplexcli/internal/cache"
 	"github.com/joshkerr/goplexcli/internal/config"
@@ -279,6 +280,30 @@ func selectConnection(server plex.Server) (string, error) {
 	return server.Connections[selectedIdx], nil
 }
 
+func selectMediaTypeManual() (string, error) {
+	fmt.Println(infoStyle.Render("\nSelect media type:"))
+	fmt.Println("  1. Movies")
+	fmt.Println("  2. TV Shows")
+	fmt.Println("  3. All")
+	fmt.Print("\nChoice (1-3): ")
+	
+	var choice int
+	if _, err := fmt.Scanln(&choice); err != nil {
+		return "", fmt.Errorf("failed to read selection: %w", err)
+	}
+	
+	switch choice {
+	case 1:
+		return "movies", nil
+	case 2:
+		return "tv shows", nil
+	case 3:
+		return "all", nil
+	default:
+		return "", fmt.Errorf("invalid selection")
+	}
+}
+
 func runBrowse(cmd *cobra.Command, args []string) error {
 	// Load config
 	cfg, err := config.Load()
@@ -304,17 +329,9 @@ func runBrowse(cmd *cobra.Command, args []string) error {
 	fmt.Println(infoStyle.Render(fmt.Sprintf("Loaded %d media items from cache", len(mediaCache.Media))))
 	fmt.Println(infoStyle.Render(fmt.Sprintf("Last updated: %s", mediaCache.LastUpdated.Format(time.RFC822))))
 
-	// Check if fzf is available
-	if !ui.IsAvailable(cfg.FzfPath) {
-		return fmt.Errorf("fzf is not installed. Please install fzf to browse media")
-	}
-
 	// Ask user to select media type
-	mediaType, err := ui.SelectMediaType(cfg.FzfPath)
+	mediaType, err := selectMediaTypeManual()
 	if err != nil {
-		if err.Error() == "cancelled by user" {
-			return nil
-		}
 		return err
 	}
 
@@ -344,18 +361,25 @@ func runBrowse(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	fmt.Println(infoStyle.Render(fmt.Sprintf("\nBrowsing %d items...", len(filteredMedia))))
+	fmt.Println(infoStyle.Render(fmt.Sprintf("\nBrowsing %d items...\n", len(filteredMedia))))
 
-	// Show fzf selector with preview
-	selectedIdx, err := ui.SelectMediaWithPreview(filteredMedia, "Select media:", cfg.FzfPath, cfg.PlexURL, cfg.PlexToken)
+	// Launch Bubble Tea browser
+	browser := ui.NewBrowser(filteredMedia, cfg.PlexURL, cfg.PlexToken)
+	p := tea.NewProgram(browser, tea.WithAltScreen())
+	
+	finalModel, err := p.Run()
 	if err != nil {
-		if err.Error() == "cancelled by user" {
-			return nil
-		}
-		return err
+		return fmt.Errorf("browser error: %w", err)
 	}
 
-	selectedMedia := &filteredMedia[selectedIdx]
+	// Get selected media
+	browserModel := finalModel.(*ui.BrowserModel)
+	selectedMedia := browserModel.GetSelected()
+	
+	if selectedMedia == nil {
+		// User quit without selecting
+		return nil
+	}
 
 	// Ask what to do
 	action, err := ui.PromptAction(cfg.FzfPath)

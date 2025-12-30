@@ -33,6 +33,7 @@ type MediaItem struct {
 	GrandTitle  string // For episodes: season name
 	Index       int64  // Episode or season number
 	ParentIndex int64  // Season number for episodes
+	Thumb       string // Poster/thumbnail URL path
 }
 
 // New creates a new Plex client
@@ -210,6 +211,7 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 				Summary          *string `json:"summary"`
 				Rating           *float32 `json:"rating"`
 				Duration         *int    `json:"duration"`
+				Thumb            *string `json:"thumb"`
 				GrandparentTitle *string `json:"grandparentTitle"`
 				ParentTitle      *string `json:"parentTitle"`
 				Index            *int    `json:"index"`
@@ -238,6 +240,7 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 				Summary:  valueOrEmpty(metadata.Summary),
 				Rating:   float64(valueOrZeroFloat32(metadata.Rating)),
 				Duration: valueOrZeroInt(metadata.Duration),
+				Thumb:    valueOrEmpty(metadata.Thumb),
 			}
 
 			// Get file path
@@ -259,6 +262,7 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 				Summary:     valueOrEmpty(metadata.Summary),
 				Rating:      float64(valueOrZeroFloat32(metadata.Rating)),
 				Duration:    valueOrZeroInt(metadata.Duration),
+				Thumb:       valueOrEmpty(metadata.Thumb),
 				ParentTitle: valueOrEmpty(metadata.GrandparentTitle),
 				GrandTitle:  valueOrEmpty(metadata.ParentTitle),
 				Index:       int64(valueOrZeroInt(metadata.Index)),

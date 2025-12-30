@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bytes"
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -193,22 +194,26 @@ func createPreviewScript(media []plex.MediaItem, plexURL string, plexToken strin
 		return "", err
 	}
 	
-	// Look for the preview binary in common locations
+	// First, try to find in PATH
 	var previewBinary string
-	
-	// Get current working directory
-	cwd, _ := os.Getwd()
-	
-	possiblePaths := []string{
-		filepath.Join(cwd, "goplexcli-preview"),            // Current directory
-		"/usr/local/bin/goplexcli-preview",                 // Installed location
-		filepath.Join(os.Getenv("HOME"), "bin", "goplexcli-preview"), // User bin
-	}
-	
-	for _, path := range possiblePaths {
-		if stat, err := os.Stat(path); err == nil && !stat.IsDir() {
-			previewBinary, _ = filepath.Abs(path)
-			break
+	if pathBinary, err := exec.LookPath("goplexcli-preview"); err == nil {
+		previewBinary = pathBinary
+	} else {
+		// Look for the preview binary in common locations
+		// Get current working directory
+		cwd, _ := os.Getwd()
+		
+		possiblePaths := []string{
+			filepath.Join(cwd, "goplexcli-preview"),            // Current directory
+			"/usr/local/bin/goplexcli-preview",                 // Installed location
+			filepath.Join(os.Getenv("HOME"), "bin", "goplexcli-preview"), // User bin
+		}
+		
+		for _, path := range possiblePaths {
+			if stat, err := os.Stat(path); err == nil && !stat.IsDir() {
+				previewBinary, _ = filepath.Abs(path)
+				break
+			}
 		}
 	}
 	
@@ -219,8 +224,10 @@ func createPreviewScript(media []plex.MediaItem, plexURL string, plexToken strin
 echo "Preview binary not found!"
 echo ""
 echo "Please run 'make build' or 'go build -o goplexcli-preview ./cmd/preview'"
+echo "Or install it to a location in your PATH"
 echo ""
 echo "Searched locations:"
+echo "  - PATH (goplexcli-preview)"
 echo "  - ./goplexcli-preview"
 echo "  - /usr/local/bin/goplexcli-preview"
 echo "  - ~/bin/goplexcli-preview"
@@ -284,30 +291,50 @@ func SelectMediaType(fzfPath string) (string, error) {
 	return strings.ToLower(selected), nil
 }
 
-// downloadPoster downloads the poster image for preview
-func downloadPoster(posterURL string) (string, error) {
-	resp, err := http.Get(posterURL)
+// DownloadPoster downloads the poster image and returns the local path
+func DownloadPoster(plexURL, thumbPath, token string) string {
+	if thumbPath == "" {
+		return ""
+	}
+	
+	// Create cache directory
+	cacheDir := filepath.Join(os.TempDir(), "goplexcli-posters")
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		return ""
+	}
+	
+	// Create filename from hash of thumb path
+	hash := md5.Sum([]byte(thumbPath))
+	posterFile := filepath.Join(cacheDir, fmt.Sprintf("%x.jpg", hash))
+	
+	// Check if already downloaded
+	if _, err := os.Stat(posterFile); err == nil {
+		return posterFile
+	}
+	
+	// Download poster
+	url := plexURL + thumbPath + "?X-Plex-Token=" + token
+	resp, err := http.Get(url)
 	if err != nil {
-		return "", err
+		return ""
 	}
 	defer resp.Body.Close()
 	
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("failed to download poster: status %d", resp.StatusCode)
+	if resp.StatusCode != 200 {
+		return ""
 	}
 	
-	// Save to temp file
-	tmpFile := filepath.Join(os.TempDir(), "goplexcli-poster.jpg")
-	out, err := os.Create(tmpFile)
+	// Save to file
+	out, err := os.Create(posterFile)
 	if err != nil {
-		return "", err
+		return ""
 	}
 	defer out.Close()
 	
-	_, err = io.Copy(out, resp.Body)
-	if err != nil {
-		return "", err
+	if _, err := io.Copy(out, resp.Body); err != nil {
+		os.Remove(posterFile)
+		return ""
 	}
 	
-	return tmpFile, nil
+	return posterFile
 }

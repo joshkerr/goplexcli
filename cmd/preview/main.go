@@ -1,9 +1,14 @@
 package main
 
 import (
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	
@@ -83,7 +88,75 @@ func main() {
 	}
 	
 	fmt.Println(strings.Repeat("=", 60))
+	
+	// Note: Poster display disabled in preview window due to terminal artifacts
+	// Chafa images persist in the terminal and overlap when scrolling through items
+	// Consider adding poster display in a separate full-screen view mode
+	
 	fmt.Println("\nPress 'i' to toggle this preview")
+}
+
+// downloadPoster downloads the poster image and returns the local path
+func downloadPoster(plexURL, thumbPath, token string) string {
+	if thumbPath == "" {
+		return ""
+	}
+	
+	// Create cache directory
+	cacheDir := filepath.Join(os.TempDir(), "goplexcli-posters")
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		return ""
+	}
+	
+	// Create filename from hash of thumb path
+	hash := md5.Sum([]byte(thumbPath))
+	posterFile := filepath.Join(cacheDir, fmt.Sprintf("%x.jpg", hash))
+	
+	// Check if already downloaded
+	if _, err := os.Stat(posterFile); err == nil {
+		return posterFile
+	}
+	
+	// Download poster
+	url := plexURL + thumbPath + "?X-Plex-Token=" + token
+	resp, err := http.Get(url)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != 200 {
+		return ""
+	}
+	
+	// Save to file
+	out, err := os.Create(posterFile)
+	if err != nil {
+		return ""
+	}
+	defer out.Close()
+	
+	if _, err := io.Copy(out, resp.Body); err != nil {
+		os.Remove(posterFile)
+		return ""
+	}
+	
+	return posterFile
+}
+
+// displayPoster renders the poster using chafa
+func displayPoster(posterPath string) {
+	// Check if chafa is available
+	if _, err := exec.LookPath("chafa"); err != nil {
+		return
+	}
+	
+	// Run chafa to display the image
+	// Use --size to fit preview window (80 columns, 20 rows max for poster)
+	cmd := exec.Command("chafa", "--size", "40x20", "--animate", "off", posterPath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Run()
 }
 
 func wrapText(text string, width int) string {
