@@ -333,10 +333,21 @@ func runBrowse(cmd *cobra.Command, args []string) error {
 	fmt.Println(infoStyle.Render(fmt.Sprintf("Loaded %d media items from cache", len(mediaCache.Media))))
 	fmt.Println(infoStyle.Render(fmt.Sprintf("Last updated: %s", mediaCache.LastUpdated.Format(time.RFC822))))
 
-	// Ask user to select media type
-	mediaType, err := selectMediaTypeManual()
-	if err != nil {
-		return err
+	// Ask user to select media type using fzf if available
+	var mediaType string
+	if ui.IsAvailable(cfg.FzfPath) {
+		var err error
+		mediaType, err = ui.SelectMediaType(cfg.FzfPath)
+		if err != nil {
+			return fmt.Errorf("media type selection failed: %w", err)
+		}
+	} else {
+		// Fallback to manual selection
+		var err error
+		mediaType, err = selectMediaTypeManual()
+		if err != nil {
+			return err
+		}
 	}
 
 	// Filter media by type
