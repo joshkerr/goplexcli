@@ -377,14 +377,20 @@ func runBrowse(cmd *cobra.Command, args []string) error {
 
 	fmt.Println(infoStyle.Render(fmt.Sprintf("\nBrowsing %d items...\n", len(filteredMedia))))
 
-	// Use fzf to select media
-	selectedMedia, err := ui.SelectMedia(filteredMedia, "Select media:", cfg.FzfPath)
+	// Use fzf with preview to select media
+	selectedIndex, err := ui.SelectMediaWithPreview(filteredMedia, "Select media:", cfg.FzfPath, cfg.PlexURL, cfg.PlexToken)
 	if err != nil {
 		if err.Error() == "cancelled by user" {
 			return nil
 		}
 		return fmt.Errorf("media selection failed: %w", err)
 	}
+	
+	if selectedIndex < 0 || selectedIndex >= len(filteredMedia) {
+		return fmt.Errorf("invalid selection")
+	}
+	
+	selectedMedia := &filteredMedia[selectedIndex]
 
 	// Ask what to do
 	action, err := ui.PromptAction(cfg.FzfPath)
