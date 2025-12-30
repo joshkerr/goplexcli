@@ -243,9 +243,12 @@ echo "  - ~/bin/goplexcli-preview"
 	
 	// Create wrapper script that calls the binary
 	scriptPath := filepath.Join(tmpDir, "goplexcli-preview.sh")
+	// Use single quotes and escape any single quotes in the paths for shell safety
+	escapedBinary := strings.ReplaceAll(previewBinary, "'", "'\"'\"'")
+	escapedDataPath := strings.ReplaceAll(dataPath, "'", "'\"'\"'")
 	script := fmt.Sprintf(`#!/bin/bash
-"%s" "%s" "$1"
-`, previewBinary, dataPath)
+'%s' '%s' "$1"
+`, escapedBinary, escapedDataPath)
 	
 	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
 		return "", err

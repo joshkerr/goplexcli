@@ -207,12 +207,16 @@ func runLogin(cmd *cobra.Command, args []string) error {
 
 	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Selected server: %s", selectedServer.Name)))
 
-	// Save to config
-	cfg := &config.Config{
-		PlexURL:      selectedURL,
-		PlexToken:    token,
-		PlexUsername: username,
+	// Load existing config to preserve custom settings
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
 	}
+	
+	// Update only Plex-related fields
+	cfg.PlexURL = selectedURL
+	cfg.PlexToken = token
+	cfg.PlexUsername = username
 
 	if err := cfg.Save(); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
