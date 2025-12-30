@@ -273,8 +273,64 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 }
 
 // GetStreamURL returns the direct stream URL for a media item
+// This gets the actual file URL that can be streamed by MPV
 func (c *Client) GetStreamURL(mediaKey string) (string, error) {
-	// Build the stream URL
+	// First, get the metadata for this item to find the media part key
+	url := fmt.Sprintf("%s%s?X-Plex-Token=%s", c.serverURL, mediaKey, c.token)
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+	
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Plex-Client-Identifier", "goplexcli")
+	req.Header.Set("X-Plex-Product", "GoplexCLI")
+	req.Header.Set("X-Plex-Version", "1.0")
+	
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to get metadata: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response: %w", err)
+	}
+	
+	// Parse to get the media part
+	var metadataResp struct {
+		MediaContainer struct {
+			Metadata []struct {
+				Media []struct {
+					Part []struct {
+						Key *string `json:"key"`
+					} `json:"Part"`
+				} `json:"Media"`
+			} `json:"Metadata"`
+		} `json:"MediaContainer"`
+	}
+	
+	if err := json.Unmarshal(body, &metadataResp); err != nil {
+		return "", fmt.Errorf("failed to parse metadata: %w", err)
+	}
+	
+	// Get the part key
+	if len(metadataResp.MediaContainer.Metadata) > 0 &&
+		len(metadataResp.MediaContainer.Metadata[0].Media) > 0 &&
+		len(metadataResp.MediaContainer.Metadata[0].Media[0].Part) > 0 {
+		
+		partKey := metadataResp.MediaContainer.Metadata[0].Media[0].Part[0].Key
+		if partKey != nil && *partKey != "" {
+			// Build the direct stream URL using the part key
+			streamURL := fmt.Sprintf("%s%s?X-Plex-Token=%s", c.serverURL, *partKey, c.token)
+			return streamURL, nil
+		}
+	}
+	
+	// Fallback to simple download URL if part key not found
 	streamURL := fmt.Sprintf("%s%s?download=1&X-Plex-Token=%s", c.serverURL, mediaKey, c.token)
 	return streamURL, nil
 }
