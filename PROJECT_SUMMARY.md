@@ -10,24 +10,29 @@ GoplexCLI is a fully-featured, production-ready command-line interface for manag
 
 1. **Plex Integration**
    - Full authentication system with username/password login
-   - Automatic server discovery
+   - Multi-server selection with connection choice
    - Token-based authentication storage
    - Media library browsing (movies and TV shows)
    - Stream URL generation
+   - Poster/thumbnail URL fetching
 
 2. **Media Caching System**
-   - Local SQLite-free JSON cache for fast offline browsing
+   - Local JSON cache for fast offline browsing
    - Smart cache update (incremental)
    - Full cache reindex from scratch
-   - Cache statistics and information display
+   - Cache statistics with progress reporting
    - Cross-platform cache storage (respects XDG standards)
+   - Poster URL caching
 
 3. **User Interface**
    - Beautiful terminal UI using Charm's lipgloss
-   - fzf integration for fuzzy media searching
+   - fzf integration with 90% screen coverage
+   - Preview window with movie posters (via chafa)
+   - Media type filtering (Movies/TV/All)
    - Styled output with colors and formatting
    - Progress feedback for all operations
    - Interactive action selection
+   - Separate preview binary for fast rendering
 
 4. **Media Playback**
    - MPV player integration for streaming
@@ -36,10 +41,11 @@ GoplexCLI is a fully-featured, production-ready command-line interface for manag
    - Cross-platform MPV support
 
 5. **Media Downloads**
-   - rclone integration with progress bars
+   - rclone integration with Bubble Tea progress bars
    - Automatic Plex-to-rclone path conversion
    - Downloads to current working directory
    - Beautiful progress visualization via rclone-golib
+   - Concurrent download + UI updates
 
 6. **Configuration Management**
    - Platform-specific config directories
@@ -52,10 +58,10 @@ GoplexCLI is a fully-featured, production-ready command-line interface for manag
 
 ### CLI Commands
 
-- `goplexcli login` - Authenticate with Plex
-- `goplexcli browse` - Browse and play/download media
+- `goplexcli login` - Authenticate with Plex (multi-server support)
+- `goplexcli browse` - Browse and play/download media with preview window
 - `goplexcli cache update` - Update cache incrementally
-- `goplexcli cache reindex` - Rebuild cache from scratch
+- `goplexcli cache reindex` - Rebuild cache from scratch (includes posters)
 - `goplexcli cache info` - View cache statistics
 - `goplexcli config` - Display configuration
 
@@ -64,8 +70,11 @@ GoplexCLI is a fully-featured, production-ready command-line interface for manag
 **Project Structure:**
 ```
 goplexcli/
-├── cmd/goplexcli/          # Main CLI entry point
-│   └── main.go             # Cobra commands, UI styling
+├── cmd/
+│   ├── goplexcli/          # Main CLI entry point
+│   │   └── main.go         # Cobra commands, UI styling
+│   └── preview/            # Preview helper binary
+│       └── main.go         # fzf preview rendering
 ├── internal/
 │   ├── cache/              # Media caching logic
 │   │   └── cache.go        # JSON-based cache management
@@ -76,9 +85,9 @@ goplexcli/
 │   ├── player/             # Media playback
 │   │   └── player.go       # MPV player integration
 │   ├── plex/               # Plex API
-│   │   └── client.go       # go-plex-client wrapper
+│   │   └── client.go       # plexgo SDK wrapper
 │   └── ui/                 # User interface
-│       └── fzf.go          # fzf integration
+│       └── fzf.go          # fzf integration with preview
 ├── .github/workflows/
 │   ├── ci.yml              # Multi-platform CI testing
 │   └── release.yml         # Automated binary releases
@@ -86,7 +95,7 @@ goplexcli/
 ├── QUICKSTART.md           # Quick start guide
 ├── CONTRIBUTING.md         # Contributor guidelines
 ├── LICENSE                 # MIT License
-├── Makefile                # Build automation
+├── Makefile                # Build automation (main + preview)
 ├── .gitignore              # Git ignore rules
 ├── go.mod                  # Go module definition
 └── go.sum                  # Dependency checksums
@@ -95,15 +104,18 @@ goplexcli/
 ### Dependencies
 
 **Production:**
-- `github.com/jrudio/go-plex-client` - Plex API client
+- `github.com/LukeHagar/plexgo` v0.28.1 - Plex API SDK
 - `github.com/charmbracelet/lipgloss` - Terminal styling
+- `github.com/charmbracelet/bubbletea` - TUI framework
 - `github.com/spf13/cobra` - CLI framework
 - `github.com/joshkerr/rclone-golib` - rclone integration with progress
+- `golang.org/x/term` - Secure terminal input
 
 **External Tools Required:**
 - fzf - Fuzzy finder
 - mpv - Media player
 - rclone - File transfer tool
+- chafa (optional) - Terminal image viewer for posters
 
 ### Cross-Platform Support
 
@@ -150,12 +162,14 @@ goplexcli/
 **Security:**
 - Config file permissions (0600)
 - No password storage (only tokens)
-- Secure credential handling
+- Secure password input (hidden)
 - No secrets in logs
 
 **User Experience:**
 - Styled, colored output
-- Progress feedback
+- Progress feedback with statistics
+- Preview window with posters
+- Media type filtering
 - Helpful error messages
 - Comprehensive help text
 - Intuitive command structure
@@ -201,18 +215,19 @@ This works for both `plexcloudservers` and `plexcloudservers2` remotes.
 ```bash
 git clone https://github.com/joshkerr/goplexcli.git
 cd goplexcli
-make build
-make install  # Optional: installs to /usr/local/bin
+make build       # Builds both goplexcli and goplexcli-preview
+make install     # Optional: installs to /usr/local/bin
 ```
 
 **Cross-compilation:**
 ```bash
-make build-all  # Builds for all platforms in ./build/
+make build-all   # Builds for all platforms in ./build/
 ```
 
-**Single binary:**
+**Manual build:**
 ```bash
 go build -o goplexcli ./cmd/goplexcli
+go build -o goplexcli-preview ./cmd/preview
 ```
 
 ### Testing
@@ -239,13 +254,15 @@ While the current implementation is complete and production-ready, potential fut
 - Music library support
 - Playlist management
 - Watch history tracking
-- Resume playback
-- Multiple server support
+- Resume playback from last position
 - Quality selection for streams
 - Subtitle support
 - Interactive configuration wizard
 - Shell completion scripts
 - Homebrew formula for easier macOS installation
+- Photo library support
+- Collections browsing
+- Advanced search filters
 
 ### Repository Status
 

@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
+	"syscall"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/joshkerr/goplexcli/internal/cache"
 	"github.com/joshkerr/goplexcli/internal/config"
@@ -14,6 +17,7 @@ import (
 	"github.com/joshkerr/goplexcli/internal/plex"
 	"github.com/joshkerr/goplexcli/internal/ui"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var (
@@ -111,38 +115,197 @@ func runLogin(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to read username: %w", err)
 	}
 
-	// Get password
+	// Get password (hidden input)
 	fmt.Print("Password: ")
-	var password string
-	if _, err := fmt.Scanln(&password); err != nil {
+	passwordBytes, err := term.ReadPassword(int(syscall.Stdin))
+	if err != nil {
 		return fmt.Errorf("failed to read password: %w", err)
 	}
+	password := string(passwordBytes)
+	fmt.Println() // New line after password input
 
 	fmt.Println(infoStyle.Render("\nAuthenticating..."))
 
-	serverURL, token, err := plex.Authenticate(username, password)
+	token, servers, err := plex.Authenticate(username, password)
 	if err != nil {
 		return fmt.Errorf("authentication failed: %w", err)
 	}
 
 	fmt.Println(successStyle.Render("✓ Authentication successful"))
 
-	// Save to config
-	cfg := &config.Config{
-		PlexURL:      serverURL,
-		PlexToken:    token,
-		PlexUsername: username,
+	// Select server
+	var selectedServer plex.Server
+	var selectedURL string
+	
+	if len(servers) == 1 {
+		selectedServer = servers[0]
+		fmt.Println(infoStyle.Render(fmt.Sprintf("\nFound server: %s", selectedServer.Name)))
+		
+		// If server has multiple connections, let user choose
+		if len(selectedServer.Connections) > 1 {
+			selectedURL, err = selectConnection(selectedServer)
+			if err != nil {
+				return err
+			}
+		} else {
+			selectedURL = selectedServer.URL
+		}
+	} else {
+		// Multiple servers - let user choose
+		fmt.Println(infoStyle.Render(fmt.Sprintf("\nFound %d servers", len(servers))))
+
+		// Load config to check for fzf
+		cfg, _ := config.Load()
+
+		// Format servers for selection
+		var serverNames []string
+		for i, server := range servers {
+			owned := ""
+			if server.Owned {
+				owned = " (owned)"
+			}
+			serverNames = append(serverNames, fmt.Sprintf("%d. %s%s", i+1, server.Name, owned))
+		}
+
+		// Check if fzf is available
+		if ui.IsAvailable(cfg.FzfPath) {
+			_, idx, err := ui.SelectWithFzf(serverNames, "Select server:", cfg.FzfPath)
+			if err != nil {
+				return fmt.Errorf("server selection failed: %w", err)
+			}
+			if idx >= 0 && idx < len(servers) {
+				selectedServer = servers[idx]
+			} else {
+				return fmt.Errorf("invalid server selection")
+			}
+		} else {
+			// Fallback to manual selection
+			for _, name := range serverNames {
+				fmt.Println("  " + name)
+			}
+			fmt.Print("\nSelect server number: ")
+			var choice int
+			if _, err := fmt.Scanln(&choice); err != nil {
+				return fmt.Errorf("failed to read selection: %w", err)
+			}
+			if choice < 1 || choice > len(servers) {
+				return fmt.Errorf("invalid selection")
+			}
+			selectedServer = servers[choice-1]
+		}
+		
+		// Now select connection for the chosen server
+		if len(selectedServer.Connections) > 1 {
+			selectedURL, err = selectConnection(selectedServer)
+			if err != nil {
+				return err
+			}
+		} else {
+			selectedURL = selectedServer.URL
+		}
 	}
+
+	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Selected server: %s", selectedServer.Name)))
+
+	// Load existing config to preserve custom settings
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	
+	// Update only Plex-related fields
+	cfg.PlexURL = selectedURL
+	cfg.PlexToken = token
+	cfg.PlexUsername = username
 
 	if err := cfg.Save(); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
 
 	fmt.Println(successStyle.Render("✓ Configuration saved"))
-	fmt.Println(infoStyle.Render("\nServer: " + serverURL))
+	fmt.Println(infoStyle.Render("\nServer URL: " + selectedURL))
 	fmt.Println(infoStyle.Render("\nRun 'goplexcli cache reindex' to build your media cache"))
 
 	return nil
+}
+
+func selectConnection(server plex.Server) (string, error) {
+	fmt.Println(infoStyle.Render(fmt.Sprintf("\nServer '%s' has %d available connections:", server.Name, len(server.Connections))))
+	
+	// Load config to check for fzf
+	cfg, _ := config.Load()
+	
+	// Format connections for selection
+	var connectionDescs []string
+	for i, conn := range server.Connections {
+		connType := "Remote"
+		if i == 0 && server.Local {
+			connType = "Local"
+		} else {
+			// Check if this connection looks local (private IP)
+			if strings.HasPrefix(conn, "http://192.168.") || 
+			   strings.HasPrefix(conn, "http://10.") || 
+			   strings.HasPrefix(conn, "http://172.") {
+				connType = "Local"
+			}
+		}
+		connectionDescs = append(connectionDescs, fmt.Sprintf("%d. %s [%s]", i+1, conn, connType))
+	}
+	
+	var selectedIdx int
+	
+	// Check if fzf is available
+	if ui.IsAvailable(cfg.FzfPath) {
+		_, idx, err := ui.SelectWithFzf(connectionDescs, "Select connection:", cfg.FzfPath)
+		if err != nil {
+			return "", fmt.Errorf("connection selection failed: %w", err)
+		}
+		selectedIdx = idx
+	} else {
+		// Fallback to manual selection
+		for _, desc := range connectionDescs {
+			fmt.Println("  " + desc)
+		}
+		fmt.Print("\nSelect connection number: ")
+		var choice int
+		if _, err := fmt.Scanln(&choice); err != nil {
+			return "", fmt.Errorf("failed to read selection: %w", err)
+		}
+		if choice < 1 || choice > len(server.Connections) {
+			return "", fmt.Errorf("invalid selection")
+		}
+		selectedIdx = choice - 1
+	}
+	
+	if selectedIdx < 0 || selectedIdx >= len(server.Connections) {
+		return "", fmt.Errorf("invalid connection selection")
+	}
+	
+	return server.Connections[selectedIdx], nil
+}
+
+func selectMediaTypeManual() (string, error) {
+	fmt.Println(infoStyle.Render("\nSelect media type:"))
+	fmt.Println("  1. Movies")
+	fmt.Println("  2. TV Shows")
+	fmt.Println("  3. All")
+	fmt.Print("\nChoice (1-3): ")
+	
+	var choice int
+	if _, err := fmt.Scanln(&choice); err != nil {
+		return "", fmt.Errorf("failed to read selection: %w", err)
+	}
+	
+	switch choice {
+	case 1:
+		return "movies", nil
+	case 2:
+		return "tv shows", nil
+	case 3:
+		return "all", nil
+	default:
+		return "", fmt.Errorf("invalid selection")
+	}
 }
 
 func runBrowse(cmd *cobra.Command, args []string) error {
@@ -170,25 +333,56 @@ func runBrowse(cmd *cobra.Command, args []string) error {
 	fmt.Println(infoStyle.Render(fmt.Sprintf("Loaded %d media items from cache", len(mediaCache.Media))))
 	fmt.Println(infoStyle.Render(fmt.Sprintf("Last updated: %s", mediaCache.LastUpdated.Format(time.RFC822))))
 
-	// Check if fzf is available
-	if !ui.IsAvailable(cfg.FzfPath) {
-		return fmt.Errorf("fzf is not installed. Please install fzf to browse media")
-	}
-
-	// Show fzf selector
-	items := mediaCache.FormatForFzf()
-	selected, _, err := ui.SelectWithFzf(items, "Select media:", cfg.FzfPath)
+	// Ask user to select media type
+	mediaType, err := selectMediaTypeManual()
 	if err != nil {
-		if err.Error() == "cancelled by user" {
-			return nil
-		}
 		return err
 	}
 
-	// Get the selected media item
-	selectedMedia, err := mediaCache.GetMediaByFormattedTitle(selected)
+	// Filter media by type
+	var filteredMedia []plex.MediaItem
+	switch mediaType {
+	case "movies":
+		for _, item := range mediaCache.Media {
+			if item.Type == "movie" {
+				filteredMedia = append(filteredMedia, item)
+			}
+		}
+	case "tv shows":
+		for _, item := range mediaCache.Media {
+			if item.Type == "episode" {
+				filteredMedia = append(filteredMedia, item)
+			}
+		}
+	case "all":
+		filteredMedia = mediaCache.Media
+	default:
+		filteredMedia = mediaCache.Media
+	}
+
+	if len(filteredMedia) == 0 {
+		fmt.Println(warningStyle.Render("No media found for selected type."))
+		return nil
+	}
+
+	fmt.Println(infoStyle.Render(fmt.Sprintf("\nBrowsing %d items...\n", len(filteredMedia))))
+
+	// Launch Bubble Tea browser
+	browser := ui.NewBrowser(filteredMedia, cfg.PlexURL, cfg.PlexToken)
+	p := tea.NewProgram(browser, tea.WithAltScreen())
+	
+	finalModel, err := p.Run()
 	if err != nil {
-		return fmt.Errorf("failed to get media: %w", err)
+		return fmt.Errorf("browser error: %w", err)
+	}
+
+	// Get selected media
+	browserModel := finalModel.(*ui.BrowserModel)
+	selectedMedia := browserModel.GetSelected()
+	
+	if selectedMedia == nil {
+		// User quit without selecting
+		return nil
 	}
 
 	// Ask what to do
@@ -315,12 +509,25 @@ func updateCache(fullReindex bool) error {
 	fmt.Println(successStyle.Render("✓ Connected to Plex server"))
 	fmt.Println(infoStyle.Render("Fetching media library..."))
 
-	// Get all media
+	// Get all media with progress
 	ctx := context.Background()
-	media, err := client.GetAllMedia(ctx)
+	totalItems := 0
+	
+	media, err := client.GetAllMedia(ctx, func(libraryName string, itemCount, totalLibs, currentLib int) {
+		totalItems += itemCount
+		fmt.Printf("\r%s [%d/%d] %s: %d items (Total: %d)    ",
+			infoStyle.Render("Processing libraries"),
+			currentLib,
+			totalLibs,
+			libraryName,
+			itemCount,
+			totalItems,
+		)
+	})
 	if err != nil {
 		return fmt.Errorf("failed to get media: %w", err)
 	}
+	fmt.Println() // New line after progress
 
 	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Retrieved %d media items", len(media))))
 
@@ -334,7 +541,22 @@ func updateCache(fullReindex bool) error {
 	}
 
 	fmt.Println(successStyle.Render("✓ Cache saved successfully"))
+	
+	// Count by type
+	movieCount := 0
+	episodeCount := 0
+	for _, item := range media {
+		switch item.Type {
+		case "movie":
+			movieCount++
+		case "episode":
+			episodeCount++
+		}
+	}
+	
 	fmt.Println(infoStyle.Render(fmt.Sprintf("\nTotal items: %d", len(media))))
+	fmt.Println(infoStyle.Render(fmt.Sprintf("  Movies: %d", movieCount)))
+	fmt.Println(infoStyle.Render(fmt.Sprintf("  Episodes: %d", episodeCount)))
 
 	return nil
 }

@@ -16,6 +16,9 @@ mpv --version
 # Check rclone
 rclone version
 
+# Check chafa (optional, for movie posters)
+chafa --version
+
 # Check Go (if building from source)
 go version
 ```
@@ -24,17 +27,17 @@ If any are missing, install them:
 
 ### macOS
 ```bash
-brew install fzf mpv rclone
+brew install fzf mpv rclone chafa
 ```
 
 ### Linux (Debian/Ubuntu)
 ```bash
-sudo apt install fzf mpv rclone
+sudo apt install fzf mpv rclone chafa
 ```
 
 ### Linux (Arch)
 ```bash
-sudo pacman -S fzf mpv rclone
+sudo pacman -S fzf mpv rclone chafa
 ```
 
 ## Installation
@@ -57,12 +60,12 @@ make install
 
 Download the latest release for your platform from the [releases page](https://github.com/joshkerr/goplexcli/releases).
 
-Extract and move to your PATH:
+Extract and install both binaries:
 
 ```bash
 # macOS/Linux
 tar xzf goplexcli-*.tar.gz
-sudo mv goplexcli-* /usr/local/bin/goplexcli
+sudo mv goplexcli goplexcli-preview /usr/local/bin/
 ```
 
 ## First Time Setup
@@ -90,8 +93,10 @@ goplexcli browse
 ```
 
 This opens fzf with your media library. You can:
+- Select media type (Movies, TV Shows, or All)
 - Type to search
 - Use arrow keys to navigate
+- Press **i** to toggle preview window (shows posters and metadata)
 - Press Enter to select
 - Press Esc to cancel
 
@@ -189,6 +194,38 @@ Build the cache:
 goplexcli cache reindex
 ```
 
+### Posters Not Showing
+
+If you don't see movie posters in the preview:
+
+1. Install chafa:
+```bash
+# macOS
+brew install chafa
+
+# Linux
+sudo apt install chafa
+```
+
+2. Rebuild cache to fetch poster URLs:
+```bash
+goplexcli cache reindex
+```
+
+3. Press **i** in browse mode to toggle preview window
+
+### "Preview binary not found"
+
+Ensure both binaries are installed:
+```bash
+# If built from source
+cd goplexcli
+make install
+
+# Verify both are in PATH
+which goplexcli goplexcli-preview
+```
+
 ### Authentication Failed
 
 1. Verify your Plex credentials
@@ -249,10 +286,10 @@ To get your Plex token, see: https://support.plex.tv/articles/204059436-finding-
 
 ### Keyboard Shortcuts in fzf
 
+- `i`: Toggle preview window
 - `Ctrl-J/Ctrl-K`: Move down/up
 - `Ctrl-D/Ctrl-U`: Scroll down/up half page
 - `Tab`: Mark multiple items (if enabled)
-- `Ctrl-/`: Toggle preview
 - `Esc`: Cancel
 
 ### Quick Search Examples

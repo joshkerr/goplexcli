@@ -6,8 +6,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	rclone "github.com/joshkerr/rclone-golib"
 )
 
@@ -52,6 +54,21 @@ func Download(ctx context.Context, rclonePath, destinationDir, rcloneBinary stri
 	// Add transfer to manager
 	manager.Add(transferID, rclonePath, destinationPath)
 	
+	// Start the Bubble Tea UI for progress in a goroutine
+	var wg sync.WaitGroup
+	var uiErr error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		p := tea.NewProgram(rclone.NewModel(manager))
+		if _, err := p.Run(); err != nil {
+			uiErr = err
+		}
+	}()
+	
+	// Small delay to let UI start
+	time.Sleep(100 * time.Millisecond)
+	
 	// Create executor
 	executor := rclone.NewExecutor(manager)
 	
@@ -71,10 +88,18 @@ func Download(ctx context.Context, rclonePath, destinationDir, rcloneBinary stri
 	err := executor.Execute(transferID, opts)
 	if err != nil {
 		manager.Fail(transferID, err)
+		wg.Wait() // Wait for UI to finish
 		return fmt.Errorf("download failed: %w", err)
 	}
 	
 	manager.Complete(transferID)
+	
+	// Wait for UI to finish
+	wg.Wait()
+	
+	if uiErr != nil {
+		return fmt.Errorf("UI error: %w", uiErr)
+	}
 	
 	return nil
 }
@@ -88,3 +113,4 @@ func IsAvailable(rclonePath string) bool {
 	_, err := exec.LookPath(rclonePath)
 	return err == nil
 }
+

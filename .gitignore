@@ -5,6 +5,7 @@
 *.so
 *.dylib
 /goplexcli
+/goplexcli-preview
 build/
 
 # Test binary
