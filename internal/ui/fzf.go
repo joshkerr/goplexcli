@@ -195,51 +195,45 @@ func createPreviewScript(media []plex.MediaItem, plexURL string, plexToken strin
 	
 	// Look for the preview binary in common locations
 	var previewBinary string
+	
+	// Get current working directory
+	cwd, _ := os.Getwd()
+	
 	possiblePaths := []string{
-		"./goplexcli-preview",                              // Current directory
+		filepath.Join(cwd, "goplexcli-preview"),            // Current directory
 		"/usr/local/bin/goplexcli-preview",                 // Installed location
 		filepath.Join(os.Getenv("HOME"), "bin", "goplexcli-preview"), // User bin
 	}
 	
 	for _, path := range possiblePaths {
-		if _, err := os.Stat(path); err == nil {
-			previewBinary = path
+		if stat, err := os.Stat(path); err == nil && !stat.IsDir() {
+			previewBinary, _ = filepath.Abs(path)
 			break
 		}
 	}
 	
-	// If not found, try to build it
+	// If not found, return error with helpful message
 	if previewBinary == "" {
-		previewBinary = filepath.Join(tmpDir, "goplexcli-preview")
-		buildCmd := exec.Command("go", "build", "-o", previewBinary, "github.com/joshkerr/goplexcli/cmd/preview")
-		if err := buildCmd.Run(); err != nil {
-			// If build fails, create a simple fallback script
-			return createFallbackPreviewScript(dataPath)
-		}
+		scriptPath := filepath.Join(tmpDir, "goplexcli-preview.sh")
+		script := `#!/bin/bash
+echo "Preview binary not found!"
+echo ""
+echo "Please run 'make build' or 'go build -o goplexcli-preview ./cmd/preview'"
+echo ""
+echo "Searched locations:"
+echo "  - ./goplexcli-preview"
+echo "  - /usr/local/bin/goplexcli-preview"
+echo "  - ~/bin/goplexcli-preview"
+`
+		os.WriteFile(scriptPath, []byte(script), 0755)
+		return scriptPath, nil
 	}
 	
 	// Create wrapper script that calls the binary
 	scriptPath := filepath.Join(tmpDir, "goplexcli-preview.sh")
 	script := fmt.Sprintf(`#!/bin/bash
-%s %s "$1"
+"%s" "%s" "$1"
 `, previewBinary, dataPath)
-	
-	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
-		return "", err
-	}
-	
-	return scriptPath, nil
-}
-
-// createFallbackPreviewScript creates a simple bash script if Go build fails
-func createFallbackPreviewScript(dataPath string) (string, error) {
-	tmpDir := os.TempDir()
-	scriptPath := filepath.Join(tmpDir, "goplexcli-preview.sh")
-	
-	script := `#!/bin/bash
-echo "Preview functionality requires rebuild. Showing basic info..."
-echo "Index: $1"
-`
 	
 	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
 		return "", err
