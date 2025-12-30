@@ -150,21 +150,61 @@ func (c *Client) GetAllMedia(ctx context.Context) ([]MediaItem, error) {
 func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionType string) ([]MediaItem, error) {
 	var items []MediaItem
 
-	// Get all items in the library section
-	res, err := c.sdk.Library.GetAllItemLeaves(ctx, operations.GetAllItemLeavesRequest{
-		Ids: sectionKey,
-	})
+	// Use direct HTTP request to get all items from a section
+	url := fmt.Sprintf("%s/library/sections/%s/all?X-Plex-Token=%s", c.serverURL, sectionKey, c.token)
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Plex-Client-Identifier", "goplexcli")
+	req.Header.Set("X-Plex-Product", "GoplexCLI")
+	req.Header.Set("X-Plex-Version", "1.0")
+	
+	client := &http.Client{}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get library items: %w", err)
 	}
-
-	if res.MediaContainerWithMetadata == nil || res.MediaContainerWithMetadata.MediaContainer == nil {
-		return items, nil
+	defer resp.Body.Close()
+	
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+	
+	// Parse the response
+	var mediaResp struct {
+		MediaContainer struct {
+			Metadata []struct {
+				Key              string  `json:"key"`
+				Title            string  `json:"title"`
+				Year             *int    `json:"year"`
+				Summary          *string `json:"summary"`
+				Rating           *float32 `json:"rating"`
+				Duration         *int    `json:"duration"`
+				GrandparentTitle *string `json:"grandparentTitle"`
+				ParentTitle      *string `json:"parentTitle"`
+				Index            *int    `json:"index"`
+				ParentIndex      *int    `json:"parentIndex"`
+				Media            []struct {
+					Part []struct {
+						File *string `json:"file"`
+					} `json:"Part"`
+				} `json:"Media"`
+			} `json:"Metadata"`
+		} `json:"MediaContainer"`
+	}
+	
+	if err := json.Unmarshal(body, &mediaResp); err != nil {
+		return nil, fmt.Errorf("failed to parse media response: %w", err)
 	}
 
 	if sectionType == "movie" {
 		// Process movies
-		for _, metadata := range res.MediaContainerWithMetadata.MediaContainer.Metadata {
+		for _, metadata := range mediaResp.MediaContainer.Metadata {
 			item := MediaItem{
 				Key:      metadata.Key,
 				Title:    metadata.Title,
@@ -185,8 +225,8 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 		}
 	} else if sectionType == "show" {
 		// For TV shows, we need to get all episodes
-		// GetAllItemLeaves with a show section returns all episodes
-		for _, metadata := range res.MediaContainerWithMetadata.MediaContainer.Metadata {
+		// The /all endpoint with a show section returns all episodes
+		for _, metadata := range mediaResp.MediaContainer.Metadata {
 			item := MediaItem{
 				Key:         metadata.Key,
 				Title:       metadata.Title,
