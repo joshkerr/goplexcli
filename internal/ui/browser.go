@@ -466,20 +466,6 @@ func (m *BrowserModel) renderPosterAsync(posterPath string) tea.Cmd {
 	}
 }
 
-func (m *BrowserModel) getPosterPath(thumbPath string) string {
-	// Check cache
-	if path, ok := m.posterCache[thumbPath]; ok {
-		return path
-	}
-
-	// Download poster (reuse shared function)
-	path := DownloadPoster(m.plexURL, thumbPath, m.plexToken)
-	if path != "" {
-		m.posterCache[thumbPath] = path
-	}
-	return path
-}
-
 func (m *BrowserModel) filterMedia() {
 	query := m.searchInput.Value()
 	if query == "" {

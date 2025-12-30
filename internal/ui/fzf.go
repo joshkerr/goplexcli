@@ -237,7 +237,7 @@ echo "  - ./goplexcli-preview"
 echo "  - /usr/local/bin/goplexcli-preview"
 echo "  - ~/bin/goplexcli-preview"
 `
-		os.WriteFile(scriptPath, []byte(script), 0755)
+		_ = os.WriteFile(scriptPath, []byte(script), 0755) // Ignore error - will fail in wrapper script anyway
 		return scriptPath, nil
 	}
 	

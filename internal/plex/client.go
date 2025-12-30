@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/LukeHagar/plexgo"
@@ -493,21 +492,9 @@ func valueOrZeroInt(v *int) int {
 	return *v
 }
 
-func valueOrZeroInt64(v *int64) int64 {
-	if v == nil {
-		return 0
-	}
-	return *v
-}
-
 func valueOrZeroFloat32(v *float32) float32 {
 	if v == nil {
 		return 0
 	}
 	return *v
-}
-
-func parseFloat(s string) float64 {
-	result, _ := strconv.ParseFloat(s, 64)
-	return result
 }
