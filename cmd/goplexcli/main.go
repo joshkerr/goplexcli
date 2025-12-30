@@ -8,7 +8,6 @@ import (
 	"syscall"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/joshkerr/goplexcli/internal/cache"
 	"github.com/joshkerr/goplexcli/internal/config"
@@ -378,22 +377,13 @@ func runBrowse(cmd *cobra.Command, args []string) error {
 
 	fmt.Println(infoStyle.Render(fmt.Sprintf("\nBrowsing %d items...\n", len(filteredMedia))))
 
-	// Launch Bubble Tea browser
-	browser := ui.NewBrowser(filteredMedia, cfg.PlexURL, cfg.PlexToken)
-	p := tea.NewProgram(browser, tea.WithAltScreen())
-	
-	finalModel, err := p.Run()
+	// Use fzf to select media
+	selectedMedia, err := ui.SelectMedia(filteredMedia, "Select media:", cfg.FzfPath)
 	if err != nil {
-		return fmt.Errorf("browser error: %w", err)
-	}
-
-	// Get selected media
-	browserModel := finalModel.(*ui.BrowserModel)
-	selectedMedia := browserModel.GetSelected()
-	
-	if selectedMedia == nil {
-		// User quit without selecting
-		return nil
+		if err.Error() == "cancelled by user" {
+			return nil
+		}
+		return fmt.Errorf("media selection failed: %w", err)
 	}
 
 	// Ask what to do
