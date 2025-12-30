@@ -1,8 +1,12 @@
 package plex
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -209,50 +213,143 @@ func (m *MediaItem) FormatMediaTitle() string {
 	}
 }
 
+// PlexAuthResponse represents the authentication response from Plex.tv
+type PlexAuthResponse struct {
+	User struct {
+		AuthToken string `json:"authToken"`
+		ID        int    `json:"id"`
+		UUID      string `json:"uuid"`
+		Email     string `json:"email"`
+		Username  string `json:"username"`
+	} `json:"user"`
+}
+
+// PlexDevice represents a Plex server device
+type PlexDevice struct {
+	Name       string `json:"name"`
+	Product    string `json:"product"`
+	Provides   string `json:"provides"`
+	Connection []struct {
+		Protocol string `json:"protocol"`
+		Address  string `json:"address"`
+		Port     int    `json:"port"`
+		URI      string `json:"uri"`
+		Local    int    `json:"local"`
+	} `json:"Connection"`
+}
+
 // Authenticate authenticates with Plex using username and password
 func Authenticate(username, password string) (string, string, error) {
-	// Create a temporary client without token
-	plexConnection, err := plex.SignIn(username, password)
-	if err != nil {
-		return "", "", fmt.Errorf("authentication failed: %w", err)
+	// Make direct HTTP request to Plex.tv API
+	client := &http.Client{}
+	
+	// Create the authentication request
+	authURL := "https://plex.tv/api/v2/users/signin"
+	
+	authData := map[string]string{
+		"login":    username,
+		"password": password,
 	}
 	
-	// Get the auth token from the returned Plex client
-	if plexConnection.Token == "" {
+	authJSON, err := json.Marshal(authData)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to marshal auth data: %w", err)
+	}
+	
+	req, err := http.NewRequest("POST", authURL, bytes.NewBuffer(authJSON))
+	if err != nil {
+		return "", "", fmt.Errorf("failed to create request: %w", err)
+	}
+	
+	// Set required headers
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Plex-Product", "GoplexCLI")
+	req.Header.Set("X-Plex-Version", "1.0")
+	req.Header.Set("X-Plex-Client-Identifier", "goplexcli")
+	
+	// Make the request
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", fmt.Errorf("authentication request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		return "", "", fmt.Errorf("authentication failed with status %d: %s", resp.StatusCode, string(body))
+	}
+	
+	// Parse the response
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to read response: %w", err)
+	}
+	
+	var authResp PlexAuthResponse
+	if err := json.Unmarshal(body, &authResp); err != nil {
+		return "", "", fmt.Errorf("failed to parse auth response: %w", err)
+	}
+	
+	if authResp.User.AuthToken == "" {
 		return "", "", fmt.Errorf("no auth token received")
 	}
 	
-	// Get available servers
-	servers, err := plexConnection.GetServers()
+	token := authResp.User.AuthToken
+	
+	// Get available servers using the token
+	devicesURL := "https://plex.tv/api/v2/resources?includeHttps=1&includeRelay=1"
+	
+	req, err = http.NewRequest("GET", devicesURL, nil)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to get servers: %w", err)
+		return "", "", fmt.Errorf("failed to create devices request: %w", err)
 	}
 	
-	if len(servers) == 0 {
-		return "", "", fmt.Errorf("no servers found")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Plex-Token", token)
+	req.Header.Set("X-Plex-Product", "GoplexCLI")
+	req.Header.Set("X-Plex-Version", "1.0")
+	req.Header.Set("X-Plex-Client-Identifier", "goplexcli")
+	
+	resp, err = client.Do(req)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to get devices: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	body, err = io.ReadAll(resp.Body)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to read devices response: %w", err)
 	}
 	
-	// Use the first server
-	server := servers[0]
+	var devices []PlexDevice
+	if err := json.Unmarshal(body, &devices); err != nil {
+		return "", "", fmt.Errorf("failed to parse devices: %w", err)
+	}
 	
-	// Build server URL
+	// Find a server device
 	var serverURL string
-	if len(server.Connection) > 0 {
-		// Prefer local connection
-		for _, conn := range server.Connection {
-			if conn.Local == 1 {
-				serverURL = conn.URI
+	for _, device := range devices {
+		if strings.Contains(device.Provides, "server") {
+			if len(device.Connection) > 0 {
+				// Prefer local connection
+				for _, conn := range device.Connection {
+					if conn.Local == 1 {
+						serverURL = conn.URI
+						break
+					}
+				}
+				// Fallback to first connection
+				if serverURL == "" {
+					serverURL = device.Connection[0].URI
+				}
 				break
 			}
-		}
-		// Fallback to first connection
-		if serverURL == "" {
-			serverURL = server.Connection[0].URI
 		}
 	}
 	
 	if serverURL == "" {
-		return "", "", fmt.Errorf("no server URL found")
+		return "", "", fmt.Errorf("no server found")
 	}
 	
 	// Ensure URL is properly formatted
@@ -260,5 +357,5 @@ func Authenticate(username, password string) (string, string, error) {
 		return "", "", fmt.Errorf("invalid server URL: %w", err)
 	}
 	
-	return serverURL, plexConnection.Token, nil
+	return serverURL, token, nil
 }
