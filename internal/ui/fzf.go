@@ -193,12 +193,29 @@ func createPreviewScript(media []plex.MediaItem, plexURL string, plexToken strin
 		return "", err
 	}
 	
-	// Build the preview binary
-	previewBinary := filepath.Join(tmpDir, "goplexcli-preview")
-	buildCmd := exec.Command("go", "build", "-o", previewBinary, "github.com/joshkerr/goplexcli/cmd/preview")
-	if err := buildCmd.Run(); err != nil {
-		// If build fails, create a simple shell script instead
-		return createFallbackPreviewScript(dataPath)
+	// Look for the preview binary in common locations
+	var previewBinary string
+	possiblePaths := []string{
+		"./goplexcli-preview",                              // Current directory
+		"/usr/local/bin/goplexcli-preview",                 // Installed location
+		filepath.Join(os.Getenv("HOME"), "bin", "goplexcli-preview"), // User bin
+	}
+	
+	for _, path := range possiblePaths {
+		if _, err := os.Stat(path); err == nil {
+			previewBinary = path
+			break
+		}
+	}
+	
+	// If not found, try to build it
+	if previewBinary == "" {
+		previewBinary = filepath.Join(tmpDir, "goplexcli-preview")
+		buildCmd := exec.Command("go", "build", "-o", previewBinary, "github.com/joshkerr/goplexcli/cmd/preview")
+		if err := buildCmd.Run(); err != nil {
+			// If build fails, create a simple fallback script
+			return createFallbackPreviewScript(dataPath)
+		}
 	}
 	
 	// Create wrapper script that calls the binary
