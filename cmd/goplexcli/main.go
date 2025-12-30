@@ -309,9 +309,8 @@ func runBrowse(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("fzf is not installed. Please install fzf to browse media")
 	}
 
-	// Show fzf selector
-	items := mediaCache.FormatForFzf()
-	selected, _, err := ui.SelectWithFzf(items, "Select media:", cfg.FzfPath)
+	// Ask user to select media type
+	mediaType, err := ui.SelectMediaType(cfg.FzfPath)
 	if err != nil {
 		if err.Error() == "cancelled by user" {
 			return nil
@@ -319,11 +318,44 @@ func runBrowse(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Get the selected media item
-	selectedMedia, err := mediaCache.GetMediaByFormattedTitle(selected)
-	if err != nil {
-		return fmt.Errorf("failed to get media: %w", err)
+	// Filter media by type
+	var filteredMedia []plex.MediaItem
+	switch mediaType {
+	case "movies":
+		for _, item := range mediaCache.Media {
+			if item.Type == "movie" {
+				filteredMedia = append(filteredMedia, item)
+			}
+		}
+	case "tv shows":
+		for _, item := range mediaCache.Media {
+			if item.Type == "episode" {
+				filteredMedia = append(filteredMedia, item)
+			}
+		}
+	case "all":
+		filteredMedia = mediaCache.Media
+	default:
+		filteredMedia = mediaCache.Media
 	}
+
+	if len(filteredMedia) == 0 {
+		fmt.Println(warningStyle.Render("No media found for selected type."))
+		return nil
+	}
+
+	fmt.Println(infoStyle.Render(fmt.Sprintf("\nBrowsing %d items...", len(filteredMedia))))
+
+	// Show fzf selector with preview
+	selectedIdx, err := ui.SelectMediaWithPreview(filteredMedia, "Select media:", cfg.FzfPath, cfg.PlexURL, cfg.PlexToken)
+	if err != nil {
+		if err.Error() == "cancelled by user" {
+			return nil
+		}
+		return err
+	}
+
+	selectedMedia := &filteredMedia[selectedIdx]
 
 	// Ask what to do
 	action, err := ui.PromptAction(cfg.FzfPath)
