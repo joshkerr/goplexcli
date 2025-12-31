@@ -251,7 +251,9 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	if len(cfg.Servers) > 0 {
 		fmt.Print("\nAdd this as an additional server? (y/n): ")
 		var addMore string
-		fmt.Scanln(&addMore)
+		if _, err := fmt.Scanln(&addMore); err != nil {
+			addMore = "n" // Default to no on error
+		}
 		
 		if strings.ToLower(addMore) == "y" || strings.ToLower(addMore) == "yes" {
 			// Check if server already exists
