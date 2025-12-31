@@ -87,7 +87,14 @@ func main() {
 		RunE:  runCacheInfo,
 	}
 
-	cacheCmd.AddCommand(cacheUpdateCmd, cacheReindexCmd, cacheInfoCmd)
+	cacheSearchCmd := &cobra.Command{
+		Use:   "search [title]",
+		Short: "Search for a specific title in both cache and Plex",
+		Args:  cobra.MinimumNArgs(1),
+		RunE:  runCacheSearch,
+	}
+
+	cacheCmd.AddCommand(cacheUpdateCmd, cacheReindexCmd, cacheInfoCmd, cacheSearchCmd)
 
 	// Config command
 	configCmd := &cobra.Command{
@@ -96,7 +103,35 @@ func main() {
 		RunE:  runConfig,
 	}
 
-	rootCmd.AddCommand(loginCmd, browseCmd, cacheCmd, configCmd)
+	// Server command
+	serverCmd := &cobra.Command{
+		Use:   "server",
+		Short: "Manage Plex servers",
+	}
+
+	serverListCmd := &cobra.Command{
+		Use:   "list",
+		Short: "List all configured servers",
+		RunE:  runServerList,
+	}
+
+	serverEnableCmd := &cobra.Command{
+		Use:   "enable [server-name]",
+		Short: "Enable a server for indexing",
+		Args:  cobra.MinimumNArgs(1),
+		RunE:  runServerEnable,
+	}
+
+	serverDisableCmd := &cobra.Command{
+		Use:   "disable [server-name]",
+		Short: "Disable a server from indexing",
+		Args:  cobra.MinimumNArgs(1),
+		RunE:  runServerDisable,
+	}
+
+	serverCmd.AddCommand(serverListCmd, serverEnableCmd, serverDisableCmd)
+
+	rootCmd.AddCommand(loginCmd, browseCmd, cacheCmd, configCmd, serverCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(errorStyle.Render("Error: " + err.Error()))
@@ -212,7 +247,58 @@ func runLogin(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 	
-	// Update only Plex-related fields
+	// Check if we want to add this as an additional server or replace
+	if len(cfg.Servers) > 0 {
+		fmt.Print("\nAdd this as an additional server? (y/n): ")
+		var addMore string
+		if _, err := fmt.Scanln(&addMore); err != nil {
+			addMore = "n" // Default to no on error
+		}
+		
+		if strings.ToLower(addMore) == "y" || strings.ToLower(addMore) == "yes" {
+			// Check if server already exists
+			serverExists := false
+			for i, s := range cfg.Servers {
+				if s.URL == selectedURL {
+					cfg.Servers[i].Enabled = true
+					serverExists = true
+					fmt.Println(infoStyle.Render("Server already exists, enabled it"))
+					break
+				}
+			}
+			
+			if !serverExists {
+				// Add new server
+				cfg.Servers = append(cfg.Servers, config.PlexServer{
+					Name:    selectedServer.Name,
+					URL:     selectedURL,
+					Enabled: true,
+				})
+				fmt.Println(successStyle.Render(fmt.Sprintf("✓ Added server '%s'", selectedServer.Name)))
+			}
+		} else {
+			// Replace with new single-server config
+			cfg.Servers = []config.PlexServer{
+				{
+					Name:    selectedServer.Name,
+					URL:     selectedURL,
+					Enabled: true,
+				},
+			}
+			fmt.Println(infoStyle.Render("Replaced existing server configuration"))
+		}
+	} else {
+		// First server
+		cfg.Servers = []config.PlexServer{
+			{
+				Name:    selectedServer.Name,
+				URL:     selectedURL,
+				Enabled: true,
+			},
+		}
+	}
+	
+	// Update legacy fields for backward compatibility
 	cfg.PlexURL = selectedURL
 	cfg.PlexToken = token
 	cfg.PlexUsername = username
@@ -222,7 +308,20 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Println(successStyle.Render("✓ Configuration saved"))
-	fmt.Println(infoStyle.Render("\nServer URL: " + selectedURL))
+	
+	if len(cfg.Servers) > 1 {
+		fmt.Println(infoStyle.Render(fmt.Sprintf("\nYou now have %d servers configured:", len(cfg.Servers))))
+		for _, s := range cfg.Servers {
+			enabledStr := ""
+			if s.Enabled {
+				enabledStr = " (enabled)"
+			}
+			fmt.Println(infoStyle.Render(fmt.Sprintf("  - %s%s", s.Name, enabledStr)))
+		}
+	} else {
+		fmt.Println(infoStyle.Render("\nServer URL: " + selectedURL))
+	}
+	
 	fmt.Println(infoStyle.Render("\nRun 'goplexcli cache reindex' to build your media cache"))
 
 	return nil
@@ -537,40 +636,89 @@ func updateCache(fullReindex bool) error {
 	}
 
 	fmt.Println(titleStyle.Render(action + " Media Cache"))
-	fmt.Println(infoStyle.Render("Connecting to Plex server..."))
 
-	// Create Plex client
-	client, err := plex.New(cfg.PlexURL, cfg.PlexToken)
-	if err != nil {
-		return fmt.Errorf("failed to create plex client: %w", err)
-	}
-
-	// Test connection
-	if err := client.Test(); err != nil {
-		return fmt.Errorf("failed to connect to plex server: %w", err)
-	}
-
-	fmt.Println(successStyle.Render("✓ Connected to Plex server"))
-	fmt.Println(infoStyle.Render("Fetching media library..."))
-
-	// Get all media with progress
-	ctx := context.Background()
-	totalItems := 0
+	// Check if we have multiple servers
+	enabledServers := cfg.GetEnabledServers()
 	
-	media, err := client.GetAllMedia(ctx, func(libraryName string, itemCount, totalLibs, currentLib int) {
-		totalItems += itemCount
-		fmt.Printf("\r%s [%d/%d] %s: %d items (Total: %d)    ",
-			infoStyle.Render("Processing libraries"),
-			currentLib,
-			totalLibs,
-			libraryName,
-			itemCount,
-			totalItems,
-		)
-	})
-	if err != nil {
-		return fmt.Errorf("failed to get media: %w", err)
+	var media []plex.MediaItem
+	ctx := context.Background()
+
+	if len(enabledServers) > 1 {
+		// Multi-server mode
+		fmt.Println(infoStyle.Render(fmt.Sprintf("Found %d enabled servers", len(enabledServers))))
+		
+		// Build server configs
+		var serverConfigs []struct{ Name, URL, Token string }
+		for _, server := range enabledServers {
+			serverConfigs = append(serverConfigs, struct{ Name, URL, Token string }{
+				Name:  server.Name,
+				URL:   server.URL,
+				Token: cfg.PlexToken,
+			})
+		}
+
+		totalItems := 0
+		media, err = plex.GetAllMediaFromServers(ctx, serverConfigs, func(serverName, libraryName string, itemCount, totalLibs, currentLib, serverNum, totalServers int) {
+			totalItems += itemCount
+			fmt.Printf("\r%s [Server %d/%d: %s] [%d/%d] %s: %d items (Total: %d)    ",
+				infoStyle.Render("Processing"),
+				serverNum,
+				totalServers,
+				serverName,
+				currentLib,
+				totalLibs,
+				libraryName,
+				itemCount,
+				totalItems,
+			)
+		})
+		if err != nil {
+			return fmt.Errorf("failed to get media: %w", err)
+		}
+	} else {
+		// Single-server mode (legacy or single enabled server)
+		var serverURL string
+		if len(enabledServers) == 1 {
+			serverURL = enabledServers[0].URL
+		} else {
+			serverURL = cfg.PlexURL
+		}
+
+		fmt.Println(infoStyle.Render("Connecting to Plex server..."))
+
+		// Create Plex client
+		client, err := plex.New(serverURL, cfg.PlexToken)
+		if err != nil {
+			return fmt.Errorf("failed to create plex client: %w", err)
+		}
+
+		// Test connection
+		if err := client.Test(); err != nil {
+			return fmt.Errorf("failed to connect to plex server: %w", err)
+		}
+
+		fmt.Println(successStyle.Render("✓ Connected to Plex server"))
+		fmt.Println(infoStyle.Render("Fetching media library..."))
+
+		// Get all media with progress
+		totalItems := 0
+		
+		media, err = client.GetAllMedia(ctx, func(libraryName string, itemCount, totalLibs, currentLib int) {
+			totalItems += itemCount
+			fmt.Printf("\r%s [%d/%d] %s: %d items (Total: %d)    ",
+				infoStyle.Render("Processing libraries"),
+				currentLib,
+				totalLibs,
+				libraryName,
+				itemCount,
+				totalItems,
+			)
+		})
+		if err != nil {
+			return fmt.Errorf("failed to get media: %w", err)
+		}
 	}
+	
 	fmt.Println() // New line after progress
 
 	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Retrieved %d media items", len(media))))
@@ -586,9 +734,11 @@ func updateCache(fullReindex bool) error {
 
 	fmt.Println(successStyle.Render("✓ Cache saved successfully"))
 	
-	// Count by type
+	// Count by type and by server
 	movieCount := 0
 	episodeCount := 0
+	serverCounts := make(map[string]int)
+	
 	for _, item := range media {
 		switch item.Type {
 		case "movie":
@@ -596,11 +746,21 @@ func updateCache(fullReindex bool) error {
 		case "episode":
 			episodeCount++
 		}
+		if item.ServerName != "" {
+			serverCounts[item.ServerName]++
+		}
 	}
 	
 	fmt.Println(infoStyle.Render(fmt.Sprintf("\nTotal items: %d", len(media))))
 	fmt.Println(infoStyle.Render(fmt.Sprintf("  Movies: %d", movieCount)))
 	fmt.Println(infoStyle.Render(fmt.Sprintf("  Episodes: %d", episodeCount)))
+	
+	if len(serverCounts) > 1 {
+		fmt.Println(infoStyle.Render("\nBy server:"))
+		for serverName, count := range serverCounts {
+			fmt.Println(infoStyle.Render(fmt.Sprintf("  %s: %d items", serverName, count)))
+		}
+	}
 
 	return nil
 }
@@ -666,3 +826,202 @@ func runConfig(cmd *cobra.Command, args []string) error {
 
 	return nil
 }
+
+func runCacheSearch(cmd *cobra.Command, args []string) error {
+	searchTitle := strings.Join(args, " ")
+	
+	// Load config
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("invalid config: %w. Please run 'goplexcli login' first", err)
+	}
+
+	fmt.Println(titleStyle.Render("Searching for: " + searchTitle))
+
+	// Search in cache first
+	fmt.Println(infoStyle.Render("\n=== Checking Cache ==="))
+	mediaCache, err := cache.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load cache: %w", err)
+	}
+
+	foundInCache := false
+	for _, item := range mediaCache.Media {
+		if strings.Contains(strings.ToLower(item.Title), strings.ToLower(searchTitle)) {
+			foundInCache = true
+			fmt.Println(successStyle.Render("✓ Found in cache:"))
+			fmt.Printf("  Title: %s\n", item.FormatMediaTitle())
+			fmt.Printf("  Type: %s\n", item.Type)
+			fmt.Printf("  Key: %s\n", item.Key)
+			fmt.Printf("  FilePath: %s\n", item.FilePath)
+			fmt.Printf("  RclonePath: %s\n", item.RclonePath)
+			fmt.Println()
+		}
+	}
+
+	if !foundInCache {
+		fmt.Println(warningStyle.Render("✗ Not found in cache"))
+	}
+
+	// Search in Plex directly
+	fmt.Println(infoStyle.Render("=== Checking Plex Server ==="))
+	
+	client, err := plex.New(cfg.PlexURL, cfg.PlexToken)
+	if err != nil {
+		return fmt.Errorf("failed to create plex client: %w", err)
+	}
+
+	if err := client.Test(); err != nil {
+		return fmt.Errorf("failed to connect to plex server: %w", err)
+	}
+
+	ctx := context.Background()
+	libraries, err := client.GetLibraries(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get libraries: %w", err)
+	}
+
+	foundInPlex := false
+	for _, lib := range libraries {
+		if lib.Type != "movie" && lib.Type != "show" {
+			continue
+		}
+
+		media, err := client.GetMediaFromSection(ctx, lib.Key, lib.Type)
+		if err != nil {
+			return fmt.Errorf("failed to get media from section %s: %w", lib.Title, err)
+		}
+
+		for _, item := range media {
+			if strings.Contains(strings.ToLower(item.Title), strings.ToLower(searchTitle)) {
+				foundInPlex = true
+				fmt.Println(successStyle.Render(fmt.Sprintf("✓ Found in Plex library '%s':", lib.Title)))
+				fmt.Printf("  Title: %s\n", item.FormatMediaTitle())
+				fmt.Printf("  Type: %s\n", item.Type)
+				fmt.Printf("  Year: %d\n", item.Year)
+				fmt.Printf("  Key: %s\n", item.Key)
+				fmt.Printf("  FilePath: %s\n", item.FilePath)
+				fmt.Printf("  RclonePath: %s\n", item.RclonePath)
+				
+				if item.FilePath == "" {
+					fmt.Println(warningStyle.Render("  ⚠ WARNING: No file path found!"))
+				}
+				fmt.Println()
+			}
+		}
+	}
+
+	if !foundInPlex {
+		fmt.Println(warningStyle.Render("✗ Not found in Plex"))
+	}
+
+	// Summary
+	fmt.Println(infoStyle.Render("=== Summary ==="))
+	if foundInCache && foundInPlex {
+		fmt.Println(successStyle.Render("✓ Item exists in both cache and Plex"))
+	} else if !foundInCache && foundInPlex {
+		fmt.Println(warningStyle.Render("⚠ Item exists in Plex but NOT in cache"))
+		fmt.Println(infoStyle.Render("  Run 'goplexcli cache reindex' to update the cache"))
+	} else if foundInCache && !foundInPlex {
+		fmt.Println(warningStyle.Render("⚠ Item exists in cache but NOT in Plex (stale cache)"))
+		fmt.Println(infoStyle.Render("  Run 'goplexcli cache reindex' to update the cache"))
+	} else {
+		fmt.Println(warningStyle.Render("✗ Item not found in either cache or Plex"))
+	}
+
+	return nil
+}
+
+func runServerList(cmd *cobra.Command, args []string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	fmt.Println(titleStyle.Render("Configured Plex Servers"))
+
+	if len(cfg.Servers) == 0 {
+		fmt.Println(warningStyle.Render("No servers configured. Run 'goplexcli login' first."))
+		return nil
+	}
+
+	for i, server := range cfg.Servers {
+		status := warningStyle.Render("disabled")
+		if server.Enabled {
+			status = successStyle.Render("enabled")
+		}
+		fmt.Printf("%d. %s - %s [%s]\n", i+1, server.Name, server.URL, status)
+	}
+
+	enabledCount := len(cfg.GetEnabledServers())
+	fmt.Println(infoStyle.Render(fmt.Sprintf("\n%d of %d servers enabled", enabledCount, len(cfg.Servers))))
+
+	return nil
+}
+
+func runServerEnable(cmd *cobra.Command, args []string) error {
+	serverName := strings.Join(args, " ")
+	
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	found := false
+	for i, server := range cfg.Servers {
+		if strings.EqualFold(server.Name, serverName) {
+			cfg.Servers[i].Enabled = true
+			found = true
+			fmt.Println(successStyle.Render(fmt.Sprintf("✓ Enabled server '%s'", server.Name)))
+			break
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("server '%s' not found", serverName)
+	}
+
+	if err := cfg.Save(); err != nil {
+		return fmt.Errorf("failed to save config: %w", err)
+	}
+
+	fmt.Println(infoStyle.Render("Run 'goplexcli cache reindex' to update the cache"))
+
+	return nil
+}
+
+func runServerDisable(cmd *cobra.Command, args []string) error {
+	serverName := strings.Join(args, " ")
+	
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	found := false
+	for i, server := range cfg.Servers {
+		if strings.EqualFold(server.Name, serverName) {
+			cfg.Servers[i].Enabled = false
+			found = true
+			fmt.Println(successStyle.Render(fmt.Sprintf("✓ Disabled server '%s'", server.Name)))
+			break
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("server '%s' not found", serverName)
+	}
+
+	if err := cfg.Save(); err != nil {
+		return fmt.Errorf("failed to save config: %w", err)
+	}
+
+	fmt.Println(warningStyle.Render("Note: Cached items from this server will remain until next reindex"))
+
+	return nil
+}
+

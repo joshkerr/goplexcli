@@ -8,13 +8,25 @@ import (
 	"runtime"
 )
 
+type PlexServer struct {
+	Name     string `json:"name"`
+	URL      string `json:"url"`
+	Enabled  bool   `json:"enabled"` // Whether to index this server
+}
+
 type Config struct {
-	PlexURL      string `json:"plex_url"`
+	// Legacy single-server fields (for backward compatibility)
+	PlexURL      string `json:"plex_url,omitempty"`
 	PlexToken    string `json:"plex_token"`
 	PlexUsername string `json:"plex_username,omitempty"`
-	MPVPath      string `json:"mpv_path,omitempty"`
-	RclonePath   string `json:"rclone_path,omitempty"`
-	FzfPath      string `json:"fzf_path,omitempty"`
+	
+	// Multi-server support
+	Servers    []PlexServer `json:"servers,omitempty"`
+	
+	// Tool paths
+	MPVPath    string `json:"mpv_path,omitempty"`
+	RclonePath string `json:"rclone_path,omitempty"`
+	FzfPath    string `json:"fzf_path,omitempty"`
 }
 
 // GetConfigDir returns the platform-specific config directory
@@ -90,6 +102,11 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	
+	// Migrate legacy single-server config to multi-server
+	if err := config.MigrateLegacy(); err != nil {
+		return nil, err
+	}
+	
 	return &config, nil
 }
 
@@ -118,10 +135,39 @@ func (c *Config) Save() error {
 	return os.WriteFile(configPath, data, 0600)
 }
 
+// MigrateLegacy converts old single-server config to multi-server format
+func (c *Config) MigrateLegacy() error {
+	// If we have legacy PlexURL but no servers, migrate
+	if c.PlexURL != "" && len(c.Servers) == 0 {
+		c.Servers = []PlexServer{
+			{
+				Name:    "Default Server",
+				URL:     c.PlexURL,
+				Enabled: true,
+			},
+		}
+		// Keep legacy field for backward compatibility
+		// c.PlexURL = "" // Don't clear it yet
+	}
+	return nil
+}
+
+// GetEnabledServers returns all servers that should be indexed
+func (c *Config) GetEnabledServers() []PlexServer {
+	var enabled []PlexServer
+	for _, server := range c.Servers {
+		if server.Enabled {
+			enabled = append(enabled, server)
+		}
+	}
+	return enabled
+}
+
 // Validate checks if the config has required fields
 func (c *Config) Validate() error {
-	if c.PlexURL == "" {
-		return fmt.Errorf("plex_url is required")
+	// Check for either legacy or new format
+	if c.PlexURL == "" && len(c.Servers) == 0 {
+		return fmt.Errorf("at least one Plex server is required")
 	}
 	if c.PlexToken == "" {
 		return fmt.Errorf("plex_token is required")
