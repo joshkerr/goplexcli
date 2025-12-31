@@ -243,9 +243,9 @@ func (c *Config) Validate() error {
 Auto-detecting media player with configurable override in `internal/player/player.go`:
 
 ```go
-// Auto-detect best player: iina on macOS if available, otherwise mpv
+// Auto-detect best player: iina on macOS if available, then mpv, then vlc
 func DetectPlayer(preference string) (string, string, error) {
-    // preference can be: "auto", "iina", "mpv", or custom path
+    // preference can be: "auto", "iina", "mpv", "vlc", or custom path
     
     if runtime.GOOS == "darwin" {
         // Try iina-cli first (brew install or IINA.app bundle)
@@ -254,15 +254,30 @@ func DetectPlayer(preference string) (string, string, error) {
         }
     }
     
-    // Fallback to mpv (cross-platform)
-    return exec.LookPath("mpv")
+    // Try mpv (cross-platform)
+    if path, err := exec.LookPath("mpv"); err == nil {
+        return path, "mpv", nil
+    }
+    
+    // Fallback to VLC with platform-specific paths
+    return detectVLC()
 }
 ```
+
+**Player-specific arguments:**
+- **iina**: `--no-stdin --keep-running=no`
+- **mpv**: `--force-seekable=yes --hr-seek=yes --no-resume-playback`
+- **vlc**: `--play-and-exit --no-video-title-show`
+
+**VLC detection:**
+- macOS: `/Applications/VLC.app/Contents/MacOS/VLC`
+- Windows: `C:\Program Files\VideoLAN\VLC\vlc.exe`
+- Linux: `vlc` or `cvlc` (command-line)
 
 **Config usage:**
 ```json
 {
-  "player": "auto"  // or "iina", "mpv", "/custom/path"
+  "player": "auto"  // or "iina", "mpv", "vlc", "/custom/path"
 }
 ```
 
@@ -386,18 +401,18 @@ case posterDownloadedMsg:
 Must be in PATH or configured in `config.json`:
 
 - **fzf** - Fuzzy finder for media browsing
-- **Media player** - mpv or iina (macOS) for streaming
+- **Media player** - mpv, iina (macOS), or vlc for streaming
 - **rclone** - File transfer tool for downloads
 
 **Player Detection:**
 The application auto-detects the best available player:
-- macOS: Prefers iina if installed, falls back to mpv
-- Linux/Windows: Uses mpv
+- macOS: Prefers iina if installed, falls back to mpv, then vlc
+- Linux/Windows: Tries mpv first, then vlc
 
 Users can override in `config.json`:
 ```json
 {
-  "player": "auto"  // or "iina", "mpv", or custom path
+  "player": "auto"  // or "iina", "mpv", "vlc", or custom path
 }
 ```
 

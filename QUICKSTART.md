@@ -10,10 +10,12 @@ Before starting, verify you have the required tools installed:
 # Check fzf
 fzf --version
 
-# Check media player (mpv or iina)
+# Check media player (mpv, iina, or vlc)
 mpv --version
 # or on macOS
 iina-cli --version
+# or
+vlc --version
 
 # Check rclone
 rclone version
@@ -31,16 +33,35 @@ brew install fzf iina rclone
 
 # Option 2: Using mpv
 brew install fzf mpv rclone
+
+# Option 3: Using VLC
+brew install fzf vlc rclone
 ```
 
 ### Linux (Debian/Ubuntu)
 ```bash
+# With mpv (recommended)
 sudo apt install fzf mpv rclone
+
+# Or with VLC
+sudo apt install fzf vlc rclone
 ```
 
 ### Linux (Arch)
 ```bash
+# With mpv
 sudo pacman -S fzf mpv rclone
+
+# Or with VLC
+sudo pacman -S fzf vlc rclone
+```
+
+### Windows
+```bash
+# Install VLC from https://www.videolan.org/vlc/
+# Or install mpv from https://mpv.io
+# Then install other tools
+choco install fzf
 ```
 
 ## Installation

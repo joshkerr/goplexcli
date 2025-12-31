@@ -35,10 +35,10 @@ GoplexCLI is a fully-featured, production-ready command-line interface for manag
    - Separate preview binary for fast rendering
 
 4. **Media Playback**
-   - Auto-detecting media player (iina on macOS, mpv elsewhere)
+   - Auto-detecting media player (iina on macOS, mpv, or vlc)
    - Direct stream URL generation from Plex
    - Seekable playback support
-   - Cross-platform player support (iina, mpv)
+   - Cross-platform player support (iina, mpv, vlc)
    - Configurable player preference
 
 5. **Media Downloads**
@@ -114,7 +114,7 @@ goplexcli/
 
 **External Tools Required:**
 - fzf - Fuzzy finder
-- Media player - mpv or iina (macOS)
+- Media player - mpv, iina (macOS), or vlc
 - rclone - File transfer tool
 
 ### Cross-Platform Support

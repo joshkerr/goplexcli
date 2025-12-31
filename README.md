@@ -22,10 +22,10 @@ Before using GoplexCLI, ensure you have the following installed:
   - macOS: `brew install fzf`
   - Linux: `sudo apt install fzf` or `sudo pacman -S fzf`
   - Windows: `choco install fzf`
-- **Media player** - For streaming (mpv or IINA)
+- **Media player** - For streaming (mpv, IINA, or VLC)
   - macOS: `brew install mpv` or `brew install iina` (IINA recommended for macOS)
-  - Linux: `sudo apt install mpv` or `sudo pacman -S mpv`
-  - Windows: Download from [mpv.io](https://mpv.io)
+  - Linux: `sudo apt install mpv` or `sudo apt install vlc`
+  - Windows: Download from [mpv.io](https://mpv.io) or [videolan.org/vlc](https://www.videolan.org/vlc/)
 - **rclone** - For downloading media files
   - macOS: `brew install rclone`
   - Linux: `sudo apt install rclone` or download from [rclone.org](https://rclone.org)
@@ -180,9 +180,10 @@ The `config.json` file contains:
 ```
 
 **Player Options:**
-- `"auto"` (default) - Auto-detect best player (iina on macOS if installed, otherwise mpv)
+- `"auto"` (default) - Auto-detect best player (iina on macOS if installed, otherwise mpv, then vlc)
 - `"iina"` - Force IINA player (macOS only)
 - `"mpv"` - Force mpv player
+- `"vlc"` - Force VLC player
 - `"/custom/path/to/player"` - Use custom player path
 
 You can manually edit this file to set custom paths for your media player, rclone, or fzf if they're not in your PATH.
