@@ -571,8 +571,18 @@ func handleWatch(cfg *config.Config, media *plex.MediaItem) error {
 
 	fmt.Println(successStyle.Render("✓ Starting playback..."))
 
-	// Play with MPV
-	if err := player.Play(streamURL, cfg.MPVPath); err != nil {
+	// Determine player preference (new Player field takes precedence over legacy MPVPath)
+	playerPref := cfg.Player
+	if playerPref == "" && cfg.MPVPath != "" {
+		// Legacy MPVPath support
+		playerPref = cfg.MPVPath
+	}
+	if playerPref == "" {
+		playerPref = "auto"
+	}
+
+	// Play with detected player
+	if err := player.Play(streamURL, playerPref); err != nil {
 		return fmt.Errorf("playback failed: %w", err)
 	}
 
@@ -817,6 +827,13 @@ func runConfig(cmd *cobra.Command, args []string) error {
 		fmt.Println(infoStyle.Render("Username: " + cfg.PlexUsername))
 	}
 	fmt.Println(infoStyle.Render("Token: " + cfg.PlexToken[:10] + "..."))
+	
+	// Show player preference
+	playerPref := cfg.Player
+	if playerPref == "" {
+		playerPref = "auto"
+	}
+	fmt.Println(infoStyle.Render("Player: " + playerPref))
 
 	configPath, _ := config.GetConfigPath()
 	fmt.Println(infoStyle.Render("\nConfig file: " + configPath))

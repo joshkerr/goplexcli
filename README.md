@@ -22,8 +22,8 @@ Before using GoplexCLI, ensure you have the following installed:
   - macOS: `brew install fzf`
   - Linux: `sudo apt install fzf` or `sudo pacman -S fzf`
   - Windows: `choco install fzf`
-- **mpv** - Media player for streaming
-  - macOS: `brew install mpv`
+- **Media player** - For streaming (mpv or IINA)
+  - macOS: `brew install mpv` or `brew install iina` (IINA recommended for macOS)
   - Linux: `sudo apt install mpv` or `sudo pacman -S mpv`
   - Windows: Download from [mpv.io](https://mpv.io)
 - **rclone** - For downloading media files
@@ -173,13 +173,19 @@ The `config.json` file contains:
   "plex_url": "http://your-plex-server:32400",
   "plex_token": "your-auth-token",
   "plex_username": "your-username",
-  "mpv_path": "mpv",
+  "player": "auto",
   "rclone_path": "rclone",
   "fzf_path": "fzf"
 }
 ```
 
-You can manually edit this file to set custom paths for mpv, rclone, or fzf if they're not in your PATH.
+**Player Options:**
+- `"auto"` (default) - Auto-detect best player (iina on macOS if installed, otherwise mpv)
+- `"iina"` - Force IINA player (macOS only)
+- `"mpv"` - Force mpv player
+- `"/custom/path/to/player"` - Use custom player path
+
+You can manually edit this file to set custom paths for your media player, rclone, or fzf if they're not in your PATH.
 
 ## How It Works
 

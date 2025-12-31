@@ -24,7 +24,8 @@ type Config struct {
 	Servers    []PlexServer `json:"servers,omitempty"`
 	
 	// Tool paths
-	MPVPath    string `json:"mpv_path,omitempty"`
+	Player     string `json:"player,omitempty"`     // "auto", "iina", "mpv", or custom path
+	MPVPath    string `json:"mpv_path,omitempty"`   // Deprecated: use Player instead
 	RclonePath string `json:"rclone_path,omitempty"`
 	FzfPath    string `json:"fzf_path,omitempty"`
 }

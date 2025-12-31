@@ -238,6 +238,36 @@ func (c *Config) Validate() error {
 }
 ```
 
+### Player Detection
+
+Auto-detecting media player with configurable override in `internal/player/player.go`:
+
+```go
+// Auto-detect best player: iina on macOS if available, otherwise mpv
+func DetectPlayer(preference string) (string, string, error) {
+    // preference can be: "auto", "iina", "mpv", or custom path
+    
+    if runtime.GOOS == "darwin" {
+        // Try iina-cli first (brew install or IINA.app bundle)
+        if path, err := exec.LookPath("iina-cli"); err == nil {
+            return path, "iina", nil
+        }
+    }
+    
+    // Fallback to mpv (cross-platform)
+    return exec.LookPath("mpv")
+}
+```
+
+**Config usage:**
+```json
+{
+  "player": "auto"  // or "iina", "mpv", "/custom/path"
+}
+```
+
+**Legacy support:** Old `mpv_path` config field still works for backward compatibility.
+
 ### Styling with Lipgloss
 
 Package-level style variables in `cmd/goplexcli/main.go`:
@@ -356,8 +386,20 @@ case posterDownloadedMsg:
 Must be in PATH or configured in `config.json`:
 
 - **fzf** - Fuzzy finder for media browsing
-- **mpv** - Media player for streaming
+- **Media player** - mpv or iina (macOS) for streaming
 - **rclone** - File transfer tool for downloads
+
+**Player Detection:**
+The application auto-detects the best available player:
+- macOS: Prefers iina if installed, falls back to mpv
+- Linux/Windows: Uses mpv
+
+Users can override in `config.json`:
+```json
+{
+  "player": "auto"  // or "iina", "mpv", or custom path
+}
+```
 
 **Detection pattern:**
 ```go

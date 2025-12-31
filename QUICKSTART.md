@@ -10,8 +10,10 @@ Before starting, verify you have the required tools installed:
 # Check fzf
 fzf --version
 
-# Check mpv
+# Check media player (mpv or iina)
 mpv --version
+# or on macOS
+iina-cli --version
 
 # Check rclone
 rclone version
@@ -24,6 +26,10 @@ If any are missing, install them:
 
 ### macOS
 ```bash
+# Option 1: Using IINA (recommended for macOS)
+brew install fzf iina rclone
+
+# Option 2: Using mpv
 brew install fzf mpv rclone
 ```
 
