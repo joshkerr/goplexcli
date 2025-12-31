@@ -13,9 +13,10 @@ import (
 )
 
 type Client struct {
-	sdk       *plexgo.PlexAPI
-	serverURL string
-	token     string
+	sdk        *plexgo.PlexAPI
+	serverURL  string
+	serverName string
+	token      string
 }
 
 type MediaItem struct {
@@ -33,10 +34,17 @@ type MediaItem struct {
 	Index       int64  // Episode or season number
 	ParentIndex int64  // Season number for episodes
 	Thumb       string // Poster/thumbnail URL path
+	ServerName  string // Name of the Plex server this item belongs to
+	ServerURL   string // URL of the Plex server this item belongs to
 }
 
 // New creates a new Plex client
 func New(serverURL, token string) (*Client, error) {
+	return NewWithName(serverURL, token, "")
+}
+
+// NewWithName creates a new Plex client with a server name
+func NewWithName(serverURL, token, serverName string) (*Client, error) {
 	sdk := plexgo.New(
 		plexgo.WithServerURL(serverURL),
 		plexgo.WithSecurity(token),
@@ -45,10 +53,16 @@ func New(serverURL, token string) (*Client, error) {
 		plexgo.WithVersion("1.0"),
 	)
 
+	// If no server name provided, use URL as fallback
+	if serverName == "" {
+		serverName = serverURL
+	}
+
 	return &Client{
-		sdk:       sdk,
-		serverURL: serverURL,
-		token:     token,
+		sdk:        sdk,
+		serverURL:  serverURL,
+		serverName: serverName,
+		token:      token,
 	}, nil
 }
 
@@ -127,6 +141,9 @@ func (c *Client) GetLibraries(ctx context.Context) ([]Library, error) {
 // ProgressCallback is called during media fetching to report progress
 type ProgressCallback func(libraryName string, itemCount int, totalLibraries int, currentLibrary int)
 
+// ServerProgressCallback is called during multi-server media fetching
+type ServerProgressCallback func(serverName, libraryName string, itemCount int, totalLibraries int, currentLibrary int, serverNum int, totalServers int)
+
 // GetAllMedia returns all media items from all libraries
 func (c *Client) GetAllMedia(ctx context.Context, progressCallback ProgressCallback) ([]MediaItem, error) {
 	libraries, err := c.GetLibraries(ctx)
@@ -157,6 +174,54 @@ func (c *Client) GetAllMedia(ctx context.Context, progressCallback ProgressCallb
 			// Report progress
 			if progressCallback != nil {
 				progressCallback(lib.Title, len(media), totalLibs, currentLib)
+			}
+		}
+	}
+
+	return allMedia, nil
+}
+
+// GetAllMediaFromServers returns all media items from multiple Plex servers
+func GetAllMediaFromServers(ctx context.Context, serverConfigs []struct{ Name, URL, Token string }, progressCallback ServerProgressCallback) ([]MediaItem, error) {
+	var allMedia []MediaItem
+	totalServers := len(serverConfigs)
+
+	for serverNum, serverConfig := range serverConfigs {
+		client, err := NewWithName(serverConfig.URL, serverConfig.Token, serverConfig.Name)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create client for server %s: %w", serverConfig.Name, err)
+		}
+
+		// Test connection
+		if err := client.Test(); err != nil {
+			return nil, fmt.Errorf("failed to connect to server %s: %w", serverConfig.Name, err)
+		}
+
+		libraries, err := client.GetLibraries(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get libraries from server %s: %w", serverConfig.Name, err)
+		}
+
+		totalLibs := 0
+		for _, lib := range libraries {
+			if lib.Type == "movie" || lib.Type == "show" {
+				totalLibs++
+			}
+		}
+
+		currentLib := 0
+		for _, lib := range libraries {
+			if lib.Type == "movie" || lib.Type == "show" {
+				currentLib++
+				media, err := client.GetMediaFromSection(ctx, lib.Key, lib.Type)
+				if err != nil {
+					return nil, fmt.Errorf("failed to get media from section %s on server %s: %w", lib.Title, serverConfig.Name, err)
+				}
+				allMedia = append(allMedia, media...)
+
+				if progressCallback != nil {
+					progressCallback(serverConfig.Name, lib.Title, len(media), totalLibs, currentLib, serverNum+1, totalServers)
+				}
 			}
 		}
 	}
@@ -232,14 +297,16 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 		// Process movies
 		for _, metadata := range mediaResp.MediaContainer.Metadata {
 			item := MediaItem{
-				Key:      metadata.Key,
-				Title:    metadata.Title,
-				Year:     valueOrZeroInt(metadata.Year),
-				Type:     "movie",
-				Summary:  valueOrEmpty(metadata.Summary),
-				Rating:   float64(valueOrZeroFloat32(metadata.Rating)),
-				Duration: valueOrZeroInt(metadata.Duration),
-				Thumb:    valueOrEmpty(metadata.Thumb),
+				Key:        metadata.Key,
+				Title:      metadata.Title,
+				Year:       valueOrZeroInt(metadata.Year),
+				Type:       "movie",
+				Summary:    valueOrEmpty(metadata.Summary),
+				Rating:     float64(valueOrZeroFloat32(metadata.Rating)),
+				Duration:   valueOrZeroInt(metadata.Duration),
+				Thumb:      valueOrEmpty(metadata.Thumb),
+				ServerName: c.serverName,
+				ServerURL:  c.serverURL,
 			}
 
 			// Get file path
@@ -266,6 +333,8 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 				GrandTitle:  valueOrEmpty(metadata.ParentTitle),
 				Index:       int64(valueOrZeroInt(metadata.Index)),
 				ParentIndex: int64(valueOrZeroInt(metadata.ParentIndex)),
+				ServerName:  c.serverName,
+				ServerURL:   c.serverURL,
 			}
 
 			// Get file path
@@ -370,17 +439,26 @@ func convertToRclonePath(filePath string) string {
 
 // FormatMediaTitle returns a formatted title for display
 func (m *MediaItem) FormatMediaTitle() string {
+	var title string
 	switch m.Type {
 	case "movie":
 		if m.Year > 0 {
-			return fmt.Sprintf("%s (%d)", m.Title, m.Year)
+			title = fmt.Sprintf("%s (%d)", m.Title, m.Year)
+		} else {
+			title = m.Title
 		}
-		return m.Title
 	case "episode":
-		return fmt.Sprintf("%s - S%02dE%02d - %s", m.ParentTitle, m.ParentIndex, m.Index, m.Title)
+		title = fmt.Sprintf("%s - S%02dE%02d - %s", m.ParentTitle, m.ParentIndex, m.Index, m.Title)
 	default:
-		return m.Title
+		title = m.Title
 	}
+	
+	// Add server name if present and multiple servers might be in use
+	if m.ServerName != "" && m.ServerName != "Default Server" {
+		title = fmt.Sprintf("[%s] %s", m.ServerName, title)
+	}
+	
+	return title
 }
 
 // Server represents a Plex server
