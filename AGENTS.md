@@ -21,7 +21,7 @@ This document provides comprehensive guidance for AI agents working in the Gople
 
 ## Project Overview
 
-**GoplexCLI** is a Go-based command-line interface for browsing and streaming media from Plex servers. It integrates with external tools (fzf, mpv, rclone, chafa) to provide a rich terminal UI experience.
+**GoplexCLI** is a Go-based command-line interface for browsing and streaming media from Plex servers. It integrates with external tools (fzf, mpv, rclone) to provide a rich terminal UI experience.
 
 **Key Technologies:**
 - Go 1.24.0
@@ -358,7 +358,6 @@ Must be in PATH or configured in `config.json`:
 - **fzf** - Fuzzy finder for media browsing
 - **mpv** - Media player for streaming
 - **rclone** - File transfer tool for downloads
-- **chafa** (optional) - Terminal image viewer for posters
 
 **Detection pattern:**
 ```go

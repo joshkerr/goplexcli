@@ -27,7 +27,7 @@ GoplexCLI is a fully-featured, production-ready command-line interface for manag
 3. **User Interface**
    - Beautiful terminal UI using Charm's lipgloss
    - fzf integration with 90% screen coverage
-   - Preview window with movie posters (via chafa)
+   - Preview window with media information
    - Media type filtering (Movies/TV/All)
    - Styled output with colors and formatting
    - Progress feedback for all operations
@@ -115,7 +115,6 @@ goplexcli/
 - fzf - Fuzzy finder
 - mpv - Media player
 - rclone - File transfer tool
-- chafa (optional) - Terminal image viewer for posters
 
 ### Cross-Platform Support
 

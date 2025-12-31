@@ -30,10 +30,6 @@ Before using GoplexCLI, ensure you have the following installed:
   - macOS: `brew install rclone`
   - Linux: `sudo apt install rclone` or download from [rclone.org](https://rclone.org)
   - Windows: Download from [rclone.org](https://rclone.org)
-- **chafa** (optional) - For displaying movie posters in preview
-  - macOS: `brew install chafa`
-  - Linux: `sudo apt install chafa` or `sudo pacman -S chafa`
-  - Windows: Download from [chafa releases](https://github.com/hpjansson/chafa/releases)
 
 ## Installation
 
@@ -118,7 +114,6 @@ goplexcli browse
 - Select media type (Movies, TV Shows, or All)
 - Fuzzy search across your entire library
 - Press **i** to toggle preview window with:
-  - Movie posters (if chafa installed)
   - Year, rating, duration
   - Plot summary
   - File path
@@ -262,15 +257,6 @@ rclone config
 
 Run `goplexcli cache reindex` to build your media cache.
 
-### Posters Not Showing
-
-If you don't see movie posters in the preview window:
-
-1. Install chafa: `brew install chafa` (macOS) or `sudo apt install chafa` (Linux)
-2. Rebuild cache to fetch poster URLs: `goplexcli cache reindex`
-3. Press **i** in browse mode to toggle the preview window
-4. Check that `goplexcli-preview` binary is in your PATH
-
 ### "Preview binary not found"
 
 Ensure both binaries are installed:
@@ -331,7 +317,6 @@ goplexcli/
 - [fzf](https://github.com/junegunn/fzf) - Fuzzy finder
 - [mpv](https://mpv.io) - Media player
 - [rclone](https://rclone.org) - Cloud storage sync
-- [chafa](https://github.com/hpjansson/chafa) - Terminal image viewer (optional)
 
 ## Contributing
 
@@ -346,4 +331,3 @@ MIT License - See LICENSE file for details
 - Built with [Charm](https://charm.sh/) libraries for beautiful terminal UIs
 - Plex API integration via [plexgo](https://github.com/LukeHagar/plexgo)
 - File downloads via [rclone-golib](https://github.com/joshkerr/rclone-golib)
-- Terminal images via [chafa](https://github.com/hpjansson/chafa)

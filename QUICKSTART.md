@@ -16,9 +16,6 @@ mpv --version
 # Check rclone
 rclone version
 
-# Check chafa (optional, for movie posters)
-chafa --version
-
 # Check Go (if building from source)
 go version
 ```
@@ -27,17 +24,17 @@ If any are missing, install them:
 
 ### macOS
 ```bash
-brew install fzf mpv rclone chafa
+brew install fzf mpv rclone
 ```
 
 ### Linux (Debian/Ubuntu)
 ```bash
-sudo apt install fzf mpv rclone chafa
+sudo apt install fzf mpv rclone
 ```
 
 ### Linux (Arch)
 ```bash
-sudo pacman -S fzf mpv rclone chafa
+sudo pacman -S fzf mpv rclone
 ```
 
 ## Installation
@@ -193,26 +190,6 @@ Build the cache:
 ```bash
 goplexcli cache reindex
 ```
-
-### Posters Not Showing
-
-If you don't see movie posters in the preview:
-
-1. Install chafa:
-```bash
-# macOS
-brew install chafa
-
-# Linux
-sudo apt install chafa
-```
-
-2. Rebuild cache to fetch poster URLs:
-```bash
-goplexcli cache reindex
-```
-
-3. Press **i** in browse mode to toggle preview window
 
 ### "Preview binary not found"
 
