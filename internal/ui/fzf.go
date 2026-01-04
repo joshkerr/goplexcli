@@ -122,7 +122,7 @@ func SelectMediaWithPreview(media []plex.MediaItem, prompt string, fzfPath strin
 		"--prompt=" + prompt + " ",
 		"--preview=" + previewScript + " {1}",
 		"--preview-window=right:50%:wrap:hidden",
-		"--bind=i:toggle-preview",
+		"--bind=ctrl-p:toggle-preview",
 		"--bind=ctrl-/:toggle-preview",
 	}
 	
@@ -297,6 +297,31 @@ func SelectMediaType(fzfPath string) (string, error) {
 	}
 	
 	return strings.ToLower(selected), nil
+}
+
+// SelectMedia presents media items in fzf and returns the selected item
+func SelectMedia(media []plex.MediaItem, prompt string, fzfPath string) (*plex.MediaItem, error) {
+	if len(media) == 0 {
+		return nil, fmt.Errorf("no media to select from")
+	}
+	
+	// Format media items for display
+	var items []string
+	for _, item := range media {
+		items = append(items, item.FormatMediaTitle())
+	}
+	
+	// Use fzf to select
+	_, index, err := SelectWithFzf(items, prompt, fzfPath)
+	if err != nil {
+		return nil, err
+	}
+	
+	if index < 0 || index >= len(media) {
+		return nil, fmt.Errorf("invalid selection")
+	}
+	
+	return &media[index], nil
 }
 
 // DownloadPoster downloads the poster image and returns the local path
