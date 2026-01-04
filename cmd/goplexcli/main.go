@@ -564,6 +564,7 @@ func handleStream(cfg *config.Config, media *plex.MediaItem) error {
 	fmt.Println(infoStyle.Render(fmt.Sprintf("  OutPlayer:  outplayer://x-callback-url/play?url=%s", encodedURL)))
 	fmt.Println(infoStyle.Render(fmt.Sprintf("  SenPlayer:  senplayer://x-callback-url/play?url=%s", encodedURL)))
 	fmt.Println(infoStyle.Render(fmt.Sprintf("  VLC:        vlc://%s", encodedURL)))
+	fmt.Println(infoStyle.Render(fmt.Sprintf("  VidHub:     open-vidhub://x-callback-url/open?url=%s", encodedURL)))
 	
 	fmt.Println(infoStyle.Render("\n🌐 Or open web UI: " + webURL))
 	fmt.Println(infoStyle.Render("Press Ctrl+C to stop the server\n"))

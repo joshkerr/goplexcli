@@ -489,6 +489,9 @@
                                 <button onclick="openPlayer('vlc', '{{.StreamURL}}')" class="btn btn-secondary">
                                     ▶️ VLC
                                 </button>
+                                <button onclick="openPlayer('vidhub', '{{.StreamURL}}')" class="btn btn-secondary">
+                                    ▶️ VidHub
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -529,6 +532,9 @@
                     break;
                 case 'vlc':
                     playerUrl = 'vlc://' + encodedUrl;
+                    break;
+                case 'vidhub':
+                    playerUrl = 'open-vidhub://x-callback-url/open?url=' + encodedUrl;
                     break;
                 default:
                     alert('Unknown player: ' + player);
