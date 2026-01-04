@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
 	"syscall"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/joshkerr/goplexcli/internal/download"
 	"github.com/joshkerr/goplexcli/internal/player"
 	"github.com/joshkerr/goplexcli/internal/plex"
+	"github.com/joshkerr/goplexcli/internal/stream"
 	"github.com/joshkerr/goplexcli/internal/ui"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -96,7 +98,14 @@ func main() {
 		RunE:  runConfig,
 	}
 
-	rootCmd.AddCommand(loginCmd, browseCmd, cacheCmd, configCmd)
+	// Stream command
+	streamCmd := &cobra.Command{
+		Use:   "stream",
+		Short: "Discover and play streams from other devices",
+		RunE:  runStream,
+	}
+
+	rootCmd.AddCommand(loginCmd, browseCmd, cacheCmd, configCmd, streamCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(errorStyle.Render("Error: " + err.Error()))
@@ -443,6 +452,8 @@ func runBrowse(cmd *cobra.Command, args []string) error {
 		return handleWatch(cfg, selectedMedia)
 	case "download":
 		return handleDownload(cfg, selectedMedia)
+	case "stream":
+		return handleStream(cfg, selectedMedia)
 	case "cancel":
 		return nil
 	default:
@@ -509,6 +520,63 @@ func handleDownload(cfg *config.Config, media *plex.MediaItem) error {
 	}
 
 	fmt.Println(successStyle.Render("✓ Download complete"))
+	return nil
+}
+
+func handleStream(cfg *config.Config, media *plex.MediaItem) error {
+	fmt.Println(infoStyle.Render("\nPublishing stream: " + media.FormatMediaTitle()))
+
+	// Create Plex client
+	client, err := plex.New(cfg.PlexURL, cfg.PlexToken)
+	if err != nil {
+		return fmt.Errorf("failed to create plex client: %w", err)
+	}
+
+	// Get stream URL
+	streamURL, err := client.GetStreamURL(media.Key)
+	if err != nil {
+		return fmt.Errorf("failed to get stream URL: %w", err)
+	}
+
+	// Create and start stream server
+	server, err := stream.NewServer(stream.DefaultPort)
+	if err != nil {
+		return fmt.Errorf("failed to create stream server: %w", err)
+	}
+
+	// Publish the stream
+	streamID := server.PublishStream(media, streamURL, cfg.PlexURL, cfg.PlexToken)
+	
+	localIP := stream.GetLocalIP()
+	webURL := fmt.Sprintf("http://%s:%d", localIP, stream.DefaultPort)
+	
+	fmt.Println(successStyle.Render("✓ Stream published"))
+	fmt.Println(infoStyle.Render(fmt.Sprintf("Stream ID: %s", streamID)))
+	fmt.Println(infoStyle.Render(fmt.Sprintf("Title: %s", media.FormatMediaTitle())))
+	fmt.Println(warningStyle.Render(fmt.Sprintf("\n🌐 Stream server running on port %d", stream.DefaultPort)))
+	fmt.Println(successStyle.Render(fmt.Sprintf("\n📱 Open on your device: %s", webURL)))
+	fmt.Println(infoStyle.Render("\nOther options:"))
+	fmt.Println(infoStyle.Render("  • Web UI: " + webURL))
+	fmt.Println(infoStyle.Render("  • CLI: goplexcli stream"))
+	fmt.Println(infoStyle.Render("\nPress Ctrl+C to stop the server\n"))
+
+	// Setup signal handling for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		<-sigChan
+		fmt.Println(warningStyle.Render("\n\nShutting down stream server..."))
+		cancel()
+	}()
+
+	// Start server (blocks until context cancelled)
+	if err := server.Start(ctx); err != nil {
+		return fmt.Errorf("stream server failed: %w", err)
+	}
+
+	fmt.Println(successStyle.Render("✓ Stream server stopped"))
 	return nil
 }
 
@@ -664,5 +732,155 @@ func runConfig(cmd *cobra.Command, args []string) error {
 	cachePath, _ := cache.GetCachePath()
 	fmt.Println(infoStyle.Render("Cache file: " + cachePath))
 
+	return nil
+}
+
+func runStream(cmd *cobra.Command, args []string) error {
+	// Load config
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	fmt.Println(titleStyle.Render("Stream Discovery"))
+	fmt.Println(infoStyle.Render("Searching for goplexcli servers on local network...\n"))
+
+	// Discover servers with 3 second timeout
+	ctx := context.Background()
+	servers, err := stream.Discover(ctx, 3*time.Second)
+	if err != nil {
+		return fmt.Errorf("discovery failed: %w", err)
+	}
+
+	if len(servers) == 0 {
+		fmt.Println(warningStyle.Render("No stream servers found on the network"))
+		fmt.Println(infoStyle.Render("\nTo publish a stream:"))
+		fmt.Println(infoStyle.Render("  1. Run 'goplexcli browse' on another device"))
+		fmt.Println(infoStyle.Render("  2. Select a media item"))
+		fmt.Println(infoStyle.Render("  3. Choose 'Stream' option"))
+		return nil
+	}
+
+	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Found %d server(s)\n", len(servers))))
+
+	// Let user select a server if multiple found
+	var selectedServer *stream.DiscoveredServer
+	if len(servers) == 1 {
+		selectedServer = servers[0]
+		fmt.Println(infoStyle.Render(fmt.Sprintf("Connecting to: %s", selectedServer.Name)))
+	} else {
+		// Format servers for selection
+		var serverNames []string
+		for _, srv := range servers {
+			addr := "unknown"
+			if len(srv.Addresses) > 0 {
+				addr = srv.Addresses[0]
+			}
+			serverNames = append(serverNames, fmt.Sprintf("%s (%s)", srv.Name, addr))
+		}
+
+		if ui.IsAvailable(cfg.FzfPath) {
+			_, idx, err := ui.SelectWithFzf(serverNames, "Select server:", cfg.FzfPath)
+			if err != nil {
+				if err.Error() == "cancelled by user" {
+					return nil
+				}
+				return fmt.Errorf("server selection failed: %w", err)
+			}
+			selectedServer = servers[idx]
+		} else {
+			// Fallback to manual selection
+			fmt.Println(infoStyle.Render("Available servers:"))
+			for i, name := range serverNames {
+				fmt.Printf("  %d. %s\n", i+1, name)
+			}
+			fmt.Print("\nSelect server number: ")
+			var choice int
+			if _, err := fmt.Scanln(&choice); err != nil {
+				return fmt.Errorf("failed to read selection: %w", err)
+			}
+			if choice < 1 || choice > len(servers) {
+				return fmt.Errorf("invalid selection")
+			}
+			selectedServer = servers[choice-1]
+		}
+	}
+
+	// Fetch streams from selected server
+	fmt.Println(infoStyle.Render("\nFetching available streams..."))
+	streams, err := stream.FetchStreams(selectedServer)
+	if err != nil {
+		return fmt.Errorf("failed to fetch streams: %w", err)
+	}
+
+	if len(streams) == 0 {
+		fmt.Println(warningStyle.Render("No streams available on this server"))
+		return nil
+	}
+
+	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Found %d stream(s)\n", len(streams))))
+
+	// Let user select a stream
+	var selectedStream *stream.StreamItem
+	if len(streams) == 1 {
+		selectedStream = streams[0]
+	} else {
+		// Format streams for selection
+		var streamTitles []string
+		for _, s := range streams {
+			streamTitles = append(streamTitles, s.Title)
+		}
+
+		if ui.IsAvailable(cfg.FzfPath) {
+			_, idx, err := ui.SelectWithFzf(streamTitles, "Select stream:", cfg.FzfPath)
+			if err != nil {
+				if err.Error() == "cancelled by user" {
+					return nil
+				}
+				return fmt.Errorf("stream selection failed: %w", err)
+			}
+			selectedStream = streams[idx]
+		} else {
+			// Fallback to manual selection
+			fmt.Println(infoStyle.Render("Available streams:"))
+			for i, title := range streamTitles {
+				fmt.Printf("  %d. %s\n", i+1, title)
+			}
+			fmt.Print("\nSelect stream number: ")
+			var choice int
+			if _, err := fmt.Scanln(&choice); err != nil {
+				return fmt.Errorf("failed to read selection: %w", err)
+			}
+			if choice < 1 || choice > len(streams) {
+				return fmt.Errorf("invalid selection")
+			}
+			selectedStream = streams[choice-1]
+		}
+	}
+
+	// Show stream info
+	fmt.Println(infoStyle.Render("\nStream: " + selectedStream.Title))
+	if selectedStream.Year > 0 {
+		fmt.Println(infoStyle.Render(fmt.Sprintf("Year: %d", selectedStream.Year)))
+	}
+	if selectedStream.Duration > 0 {
+		fmt.Println(infoStyle.Render(fmt.Sprintf("Duration: %d min", selectedStream.Duration/60000)))
+	}
+
+	// Check if MPV is available
+	if !player.IsAvailable(cfg.MPVPath) {
+		fmt.Println(warningStyle.Render("\nMPV not found. You can still play the stream manually:"))
+		fmt.Println(infoStyle.Render(selectedStream.StreamURL))
+		return nil
+	}
+
+	fmt.Println(successStyle.Render("\n✓ Starting playback..."))
+
+	// Play with MPV
+	if err := player.Play(selectedStream.StreamURL, cfg.MPVPath); err != nil {
+		return fmt.Errorf("playback failed: %w", err)
+	}
+
+	fmt.Println(successStyle.Render("✓ Playback finished"))
 	return nil
 }

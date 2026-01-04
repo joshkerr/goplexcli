@@ -8,6 +8,7 @@ A powerful, fast, and elegant command-line interface for browsing and streaming 
 - **Rich Previews**: View movie posters and detailed metadata in the preview window
 - **Stream with MPV**: Watch movies and TV shows directly with MPV player
 - **Download with Rclone**: Download media files to your local system with beautiful progress bars
+- **Remote Streaming**: Publish streams for playback on other devices via mDNS discovery
 - **Smart Caching**: Cache your media library locally for instant browsing
 - **Media Type Filtering**: Filter by Movies, TV Shows, or browse all media
 - **Cross-Platform**: Works on macOS, Linux, and Windows
@@ -93,8 +94,9 @@ goplexcli browse
 This will open fzf with your entire media library. Use the arrow keys or type to search, then:
 
 - Press **Enter** to select a media item
-- Choose **Watch** to stream with MPV
+- Choose **Watch** to stream with MPV locally
 - Choose **Download** to download with rclone
+- Choose **Stream** to publish for remote playback on other devices
 
 ## Commands
 
@@ -117,13 +119,50 @@ goplexcli browse
 **Features:**
 - Select media type (Movies, TV Shows, or All)
 - Fuzzy search across your entire library
-- Press **i** to toggle preview window with:
+- Press **Ctrl+P** to toggle preview window with:
   - Movie posters (if chafa installed)
   - Year, rating, duration
   - Plot summary
   - File path
 - Press **Enter** to select media
-- Choose **Watch** to stream or **Download** to save locally
+- Choose **Watch** to stream locally, **Download** to save, or **Stream** to publish for remote playback
+
+### `goplexcli stream`
+
+Discover and play streams published by other devices on your local network.
+
+```bash
+goplexcli stream
+```
+
+**How it works:**
+
+**Publishing a stream (Mac/Desktop):**
+1. Run `goplexcli browse`, select media, and choose **Stream**
+2. Server starts on port 8765 and announces via mDNS
+3. Displays a URL like `http://192.168.1.5:8765` for easy access
+
+**Consuming streams:**
+
+**Option 1: Web UI (iPad/iPhone/Any Browser)**
+- Open the displayed URL in Safari/Chrome
+- See all available streams in a mobile-friendly interface
+- Tap "Play in Infuse/VLC/Plex" to launch your favorite player
+
+**Option 2: CLI (Mac/Linux)**
+- Run `goplexcli stream` to discover servers
+- Select a stream to play in MPV
+
+**Use cases:**
+- Browse your library on Mac, watch on iPad via web UI
+- Queue up content from laptop for TV playback
+- Share streams between devices without re-browsing the library
+
+**Supported Players:**
+- Infuse (iOS/tvOS) - Deep link support
+- VLC (iOS/Android/Desktop)
+- Plex (iOS/Android/Desktop)
+- MPV (via CLI on desktop)
 
 ### `goplexcli cache`
 
@@ -289,6 +328,29 @@ If you're having trouble logging in:
 2. Check that your Plex server is accessible
 3. Try manually editing `~/.config/goplexcli/config.json` with your server URL and token
 
+### Stream Discovery Issues
+
+**CLI discovery (`goplexcli stream`) not working:**
+
+1. Ensure both devices are on the same local network
+2. Check firewall allows mDNS (port 5353 UDP) and HTTP (port 8765 TCP)
+3. On the publishing device, verify the stream server started successfully
+4. Try the web UI instead: `http://<publisher-ip>:8765`
+
+**Web UI not accessible:**
+
+1. Get the IP address shown when you published the stream
+2. Ensure devices are on the same network
+3. Check firewall allows port 8765 TCP
+4. Try accessing directly: `http://<ip>:8765`
+5. On iOS, ensure you're not using cellular data
+
+**Deep links not working on iOS:**
+
+1. Ensure you have Infuse, VLC, or Plex installed
+2. If the link doesn't open, copy the stream URL and paste into your player manually
+3. Some players require you to tap-and-hold the link, then choose "Open in [App]"
+
 ## Project Structure
 
 ```
@@ -309,6 +371,8 @@ goplexcli/
 │   │   └── player.go        # MPV player integration
 │   ├── plex/
 │   │   └── client.go        # Plex API client
+│   ├── stream/
+│   │   └── server.go        # Stream server and mDNS discovery
 │   └── ui/
 │       └── fzf.go           # fzf integration
 ├── Makefile                 # Build automation
