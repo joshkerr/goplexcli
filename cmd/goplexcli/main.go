@@ -415,9 +415,9 @@ func runBrowse(cmd *cobra.Command, args []string) error {
 	fmt.Println(infoStyle.Render(fmt.Sprintf("\nBrowsing %d items...\n", len(filteredMedia))))
 
 	// Use fzf with preview to select media if fzf available, otherwise use manual selection
-	var selectedMedia *plex.MediaItem
+	var selectedMedia []*plex.MediaItem
 	if ui.IsAvailable(cfg.FzfPath) {
-		selectedIndex, err := ui.SelectMediaWithPreview(filteredMedia, "Select media:", cfg.FzfPath, cfg.PlexURL, cfg.PlexToken)
+		selectedIndices, err := ui.SelectMediaWithPreview(filteredMedia, "Select media:", cfg.FzfPath, cfg.PlexURL, cfg.PlexToken)
 		if err != nil {
 			if err.Error() == "cancelled by user" {
 				return nil
@@ -425,18 +425,26 @@ func runBrowse(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("media selection failed: %w", err)
 		}
 		
-		if selectedIndex < 0 || selectedIndex >= len(filteredMedia) {
-			return fmt.Errorf("invalid selection")
+		// Convert indices to media items
+		for _, idx := range selectedIndices {
+			if idx < 0 || idx >= len(filteredMedia) {
+				return fmt.Errorf("invalid selection")
+			}
+			selectedMedia = append(selectedMedia, &filteredMedia[idx])
 		}
-		
-		selectedMedia = &filteredMedia[selectedIndex]
 	} else {
-		// Fallback to manual selection (no fzf required)
+		// Fallback to manual selection (no fzf required) - single item only
 		var err error
-		selectedMedia, err = selectMediaManual(filteredMedia)
+		singleItem, err := selectMediaManual(filteredMedia)
 		if err != nil {
 			return err
 		}
+		selectedMedia = []*plex.MediaItem{singleItem}
+	}
+
+	// Show selection count
+	if len(selectedMedia) > 1 {
+		fmt.Println(successStyle.Render(fmt.Sprintf("\n✓ Selected %d items", len(selectedMedia))))
 	}
 
 	// Ask what to do
@@ -450,11 +458,11 @@ func runBrowse(cmd *cobra.Command, args []string) error {
 
 	switch action {
 	case "watch":
-		return handleWatch(cfg, selectedMedia)
+		return handleWatchMultiple(cfg, selectedMedia)
 	case "download":
-		return handleDownload(cfg, selectedMedia)
+		return handleDownloadMultiple(cfg, selectedMedia)
 	case "stream":
-		return handleStream(cfg, selectedMedia)
+		return handleStreamMultiple(cfg, selectedMedia)
 	case "cancel":
 		return nil
 	default:
@@ -608,6 +616,206 @@ func handleStream(cfg *config.Config, media *plex.MediaItem) error {
 			}
 		}
 	}()
+
+	// Start server (blocks until context cancelled)
+	if err := server.Start(ctx); err != nil {
+		return fmt.Errorf("stream server failed: %w", err)
+	}
+
+	fmt.Println(successStyle.Render("✓ Stream server stopped"))
+	return nil
+}
+
+// handleWatchMultiple plays multiple media items sequentially with pause between items
+func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error {
+	if len(mediaItems) == 0 {
+		return fmt.Errorf("no media items selected")
+	}
+	
+	// Check if MPV is available
+	if !player.IsAvailable(cfg.MPVPath) {
+		return fmt.Errorf("mpv is not installed. Please install mpv to watch media")
+	}
+
+	// Create Plex client
+	client, err := plex.New(cfg.PlexURL, cfg.PlexToken)
+	if err != nil {
+		return fmt.Errorf("failed to create plex client: %w", err)
+	}
+
+	for i, media := range mediaItems {
+		fmt.Println(infoStyle.Render(fmt.Sprintf("\n[%d/%d] Preparing to play: %s", i+1, len(mediaItems), media.FormatMediaTitle())))
+
+		// Get stream URL
+		streamURL, err := client.GetStreamURL(media.Key)
+		if err != nil {
+			fmt.Println(errorStyle.Render(fmt.Sprintf("✗ Failed to get stream URL: %v", err)))
+			continue
+		}
+
+		fmt.Println(successStyle.Render("✓ Starting playback..."))
+
+		// Play with MPV
+		if err := player.Play(streamURL, cfg.MPVPath); err != nil {
+			fmt.Println(errorStyle.Render(fmt.Sprintf("✗ Playback failed: %v", err)))
+			continue
+		}
+
+		fmt.Println(successStyle.Render("✓ Playback finished"))
+
+		// If there are more items, ask user to continue
+		if i < len(mediaItems)-1 {
+			fmt.Println(warningStyle.Render("\nPress ENTER to play next item, or Ctrl+C to stop..."))
+			fmt.Scanln() // Wait for user input
+		}
+	}
+
+	fmt.Println(successStyle.Render("\n✓ All items played"))
+	return nil
+}
+
+// handleDownloadMultiple downloads multiple media items in sequence
+func handleDownloadMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error {
+	if len(mediaItems) == 0 {
+		return fmt.Errorf("no media items selected")
+	}
+
+	// Check if rclone is available
+	if !download.IsAvailable(cfg.RclonePath) {
+		return fmt.Errorf("rclone is not installed. Please install rclone to download media")
+	}
+
+	// Get current directory
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get current directory: %w", err)
+	}
+
+	ctx := context.Background()
+	successCount := 0
+	failCount := 0
+
+	for i, media := range mediaItems {
+		fmt.Println(infoStyle.Render(fmt.Sprintf("\n[%d/%d] Preparing to download: %s", i+1, len(mediaItems), media.FormatMediaTitle())))
+
+		if media.RclonePath == "" {
+			fmt.Println(errorStyle.Render("✗ No rclone path available for this media"))
+			failCount++
+			continue
+		}
+
+		fmt.Println(infoStyle.Render("Remote path: " + media.RclonePath))
+		fmt.Println(successStyle.Render("✓ Starting download..."))
+
+		// Download with rclone
+		if err := download.Download(ctx, media.RclonePath, cwd, cfg.RclonePath); err != nil {
+			fmt.Println(errorStyle.Render(fmt.Sprintf("✗ Download failed: %v", err)))
+			failCount++
+			continue
+		}
+
+		fmt.Println(successStyle.Render("✓ Download complete"))
+		successCount++
+	}
+
+	fmt.Println(successStyle.Render(fmt.Sprintf("\n✓ Downloads finished: %d succeeded, %d failed", successCount, failCount)))
+	return nil
+}
+
+// handleStreamMultiple streams multiple media items sequentially with pause between items
+func handleStreamMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error {
+	if len(mediaItems) == 0 {
+		return fmt.Errorf("no media items selected")
+	}
+
+	// Create Plex client
+	client, err := plex.New(cfg.PlexURL, cfg.PlexToken)
+	if err != nil {
+		return fmt.Errorf("failed to create plex client: %w", err)
+	}
+
+	// Create and start stream server
+	server, err := stream.NewServer(stream.DefaultPort)
+	if err != nil {
+		return fmt.Errorf("failed to create stream server: %w", err)
+	}
+
+	localIP := stream.GetLocalIP()
+	webURL := fmt.Sprintf("http://%s:%d", localIP, stream.DefaultPort)
+
+	for i, media := range mediaItems {
+		fmt.Println(infoStyle.Render(fmt.Sprintf("\n[%d/%d] Publishing stream: %s", i+1, len(mediaItems), media.FormatMediaTitle())))
+
+		// Get stream URL
+		streamURL, err := client.GetStreamURL(media.Key)
+		if err != nil {
+			fmt.Println(errorStyle.Render(fmt.Sprintf("✗ Failed to get stream URL: %v", err)))
+			continue
+		}
+
+		// Publish the stream
+		server.PublishStream(media, streamURL, cfg.PlexURL, cfg.PlexToken)
+
+		// URL encode for deep links
+		encodedURL := url.QueryEscape(streamURL)
+
+		fmt.Println(successStyle.Render("\n📱 Click to open in your player:"))
+		fmt.Println()
+
+		playerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("86")).Bold(true)
+		linkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Underline(true)
+
+		fmt.Printf("  %s  %s\n", playerStyle.Render("Infuse:"), linkStyle.Render(fmt.Sprintf("infuse://x-callback-url/play?url=%s", encodedURL)))
+		fmt.Printf("  %s  %s\n", playerStyle.Render("OutPlayer:"), linkStyle.Render(fmt.Sprintf("outplayer://x-callback-url/play?url=%s", encodedURL)))
+		fmt.Printf("  %s  %s\n", playerStyle.Render("SenPlayer:"), linkStyle.Render(fmt.Sprintf("senplayer://x-callback-url/play?url=%s", encodedURL)))
+		fmt.Printf("  %s  %s\n", playerStyle.Render("VLC:"), linkStyle.Render(fmt.Sprintf("vlc://%s", encodedURL)))
+		fmt.Printf("  %s  %s\n", playerStyle.Render("VidHub:"), linkStyle.Render(fmt.Sprintf("open-vidhub://x-callback-url/open?url=%s", encodedURL)))
+
+		fmt.Println()
+		fmt.Println(successStyle.Render("🌐 Web UI: ") + linkStyle.Render(webURL))
+		fmt.Println()
+
+		// If there are more items, ask user to continue
+		if i < len(mediaItems)-1 {
+			fmt.Println(warningStyle.Render("Press ENTER to stream next item, or Ctrl+C to stop..."))
+			fmt.Scanln() // Wait for user input
+		}
+	}
+
+	// Setup signal handling for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		<-sigChan
+		fmt.Println(warningStyle.Render("\n\nShutting down stream server..."))
+		cancel()
+	}()
+
+	// Setup keyboard input for 'q' to quit
+	go func() {
+		oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+		if err != nil {
+			return
+		}
+		defer term.Restore(int(os.Stdin.Fd()), oldState)
+
+		b := make([]byte, 1)
+		for {
+			n, err := os.Stdin.Read(b)
+			if err != nil || n == 0 {
+				return
+			}
+			if b[0] == 'q' || b[0] == 'Q' {
+				fmt.Println(warningStyle.Render("\n\nShutting down stream server..."))
+				cancel()
+				return
+			}
+		}
+	}()
+
+	fmt.Println(infoStyle.Render("Press Ctrl+C or 'q' to stop the server\n"))
 
 	// Start server (blocks until context cancelled)
 	if err := server.Start(ctx); err != nil {

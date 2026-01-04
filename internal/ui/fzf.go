@@ -80,9 +80,9 @@ func SelectWithFzf(items []string, prompt string, fzfPath string) (string, int, 
 }
 
 // SelectMediaWithPreview presents media in fzf with preview window showing metadata and poster
-func SelectMediaWithPreview(media []plex.MediaItem, prompt string, fzfPath string, plexURL string, plexToken string) (int, error) {
+func SelectMediaWithPreview(media []plex.MediaItem, prompt string, fzfPath string, plexURL string, plexToken string) ([]int, error) {
 	if len(media) == 0 {
-		return -1, fmt.Errorf("no items to select from")
+		return nil, fmt.Errorf("no items to select from")
 	}
 	
 	if fzfPath == "" {
@@ -91,7 +91,7 @@ func SelectMediaWithPreview(media []plex.MediaItem, prompt string, fzfPath strin
 	
 	// Check if fzf is available
 	if _, err := exec.LookPath(fzfPath); err != nil {
-		return -1, fmt.Errorf("fzf not found in PATH. Please install fzf or specify the path in config")
+		return nil, fmt.Errorf("fzf not found in PATH. Please install fzf or specify the path in config")
 	}
 	
 	// Create formatted items with index prefix for preview script
@@ -104,7 +104,7 @@ func SelectMediaWithPreview(media []plex.MediaItem, prompt string, fzfPath strin
 	// Create a temporary preview script and data file
 	previewScript, err := createPreviewScript(media, plexURL, plexToken)
 	if err != nil {
-		return -1, fmt.Errorf("failed to create preview script: %w", err)
+		return nil, fmt.Errorf("failed to create preview script: %w", err)
 	}
 	defer os.Remove(previewScript)
 	
@@ -112,8 +112,9 @@ func SelectMediaWithPreview(media []plex.MediaItem, prompt string, fzfPath strin
 	dataPath := filepath.Join(os.TempDir(), "goplexcli-preview-data.json")
 	defer os.Remove(dataPath)
 	
-	// Build fzf command with preview
+	// Build fzf command with preview and multi-select
 	args := []string{
+		"--multi",
 		"--height=90%",
 		"--reverse",
 		"--border",
@@ -124,6 +125,7 @@ func SelectMediaWithPreview(media []plex.MediaItem, prompt string, fzfPath strin
 		"--preview-window=right:50%:wrap:hidden",
 		"--bind=ctrl-p:toggle-preview",
 		"--bind=ctrl-/:toggle-preview",
+		"--header=TAB to select multiple, ENTER to confirm",
 	}
 	
 	cmd := exec.Command(fzfPath, args...)
@@ -140,34 +142,51 @@ func SelectMediaWithPreview(media []plex.MediaItem, prompt string, fzfPath strin
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			// Exit code 130 means user cancelled with Ctrl-C
 			if exitErr.ExitCode() == 130 {
-				return -1, fmt.Errorf("cancelled by user")
+				return nil, fmt.Errorf("cancelled by user")
 			}
 		}
-		return -1, fmt.Errorf("fzf failed: %w", err)
+		return nil, fmt.Errorf("fzf failed: %w", err)
 	}
 	
-	// Get selected item and extract index
-	selected := strings.TrimSpace(outBuf.String())
-	if selected == "" {
-		return -1, fmt.Errorf("no selection made")
+	// Get selected items and extract indices
+	output := strings.TrimSpace(outBuf.String())
+	if output == "" {
+		return nil, fmt.Errorf("no selection made")
 	}
 	
-	// Parse the index from the selected line
-	parts := strings.SplitN(selected, "\t", 2)
-	if len(parts) < 1 {
-		return -1, fmt.Errorf("invalid selection format")
+	// Parse multiple selected lines
+	lines := strings.Split(output, "\n")
+	indices := make([]int, 0, len(lines))
+	
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		
+		// Parse the index from the selected line
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) < 1 {
+			return nil, fmt.Errorf("invalid selection format")
+		}
+		
+		var index int
+		if _, err := fmt.Sscanf(parts[0], "%d", &index); err != nil {
+			return nil, fmt.Errorf("failed to parse selection index: %w", err)
+		}
+		
+		if index < 0 || index >= len(media) {
+			return nil, fmt.Errorf("invalid selection index")
+		}
+		
+		indices = append(indices, index)
 	}
 	
-	var index int
-	if _, err := fmt.Sscanf(parts[0], "%d", &index); err != nil {
-		return -1, fmt.Errorf("failed to parse selection index: %w", err)
+	if len(indices) == 0 {
+		return nil, fmt.Errorf("no valid selection made")
 	}
 	
-	if index < 0 || index >= len(media) {
-		return -1, fmt.Errorf("invalid selection index")
-	}
-	
-	return index, nil
+	return indices, nil
 }
 
 // createPreviewScript creates a preview binary and returns its path
