@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -550,15 +551,22 @@ func handleStream(cfg *config.Config, media *plex.MediaItem) error {
 	localIP := stream.GetLocalIP()
 	webURL := fmt.Sprintf("http://%s:%d", localIP, stream.DefaultPort)
 	
+	// URL encode for deep links
+	encodedURL := url.QueryEscape(streamURL)
+	
 	fmt.Println(successStyle.Render("✓ Stream published"))
 	fmt.Println(infoStyle.Render(fmt.Sprintf("Stream ID: %s", streamID)))
 	fmt.Println(infoStyle.Render(fmt.Sprintf("Title: %s", media.FormatMediaTitle())))
 	fmt.Println(warningStyle.Render(fmt.Sprintf("\n🌐 Stream server running on port %d", stream.DefaultPort)))
-	fmt.Println(successStyle.Render(fmt.Sprintf("\n📱 Open on your device: %s", webURL)))
-	fmt.Println(infoStyle.Render("\nOther options:"))
-	fmt.Println(infoStyle.Render("  • Web UI: " + webURL))
-	fmt.Println(infoStyle.Render("  • CLI: goplexcli stream"))
-	fmt.Println(infoStyle.Render("\nPress Ctrl+C to stop the server\n"))
+	
+	fmt.Println(successStyle.Render("\n📱 Click to open in your player:"))
+	fmt.Println(infoStyle.Render(fmt.Sprintf("  Infuse:     infuse://x-callback-url/play?url=%s", encodedURL)))
+	fmt.Println(infoStyle.Render(fmt.Sprintf("  OutPlayer:  outplayer://x-callback-url/play?url=%s", encodedURL)))
+	fmt.Println(infoStyle.Render(fmt.Sprintf("  SenPlayer:  senplayer://x-callback-url/play?url=%s", encodedURL)))
+	fmt.Println(infoStyle.Render(fmt.Sprintf("  VLC:        vlc://%s", encodedURL)))
+	
+	fmt.Println(infoStyle.Render("\n🌐 Or open web UI: " + webURL))
+	fmt.Println(infoStyle.Render("Press Ctrl+C to stop the server\n"))
 
 	// Setup signal handling for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())

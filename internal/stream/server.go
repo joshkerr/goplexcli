@@ -257,14 +257,21 @@ func Discover(ctx context.Context, timeout time.Duration) ([]*DiscoveredServer, 
 		defer wg.Done()
 		for entry := range entries {
 			mu.Lock()
+			
+			// Collect both IPv4 and IPv6 addresses
+			addresses := make([]string, 0, len(entry.AddrIPv4)+len(entry.AddrIPv6))
+			for _, ip := range entry.AddrIPv4 {
+				addresses = append(addresses, ip.String())
+			}
+			for _, ip := range entry.AddrIPv6 {
+				addresses = append(addresses, ip.String())
+			}
+			
 			server := &DiscoveredServer{
 				Name:      entry.Instance,
 				Host:      entry.HostName,
 				Port:      entry.Port,
-				Addresses: make([]string, len(entry.AddrIPv4)),
-			}
-			for i, ip := range entry.AddrIPv4 {
-				server.Addresses[i] = ip.String()
+				Addresses: addresses,
 			}
 			servers = append(servers, server)
 			mu.Unlock()
@@ -277,6 +284,8 @@ func Discover(ctx context.Context, timeout time.Duration) ([]*DiscoveredServer, 
 
 	// Browse for services - this will close the channel when context is done
 	if err := resolver.Browse(discoverCtx, ServiceType, ServiceDomain, entries); err != nil {
+		// Close channel to unblock goroutine before waiting
+		close(entries)
 		wg.Wait()
 		return nil, fmt.Errorf("failed to browse: %w", err)
 	}
@@ -307,22 +316,32 @@ func FetchStreams(server *DiscoveredServer) ([]*StreamItem, error) {
 			lastErr = err
 			continue
 		}
-		defer resp.Body.Close()
 
-		if resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("unexpected status: %d", resp.StatusCode)
-			continue
-		}
+		// Use anonymous function to ensure body is closed before continue
+		result, err := func() ([]*StreamItem, error) {
+			defer resp.Body.Close()
+			
+			if resp.StatusCode != http.StatusOK {
+				return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
+			}
 
-		var result struct {
-			Streams []*StreamItem `json:"streams"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			var result struct {
+				Streams []*StreamItem `json:"streams"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+				return nil, err
+			}
+
+			return result.Streams, nil
+		}()
+		
+		if err != nil {
 			lastErr = err
 			continue
 		}
-
-		return result.Streams, nil
+		
+		// Success!
+		return result, nil
 	}
 
 	if lastErr != nil {
