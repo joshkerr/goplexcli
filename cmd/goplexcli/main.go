@@ -560,14 +560,21 @@ func handleStream(cfg *config.Config, media *plex.MediaItem) error {
 	fmt.Println(warningStyle.Render(fmt.Sprintf("\n🌐 Stream server running on port %d", stream.DefaultPort)))
 	
 	fmt.Println(successStyle.Render("\n📱 Click to open in your player:"))
-	fmt.Println(infoStyle.Render(fmt.Sprintf("  Infuse:     infuse://x-callback-url/play?url=%s", encodedURL)))
-	fmt.Println(infoStyle.Render(fmt.Sprintf("  OutPlayer:  outplayer://x-callback-url/play?url=%s", encodedURL)))
-	fmt.Println(infoStyle.Render(fmt.Sprintf("  SenPlayer:  senplayer://x-callback-url/play?url=%s", encodedURL)))
-	fmt.Println(infoStyle.Render(fmt.Sprintf("  VLC:        vlc://%s", encodedURL)))
-	fmt.Println(infoStyle.Render(fmt.Sprintf("  VidHub:     open-vidhub://x-callback-url/open?url=%s", encodedURL)))
+	fmt.Println()
 	
-	fmt.Println(infoStyle.Render("\n🌐 Or open web UI: " + webURL))
-	fmt.Println(infoStyle.Render("Press Ctrl+C to stop the server\n"))
+	playerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("86")).Bold(true)
+	linkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Underline(true)
+	
+	fmt.Printf("  %s  %s\n", playerStyle.Render("Infuse:"), linkStyle.Render(fmt.Sprintf("infuse://x-callback-url/play?url=%s", encodedURL)))
+	fmt.Printf("  %s  %s\n", playerStyle.Render("OutPlayer:"), linkStyle.Render(fmt.Sprintf("outplayer://x-callback-url/play?url=%s", encodedURL)))
+	fmt.Printf("  %s  %s\n", playerStyle.Render("SenPlayer:"), linkStyle.Render(fmt.Sprintf("senplayer://x-callback-url/play?url=%s", encodedURL)))
+	fmt.Printf("  %s  %s\n", playerStyle.Render("VLC:"), linkStyle.Render(fmt.Sprintf("vlc://%s", encodedURL)))
+	fmt.Printf("  %s  %s\n", playerStyle.Render("VidHub:"), linkStyle.Render(fmt.Sprintf("open-vidhub://x-callback-url/open?url=%s", encodedURL)))
+	
+	fmt.Println()
+	fmt.Println(successStyle.Render("🌐 Web UI: ") + linkStyle.Render(webURL))
+	fmt.Println()
+	fmt.Println(infoStyle.Render("Press Ctrl+C or 'q' to stop the server\n"))
 
 	// Setup signal handling for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -578,6 +585,28 @@ func handleStream(cfg *config.Config, media *plex.MediaItem) error {
 		<-sigChan
 		fmt.Println(warningStyle.Render("\n\nShutting down stream server..."))
 		cancel()
+	}()
+
+	// Setup keyboard input for 'q' to quit
+	go func() {
+		oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+		if err != nil {
+			return
+		}
+		defer term.Restore(int(os.Stdin.Fd()), oldState)
+
+		b := make([]byte, 1)
+		for {
+			n, err := os.Stdin.Read(b)
+			if err != nil || n == 0 {
+				return
+			}
+			if b[0] == 'q' || b[0] == 'Q' {
+				fmt.Println(warningStyle.Render("\n\nShutting down stream server..."))
+				cancel()
+				return
+			}
+		}
 	}()
 
 	// Start server (blocks until context cancelled)
