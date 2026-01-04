@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -308,7 +309,12 @@ func FetchStreams(server *DiscoveredServer) ([]*StreamItem, error) {
 	// Try each address until one works
 	var lastErr error
 	for _, addr := range server.Addresses {
-		url := fmt.Sprintf("http://%s:%d/streams", addr, server.Port)
+		// Format IPv6 addresses with brackets
+		host := addr
+		if strings.Contains(addr, ":") {
+			host = "[" + addr + "]"
+		}
+		url := fmt.Sprintf("http://%s:%d/streams", host, server.Port)
 		
 		client := &http.Client{Timeout: 5 * time.Second}
 		resp, err := client.Get(url)
