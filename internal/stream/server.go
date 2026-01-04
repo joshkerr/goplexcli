@@ -95,7 +95,7 @@ func (s *Server) Start(ctx context.Context) error {
 		nil,             // Network interface (nil = all)
 	)
 	if err != nil {
-		s.httpServer.Shutdown(context.Background())
+		_ = s.httpServer.Shutdown(context.Background())
 		return fmt.Errorf("failed to register mDNS service: %w", err)
 	}
 	s.mdnsServer = mdnsServer
@@ -203,7 +203,7 @@ func (s *Server) handleListStreams(w http.ResponseWriter, r *http.Request) {
 
 	streams := s.ListStreams()
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"streams": streams,
 		"count":   len(streams),
 	})
@@ -211,7 +211,7 @@ func (s *Server) handleListStreams(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"status": "ok",
 	})
 }

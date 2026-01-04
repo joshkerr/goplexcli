@@ -692,7 +692,9 @@ func handleStream(cfg *config.Config, media *plex.MediaItem) error {
 		if err != nil {
 			return
 		}
-		defer term.Restore(int(os.Stdin.Fd()), oldState)
+		defer func() {
+			_ = term.Restore(int(os.Stdin.Fd()), oldState)
+		}()
 
 		b := make([]byte, 1)
 		for {
