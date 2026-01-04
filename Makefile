@@ -5,10 +5,17 @@
 # Build the application
 build:
 	@echo "Building goplexcli..."
+ifeq ($(OS),Windows_NT)
+	@go build -o goplexcli.exe ./cmd/goplexcli
+	@echo "Building preview helper..."
+	@go build -o goplexcli-preview.exe ./cmd/preview
+	@echo "Build complete: ./goplexcli.exe and ./goplexcli-preview.exe"
+else
 	@go build -o goplexcli ./cmd/goplexcli
 	@echo "Building preview helper..."
 	@go build -o goplexcli-preview ./cmd/preview
 	@echo "Build complete: ./goplexcli and ./goplexcli-preview"
+endif
 
 # Build for all platforms
 build-all:
@@ -36,8 +43,14 @@ install: build
 # Clean build artifacts
 clean:
 	@echo "Cleaning build artifacts..."
+ifeq ($(OS),Windows_NT)
+	@cmd /c "if exist goplexcli.exe del /q goplexcli.exe"
+	@cmd /c "if exist goplexcli-preview.exe del /q goplexcli-preview.exe"
+	@cmd /c "if exist build rmdir /s /q build"
+else
 	@rm -f goplexcli goplexcli-preview
 	@rm -rf build/
+endif
 	@echo "Clean complete"
 
 # Run tests
@@ -47,7 +60,11 @@ test:
 
 # Run the application
 run: build
+ifeq ($(OS),Windows_NT)
+	@cmd /c goplexcli.exe
+else
 	@./goplexcli
+endif
 
 # Download dependencies
 deps:

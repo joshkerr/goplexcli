@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	
 	"github.com/joshkerr/goplexcli/internal/plex"
@@ -201,7 +202,16 @@ func createPreviewScript(media []plex.MediaItem, plexURL string, plexToken strin
 	
 	// First, try to find in PATH
 	var previewBinary string
-	if pathBinary, err := exec.LookPath("goplexcli-preview"); err == nil {
+	var previewBinaryName string
+	
+	// On Windows, look for .exe extension
+	if runtime.GOOS == "windows" {
+		previewBinaryName = "goplexcli-preview.exe"
+	} else {
+		previewBinaryName = "goplexcli-preview"
+	}
+	
+	if pathBinary, err := exec.LookPath(previewBinaryName); err == nil {
 		previewBinary = pathBinary
 	} else {
 		// Look for the preview binary in common locations
@@ -209,9 +219,15 @@ func createPreviewScript(media []plex.MediaItem, plexURL string, plexToken strin
 		cwd, _ := os.Getwd()
 		
 		possiblePaths := []string{
-			filepath.Join(cwd, "goplexcli-preview"),            // Current directory
-			"/usr/local/bin/goplexcli-preview",                 // Installed location
-			filepath.Join(os.Getenv("HOME"), "bin", "goplexcli-preview"), // User bin
+			filepath.Join(cwd, previewBinaryName),            // Current directory
+		}
+		
+		// Add Unix-specific paths on non-Windows systems
+		if runtime.GOOS != "windows" {
+			possiblePaths = append(possiblePaths,
+				"/usr/local/bin/goplexcli-preview",
+				filepath.Join(os.Getenv("HOME"), "bin", "goplexcli-preview"),
+			)
 		}
 		
 		for _, path := range possiblePaths {
@@ -224,8 +240,24 @@ func createPreviewScript(media []plex.MediaItem, plexURL string, plexToken strin
 	
 	// If not found, return error with helpful message
 	if previewBinary == "" {
-		scriptPath := filepath.Join(tmpDir, "goplexcli-preview.sh")
-		script := `#!/bin/bash
+		var scriptPath string
+		var script string
+		
+		if runtime.GOOS == "windows" {
+			scriptPath = filepath.Join(tmpDir, "goplexcli-preview.bat")
+			script = `@echo off
+echo Preview binary not found!
+echo.
+echo Please run 'make build' or 'go build -o goplexcli-preview.exe ./cmd/preview'
+echo Or install it to a location in your PATH
+echo.
+echo Searched locations:
+echo   - PATH (goplexcli-preview.exe)
+echo   - .\goplexcli-preview.exe
+`
+		} else {
+			scriptPath = filepath.Join(tmpDir, "goplexcli-preview.sh")
+			script = `#!/bin/bash
 echo "Preview binary not found!"
 echo ""
 echo "Please run 'make build' or 'go build -o goplexcli-preview ./cmd/preview'"
@@ -237,18 +269,35 @@ echo "  - ./goplexcli-preview"
 echo "  - /usr/local/bin/goplexcli-preview"
 echo "  - ~/bin/goplexcli-preview"
 `
+		}
 		_ = os.WriteFile(scriptPath, []byte(script), 0755) // Ignore error - will fail in wrapper script anyway
 		return scriptPath, nil
 	}
 	
 	// Create wrapper script that calls the binary
-	scriptPath := filepath.Join(tmpDir, "goplexcli-preview.sh")
-	// Use single quotes and escape any single quotes in the paths for shell safety
-	escapedBinary := strings.ReplaceAll(previewBinary, "'", "'\"'\"'")
-	escapedDataPath := strings.ReplaceAll(dataPath, "'", "'\"'\"'")
-	script := fmt.Sprintf(`#!/bin/bash
+	var scriptPath string
+	var script string
+	
+	if runtime.GOOS == "windows" {
+		// Windows batch file
+		scriptPath = filepath.Join(tmpDir, "goplexcli-preview.bat")
+		// Escape special characters for batch files
+		// In batch files, % needs to be escaped as %%, and quotes are handled by outer quotes
+		escapedBinary := strings.ReplaceAll(previewBinary, "%", "%%")
+		escapedDataPath := strings.ReplaceAll(dataPath, "%", "%%")
+		script = fmt.Sprintf(`@echo off
+"%s" "%s" %%1
+`, escapedBinary, escapedDataPath)
+	} else {
+		// Unix shell script
+		scriptPath = filepath.Join(tmpDir, "goplexcli-preview.sh")
+		// Use single quotes and escape any single quotes in the paths for shell safety
+		escapedBinary := strings.ReplaceAll(previewBinary, "'", "'\"'\"'")
+		escapedDataPath := strings.ReplaceAll(dataPath, "'", "'\"'\"'")
+		script = fmt.Sprintf(`#!/bin/bash
 '%s' '%s' "$1"
 `, escapedBinary, escapedDataPath)
+	}
 	
 	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
 		return "", err
