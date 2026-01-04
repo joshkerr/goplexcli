@@ -402,14 +402,17 @@ func (c *Client) GetStreamURL(mediaKey string) (string, error) {
 		
 		partKey := metadataResp.MediaContainer.Metadata[0].Media[0].Part[0].Key
 		if partKey != nil && *partKey != "" {
-			// Build the direct stream URL using the part key
-			streamURL := fmt.Sprintf("%s%s?X-Plex-Token=%s", c.serverURL, *partKey, c.token)
+			// Use download=1 to get direct file (no transcoding)
+			// This is faster and works better with most players
+			streamURL := fmt.Sprintf("%s%s?download=1&X-Plex-Token=%s", 
+				c.serverURL, *partKey, c.token)
 			return streamURL, nil
 		}
 	}
 	
 	// Fallback to simple download URL if part key not found
-	streamURL := fmt.Sprintf("%s%s?download=1&X-Plex-Token=%s", c.serverURL, mediaKey, c.token)
+	streamURL := fmt.Sprintf("%s%s?download=1&X-Plex-Token=%s", 
+		c.serverURL, mediaKey, c.token)
 	return streamURL, nil
 }
 

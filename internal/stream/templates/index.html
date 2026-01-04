@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GoplexCLI Streams - {{.ServerName}}</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        @keyframes gradient {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+        
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-10px); }
+        }
+        
+        @keyframes shimmer {
+            0% { background-position: -1000px 0; }
+            100% { background-position: 1000px 0; }
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(-45deg, #667eea, #764ba2, #f093fb, #4facfe);
+            background-size: 400% 400%;
+            animation: gradient 15s ease infinite;
+            min-height: 100vh;
+            padding: 20px;
+            color: #333;
+            position: relative;
+            overflow-x: hidden;
+        }
+        
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: radial-gradient(circle at 20% 50%, rgba(255,255,255,0.1) 0%, transparent 50%),
+                        radial-gradient(circle at 80% 80%, rgba(255,255,255,0.1) 0%, transparent 50%);
+            pointer-events: none;
+        }
+        
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            position: relative;
+            z-index: 1;
+        }
+        
+        header {
+            background: rgba(255, 255, 255, 0.98);
+            backdrop-filter: blur(20px) saturate(180%);
+            border-radius: 24px;
+            padding: 32px;
+            margin-bottom: 24px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2),
+                        0 0 0 1px rgba(255, 255, 255, 0.5) inset;
+            animation: float 6s ease-in-out infinite;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+            animation: shimmer 3s infinite;
+        }
+        
+        h1 {
+            font-size: 32px;
+            font-weight: 800;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 12px;
+            position: relative;
+        }
+        
+        .server-info {
+            font-size: 14px;
+            color: #666;
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .server-info span {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            background: rgba(102, 126, 234, 0.1);
+            border-radius: 12px;
+            font-weight: 500;
+        }
+        
+        .streams-container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        .stream-card {
+            background: rgba(255, 255, 255, 0.98);
+            backdrop-filter: blur(20px) saturate(180%);
+            border-radius: 24px;
+            padding: 28px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15),
+                        0 0 0 1px rgba(255, 255, 255, 0.5) inset;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .stream-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, #667eea, #764ba2, #f093fb);
+            transform: scaleX(0);
+            transform-origin: left;
+            transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        
+        .stream-card:hover {
+            transform: translateY(-8px) scale(1.02);
+            box-shadow: 0 30px 80px rgba(0, 0, 0, 0.25),
+                        0 0 0 1px rgba(255, 255, 255, 0.8) inset;
+        }
+        
+        .stream-card:hover::before {
+            transform: scaleX(1);
+        }
+        
+        .stream-title {
+            font-size: 22px;
+            font-weight: 700;
+            color: #2d3748;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .stream-meta {
+            display: flex;
+            gap: 16px;
+            margin-bottom: 16px;
+            font-size: 14px;
+            color: #718096;
+            flex-wrap: wrap;
+        }
+        
+        .stream-meta span {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            background: rgba(102, 126, 234, 0.08);
+            border-radius: 12px;
+            font-weight: 500;
+        }
+        
+        .stream-summary {
+            font-size: 15px;
+            color: #4a5568;
+            line-height: 1.7;
+            margin-bottom: 20px;
+            max-height: 5.1em;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+        }
+        
+        .actions {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        
+        .btn {
+            padding: 14px 28px;
+            border-radius: 16px;
+            font-size: 15px;
+            font-weight: 600;
+            text-decoration: none;
+            text-align: center;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            border: none;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .btn::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s, height 0.6s;
+        }
+        
+        .btn:active::before {
+            width: 300px;
+            height: 300px;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            box-shadow: 0 8px 24px rgba(102, 126, 234, 0.4);
+            border: 2px solid transparent;
+        }
+        
+        .btn-primary:hover {
+            box-shadow: 0 12px 32px rgba(102, 126, 234, 0.6);
+            transform: translateY(-2px) scale(1.05);
+        }
+        
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.9);
+            color: #667eea;
+            border: 2px solid #667eea;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+        
+        .btn-secondary:hover {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-color: transparent;
+            box-shadow: 0 8px 24px rgba(102, 126, 234, 0.4);
+            transform: translateY(-2px) scale(1.05);
+        }
+        
+        .empty-state {
+            background: rgba(255, 255, 255, 0.98);
+            backdrop-filter: blur(20px) saturate(180%);
+            border-radius: 24px;
+            padding: 64px 32px;
+            text-align: center;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15),
+                        0 0 0 1px rgba(255, 255, 255, 0.5) inset;
+            animation: float 6s ease-in-out infinite;
+        }
+        
+        .empty-state h2 {
+            font-size: 28px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 16px;
+            font-weight: 800;
+        }
+        
+        .empty-state p {
+            color: #718096;
+            line-height: 1.8;
+            font-size: 16px;
+        }
+        
+        .empty-state code {
+            background: rgba(102, 126, 234, 0.1);
+            padding: 4px 12px;
+            border-radius: 8px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            color: #667eea;
+            font-weight: 600;
+        }
+        
+        .badge {
+            display: inline-block;
+            padding: 6px 16px;
+            border-radius: 16px;
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+        
+        .badge-movie {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+        }
+        
+        .badge-episode {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+        }
+        
+        .stream-content {
+            display: flex;
+            gap: 24px;
+            align-items: flex-start;
+        }
+        
+        .stream-poster {
+            flex-shrink: 0;
+            width: 140px;
+            height: 210px;
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
+            background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
+            position: relative;
+        }
+        
+        .stream-poster img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        
+        .stream-card:hover .stream-poster img {
+            transform: scale(1.05);
+        }
+        
+        .stream-poster-placeholder {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 48px;
+            opacity: 0.3;
+        }
+        
+        .stream-details {
+            flex: 1;
+            min-width: 0;
+        }
+        
+        @media (max-width: 640px) {
+            body {
+                padding: 12px;
+            }
+            
+            header {
+                padding: 24px;
+                border-radius: 20px;
+            }
+            
+            h1 {
+                font-size: 26px;
+            }
+            
+            .stream-card {
+                padding: 20px;
+                border-radius: 20px;
+            }
+            
+            .stream-content {
+                flex-direction: column;
+            }
+            
+            .stream-poster {
+                width: 100%;
+                height: 300px;
+                margin-bottom: 16px;
+            }
+            
+            .stream-title {
+                font-size: 20px;
+            }
+            
+            .actions {
+                flex-direction: column;
+            }
+            
+            .btn {
+                width: 100%;
+                justify-content: center;
+            }
+        }
+        
+        .refresh-notice {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border-radius: 16px;
+            padding: 16px 20px;
+            margin-top: 24px;
+            font-size: 14px;
+            color: #718096;
+            text-align: center;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎬 GoplexCLI Streams</h1>
+            <div class="server-info">
+                <span>📡 <strong>{{.ServerName}}</strong></span>
+                <span>🕐 Updated {{.Time}}</span>
+                {{if .Streams}}
+                <span>📊 {{len .Streams}} stream(s) available</span>
+                {{end}}
+            </div>
+        </header>
+        
+        <div class="streams-container">
+            {{if .Streams}}
+                {{range .Streams}}
+                <div class="stream-card">
+                    <div class="stream-content">
+                        {{if .PosterURL}}
+                        <div class="stream-poster">
+                            <img src="{{.PosterURL}}" alt="{{.Title}} poster" loading="lazy">
+                        </div>
+                        {{else}}
+                        <div class="stream-poster">
+                            <div class="stream-poster-placeholder">🎬</div>
+                        </div>
+                        {{end}}
+                        
+                        <div class="stream-details">
+                            <div class="stream-title">
+                                {{.Title}}
+                                {{if eq .Type "movie"}}
+                                <span class="badge badge-movie">Movie</span>
+                                {{else if eq .Type "episode"}}
+                                <span class="badge badge-episode">TV</span>
+                                {{end}}
+                            </div>
+                            
+                            <div class="stream-meta">
+                                {{if .Year}}
+                                <span>📅 {{.Year}}</span>
+                                {{end}}
+                                {{if .Duration}}
+                                <span>⏱️ {{divf (float64 .Duration) 60000.0 | printf "%.0f"}} min</span>
+                                {{end}}
+                            </div>
+                            
+                            {{if .Summary}}
+                            <div class="stream-summary">{{.Summary}}</div>
+                            {{end}}
+                            
+                            <div class="actions">
+                                <button onclick="openPlayer('infuse', '{{.StreamURL}}')" class="btn btn-primary">
+                                    ▶️ Play in Infuse
+                                </button>
+                                <button onclick="copyToClipboard('{{.StreamURL}}')" class="btn btn-secondary">
+                                    📋 Copy Stream URL
+                                </button>
+                                <button onclick="openPlayer('outplayer', '{{.StreamURL}}')" class="btn btn-secondary">
+                                    ▶️ OutPlayer
+                                </button>
+                                <button onclick="openPlayer('senplayer', '{{.StreamURL}}')" class="btn btn-secondary">
+                                    ▶️ SenPlayer
+                                </button>
+                                <button onclick="openPlayer('iina', '{{.StreamURL}}')" class="btn btn-secondary">
+                                    ▶️ IINA
+                                </button>
+                                <button onclick="openPlayer('vlc', '{{.StreamURL}}')" class="btn btn-secondary">
+                                    ▶️ VLC
+                                </button>
+                                <button onclick="openPlayer('vidhub', '{{.StreamURL}}')" class="btn btn-secondary">
+                                    ▶️ VidHub
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {{end}}
+            {{else}}
+                <div class="empty-state">
+                    <h2>No Streams Available</h2>
+                    <p>No media is currently being streamed from this device.</p>
+                    <p style="margin-top: 12px;">To publish a stream, run <code>goplexcli browse</code> and select a media item.</p>
+                </div>
+            {{end}}
+        </div>
+        
+        <div class="refresh-notice">
+            💡 Page auto-refreshes every 5 seconds
+        </div>
+    </div>
+    
+    <script>
+        // Open player with properly encoded URL
+        function openPlayer(player, streamUrl) {
+            var playerUrl;
+            var encodedUrl = encodeURIComponent(streamUrl);
+            
+            switch(player) {
+                case 'infuse':
+                    playerUrl = 'infuse://x-callback-url/play?url=' + encodedUrl;
+                    break;
+                case 'outplayer':
+                    playerUrl = 'outplayer://x-callback-url/play?url=' + encodedUrl;
+                    break;
+                case 'senplayer':
+                    playerUrl = 'senplayer://x-callback-url/play?url=' + encodedUrl;
+                    break;
+                case 'iina':
+                    playerUrl = 'iina://weblink?url=' + encodedUrl;
+                    break;
+                case 'vlc':
+                    playerUrl = 'vlc://' + encodedUrl;
+                    break;
+                case 'vidhub':
+                    playerUrl = 'open-vidhub://x-callback-url/open?url=' + encodedUrl;
+                    break;
+                default:
+                    alert('Unknown player: ' + player);
+                    return;
+            }
+            
+            window.location.href = playerUrl;
+        }
+        
+        // Copy to clipboard function
+        function copyToClipboard(text) {
+            if (navigator.clipboard) {
+                navigator.clipboard.writeText(text).then(function() {
+                    alert('Stream URL copied! Now paste it in your player app.');
+                }, function(err) {
+                    // Fallback for older browsers
+                    fallbackCopy(text);
+                });
+            } else {
+                fallbackCopy(text);
+            }
+        }
+        
+        function fallbackCopy(text) {
+            var textArea = document.createElement("textarea");
+            textArea.value = text;
+            textArea.style.position = "fixed";
+            textArea.style.opacity = 0;
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+            try {
+                document.execCommand('copy');
+                alert('Stream URL copied! Now paste it in your player app.');
+            } catch (err) {
+                alert('Copy failed. URL: ' + text);
+            }
+            document.body.removeChild(textArea);
+        }
+        
+        // Auto-refresh every 5 seconds
+        setTimeout(function() {
+            location.reload();
+        }, 5000);
+    </script>
+</body>
+</html>

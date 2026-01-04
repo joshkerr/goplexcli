@@ -321,6 +321,7 @@ func PromptAction(fzfPath string) (string, error) {
 	actions := []string{
 		"Watch",
 		"Download",
+		"Stream",
 		"Cancel",
 	}
 	
