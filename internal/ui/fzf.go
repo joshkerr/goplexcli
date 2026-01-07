@@ -81,9 +81,9 @@ func SelectWithFzf(items []string, prompt string, fzfPath string) (string, int, 
 }
 
 // SelectMediaWithPreview presents media in fzf with preview window showing metadata and poster
-func SelectMediaWithPreview(media []plex.MediaItem, prompt string, fzfPath string, plexURL string, plexToken string) (int, error) {
+func SelectMediaWithPreview(media []plex.MediaItem, prompt string, fzfPath string, plexURL string, plexToken string) ([]int, error) {
 	if len(media) == 0 {
-		return -1, fmt.Errorf("no items to select from")
+		return nil, fmt.Errorf("no items to select from")
 	}
 	
 	if fzfPath == "" {
@@ -92,7 +92,7 @@ func SelectMediaWithPreview(media []plex.MediaItem, prompt string, fzfPath strin
 	
 	// Check if fzf is available
 	if _, err := exec.LookPath(fzfPath); err != nil {
-		return -1, fmt.Errorf("fzf not found in PATH. Please install fzf or specify the path in config")
+		return nil, fmt.Errorf("fzf not found in PATH. Please install fzf or specify the path in config")
 	}
 	
 	// Create formatted items with index prefix for preview script
@@ -105,7 +105,7 @@ func SelectMediaWithPreview(media []plex.MediaItem, prompt string, fzfPath strin
 	// Create a temporary preview script and data file
 	previewScript, err := createPreviewScript(media, plexURL, plexToken)
 	if err != nil {
-		return -1, fmt.Errorf("failed to create preview script: %w", err)
+		return nil, fmt.Errorf("failed to create preview script: %w", err)
 	}
 	defer os.Remove(previewScript)
 	
@@ -113,8 +113,9 @@ func SelectMediaWithPreview(media []plex.MediaItem, prompt string, fzfPath strin
 	dataPath := filepath.Join(os.TempDir(), "goplexcli-preview-data.json")
 	defer os.Remove(dataPath)
 	
-	// Build fzf command with preview
+	// Build fzf command with preview and multi-select support
 	args := []string{
+		"--multi",
 		"--height=90%",
 		"--reverse",
 		"--border",
@@ -141,34 +142,62 @@ func SelectMediaWithPreview(media []plex.MediaItem, prompt string, fzfPath strin
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			// Exit code 130 means user cancelled with Ctrl-C
 			if exitErr.ExitCode() == 130 {
-				return -1, fmt.Errorf("cancelled by user")
+				return nil, fmt.Errorf("cancelled by user")
 			}
 		}
-		return -1, fmt.Errorf("fzf failed: %w", err)
+		return nil, fmt.Errorf("fzf failed: %w", err)
 	}
 	
-	// Get selected item and extract index
-	selected := strings.TrimSpace(outBuf.String())
-	if selected == "" {
-		return -1, fmt.Errorf("no selection made")
+	// Get selected items and extract indices
+	output := strings.TrimSpace(outBuf.String())
+	if output == "" {
+		return nil, fmt.Errorf("no selection made")
 	}
 	
-	// Parse the index from the selected line
-	parts := strings.SplitN(selected, "\t", 2)
-	if len(parts) < 1 {
-		return -1, fmt.Errorf("invalid selection format")
+	// Parse multiple selections (one per line)
+	lines := strings.Split(output, "\n")
+	var indices []int
+	var invalidCount int
+	
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		
+		// Parse the index from the selected line
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) == 0 {
+			invalidCount++
+			continue
+		}
+		
+		var index int
+		if _, err := fmt.Sscanf(parts[0], "%d", &index); err != nil {
+			invalidCount++
+			continue
+		}
+		
+		if index >= 0 && index < len(media) {
+			indices = append(indices, index)
+		} else {
+			invalidCount++
+		}
 	}
 	
-	var index int
-	if _, err := fmt.Sscanf(parts[0], "%d", &index); err != nil {
-		return -1, fmt.Errorf("failed to parse selection index: %w", err)
+	if len(indices) == 0 {
+		if invalidCount > 0 {
+			return nil, fmt.Errorf("no valid selection made (%d invalid selections ignored)", invalidCount)
+		}
+		return nil, fmt.Errorf("no valid selection made")
 	}
 	
-	if index < 0 || index >= len(media) {
-		return -1, fmt.Errorf("invalid selection index")
+	// Warn if some selections were invalid
+	if invalidCount > 0 {
+		fmt.Fprintf(os.Stderr, "Warning: %d invalid selection(s) were ignored\n", invalidCount)
 	}
 	
-	return index, nil
+	return indices, nil
 }
 
 // createPreviewScript creates a preview binary and returns its path

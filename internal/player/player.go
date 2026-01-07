@@ -6,8 +6,8 @@ import (
 	"runtime"
 )
 
-// Play launches MPV to play the given URL
-func Play(streamURL, mpvPath string) error {
+// playWithMPV is a helper function that executes mpv with the given arguments
+func playWithMPV(mpvPath string, streamURLs []string) error {
 	if mpvPath == "" {
 		mpvPath = "mpv"
 	}
@@ -22,8 +22,8 @@ func Play(streamURL, mpvPath string) error {
 		"--force-seekable=yes",
 		"--hr-seek=yes",
 		"--no-resume-playback",
-		streamURL,
 	}
+	args = append(args, streamURLs...)
 	
 	cmd := exec.Command(mpvPath, args...)
 	
@@ -45,6 +45,20 @@ func Play(streamURL, mpvPath string) error {
 	}
 	
 	return nil
+}
+
+// Play launches MPV to play the given URL
+func Play(streamURL, mpvPath string) error {
+	return playWithMPV(mpvPath, []string{streamURL})
+}
+
+// PlayMultiple launches MPV to play multiple URLs sequentially
+func PlayMultiple(streamURLs []string, mpvPath string) error {
+	if len(streamURLs) == 0 {
+		return fmt.Errorf("no stream URLs provided")
+	}
+	
+	return playWithMPV(mpvPath, streamURLs)
 }
 
 // IsAvailable checks if MPV is available on the system
