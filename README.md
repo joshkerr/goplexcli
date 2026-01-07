@@ -5,6 +5,7 @@ A powerful, fast, and elegant command-line interface for browsing and streaming 
 ## Features
 
 - **Browse Media**: Quickly browse your entire Plex library using fzf's fuzzy finder
+- **Multi-Select**: Select multiple items with TAB for batch downloads or sequential playback
 - **Rich Previews**: View movie posters and detailed metadata in the preview window
 - **Stream with MPV**: Watch movies and TV shows directly with MPV player
 - **Download with Rclone**: Download media files to your local system with beautiful progress bars
@@ -93,10 +94,11 @@ goplexcli browse
 
 This will open fzf with your entire media library. Use the arrow keys or type to search, then:
 
-- Press **Enter** to select a media item
-- Choose **Watch** to stream with MPV locally
-- Choose **Download** to download with rclone
-- Choose **Stream** to publish for remote playback on other devices
+- Press **TAB** to select/deselect items (multi-select mode)
+- Press **Enter** to confirm selection
+- Choose **Watch** to stream with MPV locally (plays sequentially if multiple items)
+- Choose **Download** to download with rclone (downloads all selected items)
+- Choose **Stream** to publish for remote playback on other devices (uses first item only)
 
 ## Commands
 
@@ -119,13 +121,34 @@ goplexcli browse
 **Features:**
 - Select media type (Movies, TV Shows, or All)
 - Fuzzy search across your entire library
+- **Multi-select with TAB** - Select multiple items for batch operations
 - Press **Ctrl+P** to toggle preview window with:
   - Movie posters (if chafa installed)
   - Year, rating, duration
   - Plot summary
   - File path
-- Press **Enter** to select media
-- Choose **Watch** to stream locally, **Download** to save, or **Stream** to publish for remote playback
+- Press **Enter** to confirm selection
+- Choose **Watch** to stream locally (creates playlist if multiple items), **Download** to save all, or **Stream** to publish for remote playback
+
+**Multi-Select Examples:**
+```bash
+# Select multiple episodes of a TV show
+goplexcli browse
+# Select "TV Shows"
+# Search for "Breaking Bad"
+# Press TAB on episodes 1, 2, 3
+# Press Enter
+# Choose "Watch" - plays all episodes sequentially
+
+# Batch download movies
+goplexcli browse
+# Select "Movies"
+# Press TAB on multiple movies
+# Press Enter
+# Choose "Download" - downloads all selected files
+```
+
+See [MULTISELECT.md](MULTISELECT.md) for detailed documentation.
 
 ### `goplexcli stream`
 

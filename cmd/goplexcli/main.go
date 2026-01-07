@@ -514,9 +514,9 @@ func runBrowse(cmd *cobra.Command, args []string) error {
 	fmt.Println(infoStyle.Render(fmt.Sprintf("\nBrowsing %d items...\n", len(filteredMedia))))
 
 	// Use fzf with preview to select media if fzf available, otherwise use manual selection
-	var selectedMedia *plex.MediaItem
+	var selectedMediaItems []*plex.MediaItem
 	if ui.IsAvailable(cfg.FzfPath) {
-		selectedIndex, err := ui.SelectMediaWithPreview(filteredMedia, "Select media:", cfg.FzfPath, cfg.PlexURL, cfg.PlexToken)
+		selectedIndices, err := ui.SelectMediaWithPreview(filteredMedia, "Select media (TAB for multi-select):", cfg.FzfPath, cfg.PlexURL, cfg.PlexToken)
 		if err != nil {
 			if err.Error() == "cancelled by user" {
 				return nil
@@ -524,18 +524,24 @@ func runBrowse(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("media selection failed: %w", err)
 		}
 		
-		if selectedIndex < 0 || selectedIndex >= len(filteredMedia) {
-			return fmt.Errorf("invalid selection")
+		// Build list of selected media items
+		for _, index := range selectedIndices {
+			if index >= 0 && index < len(filteredMedia) {
+				selectedMediaItems = append(selectedMediaItems, &filteredMedia[index])
+			}
 		}
-		
-		selectedMedia = &filteredMedia[selectedIndex]
 	} else {
 		// Fallback to manual selection (no fzf required)
 		var err error
-		selectedMedia, err = selectMediaManual(filteredMedia)
+		selectedMedia, err := selectMediaManual(filteredMedia)
 		if err != nil {
 			return err
 		}
+		selectedMediaItems = []*plex.MediaItem{selectedMedia}
+	}
+
+	if len(selectedMediaItems) == 0 {
+		return fmt.Errorf("no media selected")
 	}
 
 	// Ask what to do
@@ -549,11 +555,14 @@ func runBrowse(cmd *cobra.Command, args []string) error {
 
 	switch action {
 	case "watch":
-		return handleWatch(cfg, selectedMedia)
+		return handleWatchMultiple(cfg, selectedMediaItems)
 	case "download":
-		return handleDownload(cfg, selectedMedia)
+		return handleDownloadMultiple(cfg, selectedMediaItems)
 	case "stream":
-		return handleStream(cfg, selectedMedia)
+		if len(selectedMediaItems) > 1 {
+			fmt.Println(warningStyle.Render("Note: Stream only supports single selection, using first item"))
+		}
+		return handleStream(cfg, selectedMediaItems[0])
 	case "cancel":
 		return nil
 	default:
@@ -592,6 +601,55 @@ func handleWatch(cfg *config.Config, media *plex.MediaItem) error {
 	return nil
 }
 
+func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error {
+	if len(mediaItems) == 0 {
+		return fmt.Errorf("no media items provided")
+	}
+
+	// Check if MPV is available
+	if !player.IsAvailable(cfg.MPVPath) {
+		return fmt.Errorf("mpv is not installed. Please install mpv to watch media")
+	}
+
+	fmt.Println(infoStyle.Render(fmt.Sprintf("\nPreparing to play %d items...", len(mediaItems))))
+
+	// Create Plex client
+	client, err := plex.New(cfg.PlexURL, cfg.PlexToken)
+	if err != nil {
+		return fmt.Errorf("failed to create plex client: %w", err)
+	}
+
+	// Get stream URLs for all items
+	var streamURLs []string
+	for i, media := range mediaItems {
+		fmt.Printf("\r%s [%d/%d] %s",
+			infoStyle.Render("Getting stream URLs"),
+			i+1,
+			len(mediaItems),
+			media.FormatMediaTitle(),
+		)
+		
+		streamURL, err := client.GetStreamURL(media.Key)
+		if err != nil {
+			fmt.Println()
+			return fmt.Errorf("failed to get stream URL for %s: %w", media.FormatMediaTitle(), err)
+		}
+		streamURLs = append(streamURLs, streamURL)
+	}
+	fmt.Println()
+
+	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Starting playback of %d items...", len(mediaItems))))
+	fmt.Println(infoStyle.Render("Use 'n' in MPV to skip to next item"))
+
+	// Play with MPV (creates a playlist)
+	if err := player.PlayMultiple(streamURLs, cfg.MPVPath); err != nil {
+		return fmt.Errorf("playback failed: %w", err)
+	}
+
+	fmt.Println(successStyle.Render("✓ Playback finished"))
+	return nil
+}
+
 func handleDownload(cfg *config.Config, media *plex.MediaItem) error {
 	fmt.Println(infoStyle.Render("\nPreparing to download: " + media.FormatMediaTitle()))
 
@@ -620,6 +678,51 @@ func handleDownload(cfg *config.Config, media *plex.MediaItem) error {
 	}
 
 	fmt.Println(successStyle.Render("✓ Download complete"))
+	return nil
+}
+
+func handleDownloadMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error {
+	if len(mediaItems) == 0 {
+		return fmt.Errorf("no media items provided")
+	}
+
+	// Check if rclone is available
+	if !download.IsAvailable(cfg.RclonePath) {
+		return fmt.Errorf("rclone is not installed. Please install rclone to download media")
+	}
+
+	fmt.Println(infoStyle.Render(fmt.Sprintf("\nPreparing to download %d items...", len(mediaItems))))
+
+	// Collect rclone paths and validate
+	var rclonePaths []string
+	for _, media := range mediaItems {
+		if media.RclonePath == "" {
+			fmt.Println(warningStyle.Render(fmt.Sprintf("⚠ Skipping %s (no rclone path)", media.FormatMediaTitle())))
+			continue
+		}
+		rclonePaths = append(rclonePaths, media.RclonePath)
+		fmt.Println(infoStyle.Render(fmt.Sprintf("  - %s", media.FormatMediaTitle())))
+	}
+
+	if len(rclonePaths) == 0 {
+		return fmt.Errorf("no valid rclone paths available")
+	}
+
+	fmt.Println(successStyle.Render(fmt.Sprintf("\n✓ Starting download of %d items...", len(rclonePaths))))
+
+	// Get current directory
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get current directory: %w", err)
+	}
+
+	// Download with rclone
+	ctx := context.Background()
+	if err := download.DownloadMultiple(ctx, rclonePaths, cwd, cfg.RclonePath); err != nil {
+		return fmt.Errorf("download failed: %w", err)
+	}
+
+	fmt.Println(successStyle.Render("✓ All downloads complete"))
 	return nil
 }
 
