@@ -570,37 +570,6 @@ func runBrowse(cmd *cobra.Command, args []string) error {
 	}
 }
 
-func handleWatch(cfg *config.Config, media *plex.MediaItem) error {
-	fmt.Println(infoStyle.Render("\nPreparing to play: " + media.FormatMediaTitle()))
-
-	// Check if MPV is available
-	if !player.IsAvailable(cfg.MPVPath) {
-		return fmt.Errorf("mpv is not installed. Please install mpv to watch media")
-	}
-
-	// Create Plex client
-	client, err := plex.New(cfg.PlexURL, cfg.PlexToken)
-	if err != nil {
-		return fmt.Errorf("failed to create plex client: %w", err)
-	}
-
-	// Get stream URL
-	streamURL, err := client.GetStreamURL(media.Key)
-	if err != nil {
-		return fmt.Errorf("failed to get stream URL: %w", err)
-	}
-
-	fmt.Println(successStyle.Render("✓ Starting playback..."))
-
-	// Play with MPV
-	if err := player.Play(streamURL, cfg.MPVPath); err != nil {
-		return fmt.Errorf("playback failed: %w", err)
-	}
-
-	fmt.Println(successStyle.Render("✓ Playback finished"))
-	return nil
-}
-
 func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error {
 	if len(mediaItems) == 0 {
 		return fmt.Errorf("no media items provided")
@@ -647,37 +616,6 @@ func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error
 	}
 
 	fmt.Println(successStyle.Render("✓ Playback finished"))
-	return nil
-}
-
-func handleDownload(cfg *config.Config, media *plex.MediaItem) error {
-	fmt.Println(infoStyle.Render("\nPreparing to download: " + media.FormatMediaTitle()))
-
-	// Check if rclone is available
-	if !download.IsAvailable(cfg.RclonePath) {
-		return fmt.Errorf("rclone is not installed. Please install rclone to download media")
-	}
-
-	if media.RclonePath == "" {
-		return fmt.Errorf("no rclone path available for this media")
-	}
-
-	fmt.Println(infoStyle.Render("Remote path: " + media.RclonePath))
-	fmt.Println(successStyle.Render("✓ Starting download..."))
-
-	// Get current directory
-	cwd, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("failed to get current directory: %w", err)
-	}
-
-	// Download with rclone
-	ctx := context.Background()
-	if err := download.Download(ctx, media.RclonePath, cwd, cfg.RclonePath); err != nil {
-		return fmt.Errorf("download failed: %w", err)
-	}
-
-	fmt.Println(successStyle.Render("✓ Download complete"))
 	return nil
 }
 

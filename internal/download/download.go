@@ -18,7 +18,10 @@ import (
 // generateTransferID creates a unique transfer ID using crypto/rand
 func generateTransferID(index int, filename string) string {
 	b := make([]byte, 8)
-	rand.Read(b)
+	// crypto/rand.Read always returns n == len(b) and err == nil for valid byte slices
+	// The only way it can fail is if the random source is unreadable, which is a fatal system error
+	// We ignore the error as recommended in crypto/rand documentation for this use case
+	_, _ = rand.Read(b)
 	return fmt.Sprintf("download_%s_%d_%s", hex.EncodeToString(b), index, filename)
 }
 
