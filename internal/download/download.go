@@ -2,6 +2,8 @@ package download
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,6 +14,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	rclone "github.com/joshkerr/rclone-golib"
 )
+
+// generateTransferID creates a unique transfer ID using crypto/rand
+func generateTransferID(index int, filename string) string {
+	b := make([]byte, 8)
+	rand.Read(b)
+	return fmt.Sprintf("download_%s_%d_%s", hex.EncodeToString(b), index, filename)
+}
 
 // Download downloads a file from rclone remote to the current directory
 func Download(ctx context.Context, rclonePath, destinationDir, rcloneBinary string) error {
@@ -57,17 +66,20 @@ func Download(ctx context.Context, rclonePath, destinationDir, rcloneBinary stri
 	// Start the Bubble Tea UI for progress in a goroutine
 	var wg sync.WaitGroup
 	var uiErr error
+	uiReady := make(chan struct{})
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		p := tea.NewProgram(rclone.NewModel(manager))
+		// Signal that UI is ready
+		close(uiReady)
 		if _, err := p.Run(); err != nil {
 			uiErr = err
 		}
 	}()
 	
-	// Small delay to let UI start
-	time.Sleep(100 * time.Millisecond)
+	// Wait for UI to be ready before proceeding
+	<-uiReady
 	
 	// Create executor
 	executor := rclone.NewExecutor(manager)
@@ -141,7 +153,7 @@ func DownloadMultiple(ctx context.Context, rclonePaths []string, destinationDir,
 	for i, rclonePath := range rclonePaths {
 		filename := filepath.Base(rclonePath)
 		destinationPath := filepath.Join(destinationDir, filename)
-		transferID := fmt.Sprintf("download_%d_%d", time.Now().UnixNano(), i)
+		transferID := generateTransferID(i, filename)
 		transferIDs = append(transferIDs, transferID)
 		manager.Add(transferID, rclonePath, destinationPath)
 	}
@@ -149,17 +161,20 @@ func DownloadMultiple(ctx context.Context, rclonePaths []string, destinationDir,
 	// Start the Bubble Tea UI for progress in a goroutine
 	var wg sync.WaitGroup
 	var uiErr error
+	uiReady := make(chan struct{})
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		p := tea.NewProgram(rclone.NewModel(manager))
+		// Signal that UI is ready
+		close(uiReady)
 		if _, err := p.Run(); err != nil {
 			uiErr = err
 		}
 	}()
 	
-	// Small delay to let UI start
-	time.Sleep(100 * time.Millisecond)
+	// Wait for UI to be ready before proceeding
+	<-uiReady
 	
 	// Create executor
 	executor := rclone.NewExecutor(manager)

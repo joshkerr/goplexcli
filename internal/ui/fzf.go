@@ -157,6 +157,7 @@ func SelectMediaWithPreview(media []plex.MediaItem, prompt string, fzfPath strin
 	// Parse multiple selections (one per line)
 	lines := strings.Split(output, "\n")
 	var indices []int
+	var invalidCount int
 	
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -166,22 +167,34 @@ func SelectMediaWithPreview(media []plex.MediaItem, prompt string, fzfPath strin
 		
 		// Parse the index from the selected line
 		parts := strings.SplitN(line, "\t", 2)
-		if len(parts) < 1 {
+		if len(parts) == 0 {
+			invalidCount++
 			continue
 		}
 		
 		var index int
 		if _, err := fmt.Sscanf(parts[0], "%d", &index); err != nil {
+			invalidCount++
 			continue
 		}
 		
 		if index >= 0 && index < len(media) {
 			indices = append(indices, index)
+		} else {
+			invalidCount++
 		}
 	}
 	
 	if len(indices) == 0 {
+		if invalidCount > 0 {
+			return nil, fmt.Errorf("no valid selection made (%d invalid selections ignored)", invalidCount)
+		}
 		return nil, fmt.Errorf("no valid selection made")
+	}
+	
+	// Warn if some selections were invalid
+	if invalidCount > 0 {
+		fmt.Fprintf(os.Stderr, "Warning: %d invalid selection(s) were ignored\n", invalidCount)
 	}
 	
 	return indices, nil

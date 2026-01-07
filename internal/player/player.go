@@ -6,8 +6,8 @@ import (
 	"runtime"
 )
 
-// Play launches MPV to play the given URL
-func Play(streamURL, mpvPath string) error {
+// playWithMPV is a helper function that executes mpv with the given arguments
+func playWithMPV(mpvPath string, streamURLs []string) error {
 	if mpvPath == "" {
 		mpvPath = "mpv"
 	}
@@ -18,51 +18,6 @@ func Play(streamURL, mpvPath string) error {
 	}
 	
 	// Build mpv command
-	args := []string{
-		"--force-seekable=yes",
-		"--hr-seek=yes",
-		"--no-resume-playback",
-		streamURL,
-	}
-	
-	cmd := exec.Command(mpvPath, args...)
-	
-	// Inherit stdin, stdout, stderr for interactive playback
-	cmd.Stdin = nil
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	
-	// Start mpv
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start mpv: %w", err)
-	}
-	
-	// Wait for mpv to finish
-	if err := cmd.Wait(); err != nil {
-		// mpv returns non-zero exit codes for various reasons (user quit, etc.)
-		// Don't treat this as an error
-		return nil
-	}
-	
-	return nil
-}
-
-// PlayMultiple launches MPV to play multiple URLs sequentially
-func PlayMultiple(streamURLs []string, mpvPath string) error {
-	if len(streamURLs) == 0 {
-		return fmt.Errorf("no stream URLs provided")
-	}
-	
-	if mpvPath == "" {
-		mpvPath = "mpv"
-	}
-	
-	// Check if mpv is available
-	if _, err := exec.LookPath(mpvPath); err != nil {
-		return fmt.Errorf("mpv not found in PATH. Please install mpv or specify the path in config")
-	}
-	
-	// Build mpv command with multiple URLs (creates a playlist)
 	args := []string{
 		"--force-seekable=yes",
 		"--hr-seek=yes",
@@ -90,6 +45,20 @@ func PlayMultiple(streamURLs []string, mpvPath string) error {
 	}
 	
 	return nil
+}
+
+// Play launches MPV to play the given URL
+func Play(streamURL, mpvPath string) error {
+	return playWithMPV(mpvPath, []string{streamURL})
+}
+
+// PlayMultiple launches MPV to play multiple URLs sequentially
+func PlayMultiple(streamURLs []string, mpvPath string) error {
+	if len(streamURLs) == 0 {
+		return fmt.Errorf("no stream URLs provided")
+	}
+	
+	return playWithMPV(mpvPath, streamURLs)
 }
 
 // IsAvailable checks if MPV is available on the system
