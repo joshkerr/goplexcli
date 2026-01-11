@@ -6,11 +6,12 @@ A powerful, fast, and elegant command-line interface for browsing and streaming 
 
 - **Browse Media**: Quickly browse your entire Plex library using fzf's fuzzy finder
 - **Multi-Select**: Select multiple items with TAB for batch downloads or sequential playback
-- **Rich Previews**: View movie posters and detailed metadata in the preview window
+- **Rich Previews**: View detailed metadata in the preview window
 - **Stream with MPV**: Watch movies and TV shows directly with MPV player
 - **Download with Rclone**: Download media files to your local system with beautiful progress bars
 - **Remote Streaming**: Publish streams for playback on other devices via mDNS discovery
 - **Smart Caching**: Cache your media library locally for instant browsing
+- **Multi-Server Support**: Connect to and manage multiple Plex servers
 - **Media Type Filtering**: Filter by Movies, TV Shows, or browse all media
 - **Cross-Platform**: Works on macOS, Linux, and Windows
 - **Beautiful UI**: Built with Charm libraries for a polished terminal experience
@@ -32,10 +33,6 @@ Before using GoplexCLI, ensure you have the following installed:
   - macOS: `brew install rclone`
   - Linux: `sudo apt install rclone` or download from [rclone.org](https://rclone.org)
   - Windows: Download from [rclone.org](https://rclone.org)
-- **chafa** (optional) - For displaying movie posters in preview
-  - macOS: `brew install chafa`
-  - Linux: `sudo apt install chafa` or `sudo pacman -S chafa`
-  - Windows: Download from [chafa releases](https://github.com/hpjansson/chafa/releases)
 
 ## Installation
 
@@ -123,7 +120,6 @@ goplexcli browse
 - Fuzzy search across your entire library
 - **Multi-select with TAB** - Select multiple items for batch operations
 - Press **Ctrl+P** to toggle preview window with:
-  - Movie posters (if chafa installed)
   - Year, rating, duration
   - Plot summary
   - File path
@@ -215,6 +211,35 @@ View cache statistics:
 goplexcli cache info
 ```
 
+#### Search Cache
+
+Search for media in your cache:
+
+```bash
+goplexcli cache search "movie title"
+```
+
+### `goplexcli server`
+
+Manage multiple Plex servers.
+
+#### List Servers
+
+List all configured servers:
+
+```bash
+goplexcli server list
+```
+
+#### Enable/Disable Servers
+
+Enable or disable specific servers:
+
+```bash
+goplexcli server enable <server-name>
+goplexcli server disable <server-name>
+```
+
 ### `goplexcli config`
 
 Display current configuration:
@@ -237,8 +262,14 @@ The `config.json` file contains:
 
 ```json
 {
-  "plex_url": "http://your-plex-server:32400",
-  "plex_token": "your-auth-token",
+  "servers": [
+    {
+      "name": "My Plex Server",
+      "url": "http://your-plex-server:32400",
+      "token": "your-auth-token",
+      "enabled": true
+    }
+  ],
   "plex_username": "your-username",
   "mpv_path": "mpv",
   "rclone_path": "rclone",
@@ -246,7 +277,7 @@ The `config.json` file contains:
 }
 ```
 
-You can manually edit this file to set custom paths for mpv, rclone, or fzf if they're not in your PATH.
+The config supports multiple servers. You can manually edit this file to set custom paths for mpv, rclone, or fzf if they're not in your PATH.
 
 ## How It Works
 
@@ -258,15 +289,10 @@ GoplexCLI caches your media library locally to enable fast, offline browsing wit
 - TV show names, season and episode numbers
 - File paths for streaming and downloading
 - Rclone remote paths (automatically converted from Plex paths)
-- Poster/thumbnail URLs for preview display
 
 **Cache Location:**
 - macOS/Linux: `~/.config/goplexcli/cache/media.json`
 - Windows: `%APPDATA%\goplexcli\cache\media.json`
-
-**Poster Cache:**
-- Posters are cached in `/tmp/goplexcli-posters/` to avoid re-downloading
-- Cache persists until system reboot
 
 ### Rclone Path Conversion
 
@@ -323,15 +349,6 @@ rclone config
 ### "Cache is empty"
 
 Run `goplexcli cache reindex` to build your media cache.
-
-### Posters Not Showing
-
-If you don't see movie posters in the preview window:
-
-1. Install chafa: `brew install chafa` (macOS) or `sudo apt install chafa` (Linux)
-2. Rebuild cache to fetch poster URLs: `goplexcli cache reindex`
-3. Press **i** in browse mode to toggle the preview window
-4. Check that `goplexcli-preview` binary is in your PATH
 
 ### "Preview binary not found"
 
@@ -418,7 +435,6 @@ goplexcli/
 - [fzf](https://github.com/junegunn/fzf) - Fuzzy finder
 - [mpv](https://mpv.io) - Media player
 - [rclone](https://rclone.org) - Cloud storage sync
-- [chafa](https://github.com/hpjansson/chafa) - Terminal image viewer (optional)
 
 ## Contributing
 
@@ -433,4 +449,3 @@ MIT License - See LICENSE file for details
 - Built with [Charm](https://charm.sh/) libraries for beautiful terminal UIs
 - Plex API integration via [plexgo](https://github.com/LukeHagar/plexgo)
 - File downloads via [rclone-golib](https://github.com/joshkerr/rclone-golib)
-- Terminal images via [chafa](https://github.com/hpjansson/chafa)
