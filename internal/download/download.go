@@ -108,14 +108,21 @@ func Download(ctx context.Context, rclonePath, destinationDir, rcloneBinary stri
 	}
 	
 	manager.Complete(transferID)
-	
+
+	// Set modification time to now instead of preserving server time
+	now := time.Now()
+	if err := os.Chtimes(destinationPath, now, now); err != nil {
+		// Log but don't fail the download for this
+		fmt.Fprintf(os.Stderr, "warning: could not set modification time: %v\n", err)
+	}
+
 	// Wait for UI to finish
 	wg.Wait()
-	
+
 	if uiErr != nil {
 		return fmt.Errorf("UI error: %w", uiErr)
 	}
-	
+
 	return nil
 }
 
@@ -203,6 +210,12 @@ func DownloadMultiple(ctx context.Context, rclonePaths []string, destinationDir,
 			}
 		} else {
 			manager.Complete(transferID)
+			// Set modification time to now instead of preserving server time
+			destPath := filepath.Join(destinationDir, filepath.Base(rclonePaths[i]))
+			now := time.Now()
+			if chErr := os.Chtimes(destPath, now, now); chErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not set modification time for %s: %v\n", destPath, chErr)
+			}
 		}
 	}
 	
