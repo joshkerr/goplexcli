@@ -144,8 +144,6 @@ goplexcli browse
 # Choose "Download" - downloads all selected files
 ```
 
-See [MULTISELECT.md](MULTISELECT.md) for detailed documentation.
-
 ### `goplexcli stream`
 
 Discover and play streams published by other devices on your local network.
