@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -21,6 +22,32 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
+
+// version is set at build time via ldflags: -X main.version=$(VERSION)
+// If not set during build, falls back to VERSION file
+var version = "dev"
+
+func init() {
+	// If version wasn't set at build time, try to read from VERSION file
+	if version == "dev" {
+		// Try current directory first (development)
+		if data, err := os.ReadFile("VERSION"); err == nil {
+			if v := strings.TrimSpace(string(data)); v != "" {
+				version = v
+				return
+			}
+		}
+		// Try relative to executable (installed binary)
+		if exe, err := os.Executable(); err == nil {
+			versionPath := filepath.Join(filepath.Dir(exe), "VERSION")
+			if data, err := os.ReadFile(versionPath); err == nil {
+				if v := strings.TrimSpace(string(data)); v != "" {
+					version = v
+				}
+			}
+		}
+	}
+}
 
 var (
 	// Styles
@@ -47,9 +74,7 @@ func main() {
 	rootCmd := &cobra.Command{
 		Use:   "goplexcli",
 		Short: "A CLI tool for browsing and streaming from your Plex server",
-		Long: titleStyle.Render("GoplexCLI") + "\n\n" +
-			"A powerful command-line interface for interacting with your Plex media server.\n" +
-			"Browse, stream, and download your media with ease.",
+		Long:  "A powerful command-line interface for interacting with your Plex media server.\nBrowse, stream, and download your media with ease.",
 	}
 
 	// Login command
@@ -141,7 +166,19 @@ func main() {
 
 	serverCmd.AddCommand(serverListCmd, serverEnableCmd, serverDisableCmd)
 
-	rootCmd.AddCommand(loginCmd, browseCmd, cacheCmd, configCmd, streamCmd, serverCmd)
+	// Version command
+	versionCmd := &cobra.Command{
+		Use:   "version",
+		Short: "Show version information",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Printf("goplexcli v%s\n", version)
+		},
+	}
+
+	rootCmd.AddCommand(loginCmd, browseCmd, cacheCmd, configCmd, streamCmd, serverCmd, versionCmd)
+
+	// Show logo before executing any command
+	ui.Logo(version)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(errorStyle.Render("Error: " + err.Error()))
