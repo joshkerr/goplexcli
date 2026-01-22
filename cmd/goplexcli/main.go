@@ -591,7 +591,7 @@ func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error
 	// Get stream URLs for all items
 	var streamURLs []string
 	for i, media := range mediaItems {
-		fmt.Printf("\r%s [%d/%d] %s",
+		fmt.Printf("\r\x1b[K%s [%d/%d] %s",
 			infoStyle.Render("Getting stream URLs"),
 			i+1,
 			len(mediaItems),
@@ -809,7 +809,7 @@ func updateCache(fullReindex bool) error {
 		totalItems := 0
 		media, err = plex.GetAllMediaFromServers(ctx, serverConfigs, func(serverName, libraryName string, itemCount, totalLibs, currentLib, serverNum, totalServers int) {
 			totalItems += itemCount
-			fmt.Printf("\r%s [Server %d/%d: %s] [%d/%d] %s: %d items (Total: %d)    ",
+			fmt.Printf("\r\x1b[K%s [Server %d/%d: %s] [%d/%d] %s: %d items (Total: %d)",
 				infoStyle.Render("Processing"),
 				serverNum,
 				totalServers,
@@ -854,7 +854,7 @@ func updateCache(fullReindex bool) error {
 		
 		media, err = client.GetAllMedia(ctx, func(libraryName string, itemCount, totalLibs, currentLib int) {
 			totalItems += itemCount
-			fmt.Printf("\r%s [%d/%d] %s: %d items (Total: %d)    ",
+			fmt.Printf("\r\x1b[K%s [%d/%d] %s: %d items (Total: %d)",
 				infoStyle.Render("Processing libraries"),
 				currentLib,
 				totalLibs,
