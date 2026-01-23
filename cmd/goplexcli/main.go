@@ -6,7 +6,6 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -17,6 +16,7 @@ import (
 	"github.com/joshkerr/goplexcli/internal/download"
 	"github.com/joshkerr/goplexcli/internal/player"
 	"github.com/joshkerr/goplexcli/internal/plex"
+	"github.com/joshkerr/goplexcli/internal/queue"
 	"github.com/joshkerr/goplexcli/internal/stream"
 	"github.com/joshkerr/goplexcli/internal/ui"
 	"github.com/spf13/cobra"
@@ -456,8 +456,15 @@ func runBrowse(cmd *cobra.Command, args []string) error {
 	fmt.Println(infoStyle.Render(fmt.Sprintf("Loaded %d media items from cache", len(mediaCache.Media))))
 	fmt.Println(infoStyle.Render(fmt.Sprintf("Last updated: %s", mediaCache.LastUpdated.Format(time.RFC822))))
 
-	// Initialize queue
-	var queue []*plex.MediaItem
+	// Load persistent queue
+	q, err := queue.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load queue: %w", err)
+	}
+
+	if q.Len() > 0 {
+		fmt.Println(infoStyle.Render(fmt.Sprintf("Queue has %s from previous session", ui.PluralizeItems(q.Len()))))
+	}
 
 browseLoop:
 	for {
@@ -465,7 +472,7 @@ browseLoop:
 		var mediaType string
 		if ui.IsAvailable(cfg.FzfPath) {
 			var err error
-			mediaType, err = ui.SelectMediaTypeWithQueue(cfg.FzfPath, len(queue))
+			mediaType, err = ui.SelectMediaTypeWithQueue(cfg.FzfPath, q.Len())
 			if err != nil {
 				if err.Error() == "cancelled by user" {
 					return nil
@@ -475,7 +482,7 @@ browseLoop:
 		} else {
 			// Fallback to manual selection
 			var err error
-			mediaType, err = selectMediaTypeManualWithQueue(len(queue))
+			mediaType, err = selectMediaTypeManualWithQueue(q.Len())
 			if err != nil {
 				return err
 			}
@@ -483,7 +490,7 @@ browseLoop:
 
 		// Handle queue view
 		if mediaType == "queue" {
-			result, err := handleQueueView(cfg, &queue)
+			result, err := handleQueueView(cfg, q)
 			if err != nil {
 				return err
 			}
@@ -555,7 +562,7 @@ browseLoop:
 		// Ask what to do
 		var action string
 		if ui.IsAvailable(cfg.FzfPath) {
-			action, err = ui.PromptActionWithQueue(cfg.FzfPath, len(queue))
+			action, err = ui.PromptActionWithQueue(cfg.FzfPath, q.Len())
 			if err != nil {
 				if err.Error() == "cancelled by user" {
 					return nil
@@ -563,7 +570,7 @@ browseLoop:
 				return err
 			}
 		} else {
-			action, err = promptActionManualWithQueue(len(queue))
+			action, err = promptActionManualWithQueue(q.Len())
 			if err != nil {
 				return err
 			}
@@ -575,12 +582,15 @@ browseLoop:
 		case "download":
 			return handleDownloadMultiple(cfg, selectedMediaItems)
 		case "queue":
-			added := addToQueue(&queue, selectedMediaItems)
+			added := q.Add(selectedMediaItems)
+			if err := q.Save(); err != nil {
+				return fmt.Errorf("failed to save queue: %w", err)
+			}
 			skipped := len(selectedMediaItems) - added
 			if skipped > 0 {
-				fmt.Println(successStyle.Render(fmt.Sprintf("Added %d item(s) to queue (%d duplicate(s) skipped). Queue now has %s.", added, skipped, ui.PluralizeItems(len(queue)))))
+				fmt.Println(successStyle.Render(fmt.Sprintf("Added %d item(s) to queue (%d duplicate(s) skipped). Queue now has %s.", added, skipped, ui.PluralizeItems(q.Len()))))
 			} else {
-				fmt.Println(successStyle.Render(fmt.Sprintf("Added %d item(s) to queue. Queue now has %s.", added, ui.PluralizeItems(len(queue)))))
+				fmt.Println(successStyle.Render(fmt.Sprintf("Added %d item(s) to queue. Queue now has %s.", added, ui.PluralizeItems(q.Len()))))
 			}
 			continue browseLoop
 		case "stream":
@@ -786,37 +796,18 @@ func handleStream(cfg *config.Config, media *plex.MediaItem) error {
 	return nil
 }
 
-// addToQueue appends items to queue, avoiding duplicates by Key
-// Returns the number of items actually added (excluding duplicates)
-func addToQueue(queue *[]*plex.MediaItem, items []*plex.MediaItem) int {
-	existing := make(map[string]bool)
-	for _, item := range *queue {
-		existing[item.Key] = true
-	}
-
-	added := 0
-	for _, item := range items {
-		if !existing[item.Key] {
-			*queue = append(*queue, item)
-			existing[item.Key] = true
-			added++
-		}
-	}
-	return added
-}
-
 // handleQueueView displays queue and handles queue actions
 // Returns "done" (after download), "back" (continue browsing), or error
-func handleQueueView(cfg *config.Config, queue *[]*plex.MediaItem) (string, error) {
-	if len(*queue) == 0 {
+func handleQueueView(cfg *config.Config, q *queue.Queue) (string, error) {
+	if q.IsEmpty() {
 		fmt.Println(warningStyle.Render("Queue is empty"))
 		return "back", nil
 	}
 
 	fmt.Println(titleStyle.Render("Download Queue"))
-	fmt.Println(infoStyle.Render(fmt.Sprintf("%d item(s) in queue:\n", len(*queue))))
+	fmt.Println(infoStyle.Render(fmt.Sprintf("%d item(s) in queue:\n", q.Len())))
 
-	for i, item := range *queue {
+	for i, item := range q.Items {
 		fmt.Printf("  %d. %s\n", i+1, item.FormatMediaTitle())
 	}
 	fmt.Println()
@@ -826,7 +817,7 @@ func handleQueueView(cfg *config.Config, queue *[]*plex.MediaItem) (string, erro
 	var err error
 
 	if ui.IsAvailable(cfg.FzfPath) {
-		action, err = ui.PromptQueueAction(cfg.FzfPath, len(*queue))
+		action, err = ui.PromptQueueAction(cfg.FzfPath, q.Len())
 		if err != nil {
 			if err.Error() == "cancelled by user" {
 				return "back", nil
@@ -834,7 +825,7 @@ func handleQueueView(cfg *config.Config, queue *[]*plex.MediaItem) (string, erro
 			return "", err
 		}
 	} else {
-		action, err = promptQueueActionManual(len(*queue))
+		action, err = promptQueueActionManual(q.Len())
 		if err != nil {
 			return "", err
 		}
@@ -842,31 +833,38 @@ func handleQueueView(cfg *config.Config, queue *[]*plex.MediaItem) (string, erro
 
 	switch action {
 	case "download":
-		err := handleDownloadMultiple(cfg, *queue)
+		err := handleDownloadMultiple(cfg, q.Items)
 		if err != nil {
 			return "", err
 		}
-		*queue = nil // Clear queue after download
+		if err := q.Clear(); err != nil {
+			return "", fmt.Errorf("failed to clear queue: %w", err)
+		}
 		return "done", nil
 
 	case "clear":
-		*queue = nil
+		if err := q.Clear(); err != nil {
+			return "", fmt.Errorf("failed to clear queue: %w", err)
+		}
 		fmt.Println(successStyle.Render("Queue cleared"))
 		return "back", nil
 
 	case "remove":
 		if ui.IsAvailable(cfg.FzfPath) {
-			indices, err := ui.SelectQueueItemsForRemoval(*queue, cfg.FzfPath)
+			indices, err := ui.SelectQueueItemsForRemoval(q.Items, cfg.FzfPath)
 			if err != nil {
 				if err.Error() == "cancelled by user" {
 					return "back", nil
 				}
 				return "", err
 			}
-			removeFromQueue(queue, indices)
+			q.Remove(indices)
+			if err := q.Save(); err != nil {
+				return "", fmt.Errorf("failed to save queue: %w", err)
+			}
 			fmt.Println(successStyle.Render(fmt.Sprintf("Removed %d item(s) from queue", len(indices))))
 		} else {
-			err := removeFromQueueManual(queue)
+			err := removeFromQueueManual(q)
 			if err != nil {
 				return "", err
 			}
@@ -878,32 +876,6 @@ func handleQueueView(cfg *config.Config, queue *[]*plex.MediaItem) (string, erro
 
 	default:
 		return "back", nil
-	}
-}
-
-// removeFromQueue removes items at specified indices from queue
-func removeFromQueue(queue *[]*plex.MediaItem, indices []int) {
-	if len(indices) == 0 {
-		return
-	}
-
-	// Deduplicate indices to avoid removing wrong items
-	seen := make(map[int]bool)
-	var uniqueIndices []int
-	for _, idx := range indices {
-		if !seen[idx] {
-			seen[idx] = true
-			uniqueIndices = append(uniqueIndices, idx)
-		}
-	}
-
-	// Sort indices in descending order to remove from end first
-	sort.Sort(sort.Reverse(sort.IntSlice(uniqueIndices)))
-
-	for _, idx := range uniqueIndices {
-		if idx >= 0 && idx < len(*queue) {
-			*queue = append((*queue)[:idx], (*queue)[idx+1:]...)
-		}
 	}
 }
 
@@ -936,9 +908,9 @@ func promptQueueActionManual(queueCount int) (string, error) {
 }
 
 // removeFromQueueManual - fallback for no-fzf queue item removal
-func removeFromQueueManual(queue *[]*plex.MediaItem) error {
+func removeFromQueueManual(q *queue.Queue) error {
 	fmt.Println(infoStyle.Render("\nSelect items to remove:"))
-	for i, item := range *queue {
+	for i, item := range q.Items {
 		fmt.Printf("  %d. %s\n", i+1, item.FormatMediaTitle())
 	}
 	fmt.Print("\nEnter item numbers to remove (comma-separated, e.g., 1,3,5): ")
@@ -955,14 +927,17 @@ func removeFromQueueManual(queue *[]*plex.MediaItem) error {
 		part = strings.TrimSpace(part)
 		var num int
 		if _, err := fmt.Sscanf(part, "%d", &num); err == nil {
-			if num >= 1 && num <= len(*queue) {
+			if num >= 1 && num <= q.Len() {
 				indices = append(indices, num-1) // Convert to 0-based index
 			}
 		}
 	}
 
 	if len(indices) > 0 {
-		removeFromQueue(queue, indices)
+		q.Remove(indices)
+		if err := q.Save(); err != nil {
+			return fmt.Errorf("failed to save queue: %w", err)
+		}
 		fmt.Println(successStyle.Render(fmt.Sprintf("Removed %d item(s) from queue", len(indices))))
 	}
 
