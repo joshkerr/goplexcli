@@ -25,6 +25,29 @@ func TestSelectQueueItemsForRemoval_FzfNotFound(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error for missing fzf, got nil")
 	}
+	expectedMsg := "fzf not found in PATH. Please install fzf or specify the path in config"
+	if err.Error() != expectedMsg {
+		t.Errorf("Expected error message %q, got %q", expectedMsg, err.Error())
+	}
+}
+
+func TestPluralizeItems(t *testing.T) {
+	tests := []struct {
+		count    int
+		expected string
+	}{
+		{0, "0 items"},
+		{1, "1 item"},
+		{2, "2 items"},
+		{10, "10 items"},
+	}
+
+	for _, tt := range tests {
+		result := pluralizeItems(tt.count)
+		if result != tt.expected {
+			t.Errorf("pluralizeItems(%d) = %q, expected %q", tt.count, result, tt.expected)
+		}
+	}
 }
 
 func TestIsAvailable(t *testing.T) {

@@ -178,9 +178,6 @@ func main() {
 
 	rootCmd.AddCommand(loginCmd, browseCmd, cacheCmd, configCmd, streamCmd, serverCmd, versionCmd)
 
-	// Show logo before executing any command
-	ui.Logo(version)
-
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(errorStyle.Render("Error: " + err.Error()))
 		os.Exit(1)
@@ -479,6 +476,9 @@ func selectMediaManual(media []plex.MediaItem) (*plex.MediaItem, error) {
 
 
 func runBrowse(cmd *cobra.Command, args []string) error {
+	// Show logo for interactive browse command
+	ui.Logo(version)
+
 	// Load config
 	cfg, err := config.Load()
 	if err != nil {
@@ -623,7 +623,7 @@ browseLoop:
 			return handleDownloadMultiple(cfg, selectedMediaItems)
 		case "queue":
 			addToQueue(&queue, selectedMediaItems)
-			fmt.Println(successStyle.Render(fmt.Sprintf("Added %d item(s) to queue. Queue now has %d items.", len(selectedMediaItems), len(queue))))
+			fmt.Println(successStyle.Render(fmt.Sprintf("Added %d item(s) to queue. Queue now has %s.", len(selectedMediaItems), pluralizeItems(len(queue)))))
 			continue browseLoop
 		case "stream":
 			if len(selectedMediaItems) > 1 {
@@ -828,6 +828,14 @@ func handleStream(cfg *config.Config, media *plex.MediaItem) error {
 	return nil
 }
 
+// pluralizeItems returns "1 item" or "N items" based on count
+func pluralizeItems(count int) string {
+	if count == 1 {
+		return "1 item"
+	}
+	return fmt.Sprintf("%d items", count)
+}
+
 // addToQueue appends items to queue, avoiding duplicates by Key
 func addToQueue(queue *[]*plex.MediaItem, items []*plex.MediaItem) {
 	existing := make(map[string]bool)
@@ -925,10 +933,20 @@ func removeFromQueue(queue *[]*plex.MediaItem, indices []int) {
 		return
 	}
 
-	// Sort indices in descending order to remove from end first
-	sort.Sort(sort.Reverse(sort.IntSlice(indices)))
-
+	// Deduplicate indices to avoid removing wrong items
+	seen := make(map[int]bool)
+	var uniqueIndices []int
 	for _, idx := range indices {
+		if !seen[idx] {
+			seen[idx] = true
+			uniqueIndices = append(uniqueIndices, idx)
+		}
+	}
+
+	// Sort indices in descending order to remove from end first
+	sort.Sort(sort.Reverse(sort.IntSlice(uniqueIndices)))
+
+	for _, idx := range uniqueIndices {
 		if idx >= 0 && idx < len(*queue) {
 			*queue = append((*queue)[:idx], (*queue)[idx+1:]...)
 		}
@@ -938,7 +956,7 @@ func removeFromQueue(queue *[]*plex.MediaItem, indices []int) {
 // promptQueueActionManual - fallback for no-fzf queue action selection
 func promptQueueActionManual(queueCount int) (string, error) {
 	fmt.Println(infoStyle.Render("\nQueue actions:"))
-	fmt.Printf("  1. Download All (%d items)\n", queueCount)
+	fmt.Printf("  1. Download All (%s)\n", pluralizeItems(queueCount))
 	fmt.Println("  2. Clear Queue")
 	fmt.Println("  3. Remove Items")
 	fmt.Println("  4. Back to Browse")
@@ -1003,7 +1021,7 @@ func selectMediaTypeManualWithQueue(queueCount int) (string, error) {
 
 	optionNum := 1
 	if queueCount > 0 {
-		fmt.Printf("  %d. View Queue (%d items)\n", optionNum, queueCount)
+		fmt.Printf("  %d. View Queue (%s)\n", optionNum, pluralizeItems(queueCount))
 		optionNum++
 	}
 	fmt.Printf("  %d. Movies\n", optionNum)
@@ -1049,7 +1067,7 @@ func selectMediaTypeManualWithQueue(queueCount int) (string, error) {
 func promptActionManualWithQueue(queueCount int) (string, error) {
 	queueLabel := "Add to Queue"
 	if queueCount > 0 {
-		queueLabel = fmt.Sprintf("Add to Queue (%d items)", queueCount)
+		queueLabel = fmt.Sprintf("Add to Queue (%s)", pluralizeItems(queueCount))
 	}
 
 	fmt.Println(infoStyle.Render("\nSelect action:"))

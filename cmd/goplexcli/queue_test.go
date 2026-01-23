@@ -252,6 +252,31 @@ func TestRemoveFromQueue_UnsortedIndices(t *testing.T) {
 	}
 }
 
+func TestRemoveFromQueue_DuplicateIndices(t *testing.T) {
+	// Test that duplicate indices don't cause incorrect removals
+	queue := []*plex.MediaItem{
+		{Key: "/library/1", Title: "Movie 1"},
+		{Key: "/library/2", Title: "Movie 2"},
+		{Key: "/library/3", Title: "Movie 3"},
+	}
+
+	// Duplicate index 1 - should only remove Movie 2 once, not Movie 2 and Movie 3
+	indices := []int{1, 1, 1}
+
+	removeFromQueue(&queue, indices)
+
+	if len(queue) != 2 {
+		t.Errorf("expected 2 items after removing duplicates, got %d", len(queue))
+	}
+
+	expectedKeys := []string{"/library/1", "/library/3"}
+	for i, key := range expectedKeys {
+		if queue[i].Key != key {
+			t.Errorf("expected key %s at %d, got %s", key, i, queue[i].Key)
+		}
+	}
+}
+
 func TestAddToQueue_PreservesOrder(t *testing.T) {
 	queue := []*plex.MediaItem{
 		{Key: "/library/1", Title: "First"},

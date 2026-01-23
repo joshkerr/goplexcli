@@ -378,11 +378,19 @@ func SelectMediaType(fzfPath string) (string, error) {
 	return strings.ToLower(selected), nil
 }
 
+// pluralizeItems returns "1 item" or "N items" based on count
+func pluralizeItems(count int) string {
+	if count == 1 {
+		return "1 item"
+	}
+	return fmt.Sprintf("%d items", count)
+}
+
 // PromptActionWithQueue asks the user what action to take, showing queue count
 func PromptActionWithQueue(fzfPath string, queueCount int) (string, error) {
 	queueLabel := "Add to Queue"
 	if queueCount > 0 {
-		queueLabel = fmt.Sprintf("Add to Queue (%d items)", queueCount)
+		queueLabel = fmt.Sprintf("Add to Queue (%s)", pluralizeItems(queueCount))
 	}
 
 	actions := []string{
@@ -411,7 +419,7 @@ func SelectMediaTypeWithQueue(fzfPath string, queueCount int) (string, error) {
 	var types []string
 
 	if queueCount > 0 {
-		types = append(types, fmt.Sprintf("View Queue (%d items)", queueCount))
+		types = append(types, fmt.Sprintf("View Queue (%s)", pluralizeItems(queueCount)))
 	}
 
 	types = append(types, "Movies", "TV Shows", "All")
@@ -432,7 +440,7 @@ func SelectMediaTypeWithQueue(fzfPath string, queueCount int) (string, error) {
 // PromptQueueAction shows queue management options
 func PromptQueueAction(fzfPath string, queueCount int) (string, error) {
 	actions := []string{
-		fmt.Sprintf("Download All (%d items)", queueCount),
+		fmt.Sprintf("Download All (%s)", pluralizeItems(queueCount)),
 		"Clear Queue",
 		"Remove Items",
 		"Back to Browse",
@@ -471,7 +479,7 @@ func SelectQueueItemsForRemoval(queue []*plex.MediaItem, fzfPath string) ([]int,
 
 	// Check if fzf is available
 	if _, err := exec.LookPath(fzfPath); err != nil {
-		return nil, fmt.Errorf("fzf not found in PATH")
+		return nil, fmt.Errorf("fzf not found in PATH. Please install fzf or specify the path in config")
 	}
 
 	// Create formatted items with index prefix
