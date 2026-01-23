@@ -369,13 +369,184 @@ func SelectMediaType(fzfPath string) (string, error) {
 		"TV Shows",
 		"All",
 	}
-	
+
 	selected, _, err := SelectWithFzf(types, "Select media type:", fzfPath)
 	if err != nil {
 		return "", err
 	}
-	
+
 	return strings.ToLower(selected), nil
+}
+
+// PluralizeItems returns "1 item" or "N items" based on count
+func PluralizeItems(count int) string {
+	if count == 1 {
+		return "1 item"
+	}
+	return fmt.Sprintf("%d items", count)
+}
+
+// PromptActionWithQueue asks the user what action to take, showing queue count
+func PromptActionWithQueue(fzfPath string, queueCount int) (string, error) {
+	queueLabel := "Add to Queue"
+	if queueCount > 0 {
+		queueLabel = fmt.Sprintf("Add to Queue (%s)", PluralizeItems(queueCount))
+	}
+
+	actions := []string{
+		"Watch",
+		"Download",
+		queueLabel,
+		"Stream",
+		"Cancel",
+	}
+
+	selected, _, err := SelectWithFzf(actions, "Select action:", fzfPath)
+	if err != nil {
+		return "", err
+	}
+
+	// Normalize "Add to Queue" selection
+	if strings.HasPrefix(selected, "Add to Queue") {
+		return "queue", nil
+	}
+
+	return strings.ToLower(selected), nil
+}
+
+// SelectMediaTypeWithQueue adds "View Queue" option when queue has items
+func SelectMediaTypeWithQueue(fzfPath string, queueCount int) (string, error) {
+	var types []string
+
+	if queueCount > 0 {
+		types = append(types, fmt.Sprintf("View Queue (%s)", PluralizeItems(queueCount)))
+	}
+
+	types = append(types, "Movies", "TV Shows", "All")
+
+	selected, _, err := SelectWithFzf(types, "Select media type:", fzfPath)
+	if err != nil {
+		return "", err
+	}
+
+	// Check if user selected queue
+	if strings.HasPrefix(selected, "View Queue") {
+		return "queue", nil
+	}
+
+	return strings.ToLower(selected), nil
+}
+
+// PromptQueueAction shows queue management options
+func PromptQueueAction(fzfPath string, queueCount int) (string, error) {
+	actions := []string{
+		fmt.Sprintf("Download All (%s)", PluralizeItems(queueCount)),
+		"Clear Queue",
+		"Remove Items",
+		"Back to Browse",
+	}
+
+	selected, _, err := SelectWithFzf(actions, "Queue action:", fzfPath)
+	if err != nil {
+		return "", err
+	}
+
+	if strings.HasPrefix(selected, "Download All") {
+		return "download", nil
+	}
+
+	switch selected {
+	case "Clear Queue":
+		return "clear", nil
+	case "Remove Items":
+		return "remove", nil
+	case "Back to Browse":
+		return "back", nil
+	default:
+		return "back", nil
+	}
+}
+
+// SelectQueueItemsForRemoval shows queue items for multi-select removal
+func SelectQueueItemsForRemoval(queue []*plex.MediaItem, fzfPath string) ([]int, error) {
+	if len(queue) == 0 {
+		return nil, fmt.Errorf("queue is empty")
+	}
+
+	if fzfPath == "" {
+		fzfPath = "fzf"
+	}
+
+	// Check if fzf is available
+	if _, err := exec.LookPath(fzfPath); err != nil {
+		return nil, fmt.Errorf("fzf not found in PATH. Please install fzf or specify the path in config")
+	}
+
+	// Create formatted items with index prefix
+	var items []string
+	for i, item := range queue {
+		items = append(items, fmt.Sprintf("%d\t%s", i, item.FormatMediaTitle()))
+	}
+	input := strings.Join(items, "\n")
+
+	// Build fzf command with multi-select
+	args := []string{
+		"--multi",
+		"--height=90%",
+		"--reverse",
+		"--border",
+		"--delimiter=\t",
+		"--with-nth=2..",
+		"--prompt=Select items to remove (TAB for multi-select): ",
+	}
+
+	cmd := exec.Command(fzfPath, args...)
+	cmd.Stdin = strings.NewReader(input)
+	cmd.Stderr = os.Stderr
+
+	var outBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			if exitErr.ExitCode() == 130 {
+				return nil, fmt.Errorf("cancelled by user")
+			}
+		}
+		return nil, fmt.Errorf("fzf failed: %w", err)
+	}
+
+	output := strings.TrimSpace(outBuf.String())
+	if output == "" {
+		return nil, fmt.Errorf("no selection made")
+	}
+
+	// Parse selected indices
+	lines := strings.Split(output, "\n")
+	var indices []int
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) == 0 {
+			continue
+		}
+
+		var index int
+		if _, err := fmt.Sscanf(parts[0], "%d", &index); err != nil {
+			continue
+		}
+
+		if index >= 0 && index < len(queue) {
+			indices = append(indices, index)
+		}
+	}
+
+	return indices, nil
 }
 
 // SelectMedia presents media items in fzf and returns the selected item
