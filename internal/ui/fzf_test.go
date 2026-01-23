@@ -43,9 +43,9 @@ func TestPluralizeItems(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result := pluralizeItems(tt.count)
+		result := PluralizeItems(tt.count)
 		if result != tt.expected {
-			t.Errorf("pluralizeItems(%d) = %q, expected %q", tt.count, result, tt.expected)
+			t.Errorf("PluralizeItems(%d) = %q, expected %q", tt.count, result, tt.expected)
 		}
 	}
 }

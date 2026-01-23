@@ -378,8 +378,8 @@ func SelectMediaType(fzfPath string) (string, error) {
 	return strings.ToLower(selected), nil
 }
 
-// pluralizeItems returns "1 item" or "N items" based on count
-func pluralizeItems(count int) string {
+// PluralizeItems returns "1 item" or "N items" based on count
+func PluralizeItems(count int) string {
 	if count == 1 {
 		return "1 item"
 	}
@@ -390,7 +390,7 @@ func pluralizeItems(count int) string {
 func PromptActionWithQueue(fzfPath string, queueCount int) (string, error) {
 	queueLabel := "Add to Queue"
 	if queueCount > 0 {
-		queueLabel = fmt.Sprintf("Add to Queue (%s)", pluralizeItems(queueCount))
+		queueLabel = fmt.Sprintf("Add to Queue (%s)", PluralizeItems(queueCount))
 	}
 
 	actions := []string{
@@ -419,7 +419,7 @@ func SelectMediaTypeWithQueue(fzfPath string, queueCount int) (string, error) {
 	var types []string
 
 	if queueCount > 0 {
-		types = append(types, fmt.Sprintf("View Queue (%s)", pluralizeItems(queueCount)))
+		types = append(types, fmt.Sprintf("View Queue (%s)", PluralizeItems(queueCount)))
 	}
 
 	types = append(types, "Movies", "TV Shows", "All")
@@ -440,7 +440,7 @@ func SelectMediaTypeWithQueue(fzfPath string, queueCount int) (string, error) {
 // PromptQueueAction shows queue management options
 func PromptQueueAction(fzfPath string, queueCount int) (string, error) {
 	actions := []string{
-		fmt.Sprintf("Download All (%s)", pluralizeItems(queueCount)),
+		fmt.Sprintf("Download All (%s)", PluralizeItems(queueCount)),
 		"Clear Queue",
 		"Remove Items",
 		"Back to Browse",
