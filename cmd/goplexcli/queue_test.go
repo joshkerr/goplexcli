@@ -12,6 +12,7 @@ func TestAddToQueue(t *testing.T) {
 		existingQueue []*plex.MediaItem
 		newItems      []*plex.MediaItem
 		expectedLen   int
+		expectedAdded int
 		expectedKeys  []string
 	}{
 		{
@@ -21,8 +22,9 @@ func TestAddToQueue(t *testing.T) {
 				{Key: "/library/1", Title: "Movie 1"},
 				{Key: "/library/2", Title: "Movie 2"},
 			},
-			expectedLen:  2,
-			expectedKeys: []string{"/library/1", "/library/2"},
+			expectedLen:   2,
+			expectedAdded: 2,
+			expectedKeys:  []string{"/library/1", "/library/2"},
 		},
 		{
 			name: "add to existing queue",
@@ -32,8 +34,9 @@ func TestAddToQueue(t *testing.T) {
 			newItems: []*plex.MediaItem{
 				{Key: "/library/2", Title: "Movie 2"},
 			},
-			expectedLen:  2,
-			expectedKeys: []string{"/library/1", "/library/2"},
+			expectedLen:   2,
+			expectedAdded: 1,
+			expectedKeys:  []string{"/library/1", "/library/2"},
 		},
 		{
 			name: "avoid duplicates",
@@ -44,17 +47,19 @@ func TestAddToQueue(t *testing.T) {
 				{Key: "/library/1", Title: "Movie 1 Duplicate"},
 				{Key: "/library/2", Title: "Movie 2"},
 			},
-			expectedLen:  2,
-			expectedKeys: []string{"/library/1", "/library/2"},
+			expectedLen:   2,
+			expectedAdded: 1,
+			expectedKeys:  []string{"/library/1", "/library/2"},
 		},
 		{
 			name: "add empty items",
 			existingQueue: []*plex.MediaItem{
 				{Key: "/library/1", Title: "Movie 1"},
 			},
-			newItems:     []*plex.MediaItem{},
-			expectedLen:  1,
-			expectedKeys: []string{"/library/1"},
+			newItems:      []*plex.MediaItem{},
+			expectedLen:   1,
+			expectedAdded: 0,
+			expectedKeys:  []string{"/library/1"},
 		},
 		{
 			name: "all duplicates",
@@ -66,8 +71,9 @@ func TestAddToQueue(t *testing.T) {
 				{Key: "/library/1", Title: "Movie 1"},
 				{Key: "/library/2", Title: "Movie 2"},
 			},
-			expectedLen:  2,
-			expectedKeys: []string{"/library/1", "/library/2"},
+			expectedLen:   2,
+			expectedAdded: 0,
+			expectedKeys:  []string{"/library/1", "/library/2"},
 		},
 	}
 
@@ -76,7 +82,11 @@ func TestAddToQueue(t *testing.T) {
 			queue := make([]*plex.MediaItem, len(tt.existingQueue))
 			copy(queue, tt.existingQueue)
 
-			addToQueue(&queue, tt.newItems)
+			added := addToQueue(&queue, tt.newItems)
+
+			if added != tt.expectedAdded {
+				t.Errorf("expected %d items added, got %d", tt.expectedAdded, added)
+			}
 
 			if len(queue) != tt.expectedLen {
 				t.Errorf("expected queue length %d, got %d", tt.expectedLen, len(queue))
@@ -287,7 +297,11 @@ func TestAddToQueue_PreservesOrder(t *testing.T) {
 		{Key: "/library/3", Title: "Third"},
 	}
 
-	addToQueue(&queue, newItems)
+	added := addToQueue(&queue, newItems)
+
+	if added != 2 {
+		t.Errorf("expected 2 items added, got %d", added)
+	}
 
 	if len(queue) != 3 {
 		t.Fatalf("expected 3 items, got %d", len(queue))

@@ -575,8 +575,13 @@ browseLoop:
 		case "download":
 			return handleDownloadMultiple(cfg, selectedMediaItems)
 		case "queue":
-			addToQueue(&queue, selectedMediaItems)
-			fmt.Println(successStyle.Render(fmt.Sprintf("Added %d item(s) to queue. Queue now has %s.", len(selectedMediaItems), ui.PluralizeItems(len(queue)))))
+			added := addToQueue(&queue, selectedMediaItems)
+			skipped := len(selectedMediaItems) - added
+			if skipped > 0 {
+				fmt.Println(successStyle.Render(fmt.Sprintf("Added %d item(s) to queue (%d duplicate(s) skipped). Queue now has %s.", added, skipped, ui.PluralizeItems(len(queue)))))
+			} else {
+				fmt.Println(successStyle.Render(fmt.Sprintf("Added %d item(s) to queue. Queue now has %s.", added, ui.PluralizeItems(len(queue)))))
+			}
 			continue browseLoop
 		case "stream":
 			if len(selectedMediaItems) > 1 {
@@ -782,18 +787,22 @@ func handleStream(cfg *config.Config, media *plex.MediaItem) error {
 }
 
 // addToQueue appends items to queue, avoiding duplicates by Key
-func addToQueue(queue *[]*plex.MediaItem, items []*plex.MediaItem) {
+// Returns the number of items actually added (excluding duplicates)
+func addToQueue(queue *[]*plex.MediaItem, items []*plex.MediaItem) int {
 	existing := make(map[string]bool)
 	for _, item := range *queue {
 		existing[item.Key] = true
 	}
 
+	added := 0
 	for _, item := range items {
 		if !existing[item.Key] {
 			*queue = append(*queue, item)
 			existing[item.Key] = true
+			added++
 		}
 	}
+	return added
 }
 
 // handleQueueView displays queue and handles queue actions
