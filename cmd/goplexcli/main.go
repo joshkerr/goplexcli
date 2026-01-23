@@ -427,30 +427,6 @@ func selectConnection(server plex.Server) (string, error) {
 	return server.Connections[selectedIdx], nil
 }
 
-func selectMediaTypeManual() (string, error) {
-	fmt.Println(infoStyle.Render("\nSelect media type:"))
-	fmt.Println("  1. Movies")
-	fmt.Println("  2. TV Shows")
-	fmt.Println("  3. All")
-	fmt.Print("\nChoice (1-3): ")
-	
-	var choice int
-	if _, err := fmt.Scanln(&choice); err != nil {
-		return "", fmt.Errorf("failed to read selection: %w", err)
-	}
-	
-	switch choice {
-	case 1:
-		return "movies", nil
-	case 2:
-		return "tv shows", nil
-	case 3:
-		return "all", nil
-	default:
-		return "", fmt.Errorf("invalid selection")
-	}
-}
-
 func selectMediaManual(media []plex.MediaItem) (*plex.MediaItem, error) {
 	fmt.Println(infoStyle.Render("\nAvailable media:"))
 	for i, item := range media {
