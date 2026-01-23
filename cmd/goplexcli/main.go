@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -502,108 +503,138 @@ func runBrowse(cmd *cobra.Command, args []string) error {
 	fmt.Println(infoStyle.Render(fmt.Sprintf("Loaded %d media items from cache", len(mediaCache.Media))))
 	fmt.Println(infoStyle.Render(fmt.Sprintf("Last updated: %s", mediaCache.LastUpdated.Format(time.RFC822))))
 
-	// Ask user to select media type using fzf if available
-	var mediaType string
-	if ui.IsAvailable(cfg.FzfPath) {
-		var err error
-		mediaType, err = ui.SelectMediaType(cfg.FzfPath)
-		if err != nil {
-			if err.Error() == "cancelled by user" {
+	// Initialize queue
+	var queue []*plex.MediaItem
+
+browseLoop:
+	for {
+		// Ask user to select media type using fzf if available
+		var mediaType string
+		if ui.IsAvailable(cfg.FzfPath) {
+			var err error
+			mediaType, err = ui.SelectMediaTypeWithQueue(cfg.FzfPath, len(queue))
+			if err != nil {
+				if err.Error() == "cancelled by user" {
+					return nil
+				}
+				return fmt.Errorf("media type selection failed: %w", err)
+			}
+		} else {
+			// Fallback to manual selection
+			var err error
+			mediaType, err = selectMediaTypeManualWithQueue(len(queue))
+			if err != nil {
+				return err
+			}
+		}
+
+		// Handle queue view
+		if mediaType == "queue" {
+			result, err := handleQueueView(cfg, &queue)
+			if err != nil {
+				return err
+			}
+			if result == "done" {
 				return nil
 			}
-			return fmt.Errorf("media type selection failed: %w", err)
+			continue browseLoop
 		}
-	} else {
-		// Fallback to manual selection
-		var err error
-		mediaType, err = selectMediaTypeManual()
-		if err != nil {
-			return err
-		}
-	}
 
-	// Filter media by type
-	var filteredMedia []plex.MediaItem
-	switch mediaType {
-	case "movies":
-		for _, item := range mediaCache.Media {
-			if item.Type == "movie" {
-				filteredMedia = append(filteredMedia, item)
+		// Filter media by type
+		var filteredMedia []plex.MediaItem
+		switch mediaType {
+		case "movies":
+			for _, item := range mediaCache.Media {
+				if item.Type == "movie" {
+					filteredMedia = append(filteredMedia, item)
+				}
+			}
+		case "tv shows":
+			for _, item := range mediaCache.Media {
+				if item.Type == "episode" {
+					filteredMedia = append(filteredMedia, item)
+				}
+			}
+		case "all":
+			filteredMedia = mediaCache.Media
+		default:
+			filteredMedia = mediaCache.Media
+		}
+
+		if len(filteredMedia) == 0 {
+			fmt.Println(warningStyle.Render("No media found for selected type."))
+			continue browseLoop
+		}
+
+		fmt.Println(infoStyle.Render(fmt.Sprintf("\nBrowsing %d items...\n", len(filteredMedia))))
+
+		// Use fzf with preview to select media if fzf available, otherwise use manual selection
+		var selectedMediaItems []*plex.MediaItem
+		if ui.IsAvailable(cfg.FzfPath) {
+			selectedIndices, err := ui.SelectMediaWithPreview(filteredMedia, "Select media (TAB for multi-select):", cfg.FzfPath, cfg.PlexURL, cfg.PlexToken)
+			if err != nil {
+				if err.Error() == "cancelled by user" {
+					return nil
+				}
+				return fmt.Errorf("media selection failed: %w", err)
+			}
+
+			// Build list of selected media items
+			for _, index := range selectedIndices {
+				if index >= 0 && index < len(filteredMedia) {
+					selectedMediaItems = append(selectedMediaItems, &filteredMedia[index])
+				}
+			}
+		} else {
+			// Fallback to manual selection (no fzf required)
+			var err error
+			selectedMedia, err := selectMediaManual(filteredMedia)
+			if err != nil {
+				return err
+			}
+			selectedMediaItems = []*plex.MediaItem{selectedMedia}
+		}
+
+		if len(selectedMediaItems) == 0 {
+			return fmt.Errorf("no media selected")
+		}
+
+		// Ask what to do
+		var action string
+		if ui.IsAvailable(cfg.FzfPath) {
+			action, err = ui.PromptActionWithQueue(cfg.FzfPath, len(queue))
+			if err != nil {
+				if err.Error() == "cancelled by user" {
+					return nil
+				}
+				return err
+			}
+		} else {
+			action, err = promptActionManualWithQueue(len(queue))
+			if err != nil {
+				return err
 			}
 		}
-	case "tv shows":
-		for _, item := range mediaCache.Media {
-			if item.Type == "episode" {
-				filteredMedia = append(filteredMedia, item)
+
+		switch action {
+		case "watch":
+			return handleWatchMultiple(cfg, selectedMediaItems)
+		case "download":
+			return handleDownloadMultiple(cfg, selectedMediaItems)
+		case "queue":
+			addToQueue(&queue, selectedMediaItems)
+			fmt.Println(successStyle.Render(fmt.Sprintf("Added %d item(s) to queue. Queue now has %d items.", len(selectedMediaItems), len(queue))))
+			continue browseLoop
+		case "stream":
+			if len(selectedMediaItems) > 1 {
+				fmt.Println(warningStyle.Render("Note: Stream only supports single selection, using first item"))
 			}
-		}
-	case "all":
-		filteredMedia = mediaCache.Media
-	default:
-		filteredMedia = mediaCache.Media
-	}
-
-	if len(filteredMedia) == 0 {
-		fmt.Println(warningStyle.Render("No media found for selected type."))
-		return nil
-	}
-
-	fmt.Println(infoStyle.Render(fmt.Sprintf("\nBrowsing %d items...\n", len(filteredMedia))))
-
-	// Use fzf with preview to select media if fzf available, otherwise use manual selection
-	var selectedMediaItems []*plex.MediaItem
-	if ui.IsAvailable(cfg.FzfPath) {
-		selectedIndices, err := ui.SelectMediaWithPreview(filteredMedia, "Select media (TAB for multi-select):", cfg.FzfPath, cfg.PlexURL, cfg.PlexToken)
-		if err != nil {
-			if err.Error() == "cancelled by user" {
-				return nil
-			}
-			return fmt.Errorf("media selection failed: %w", err)
-		}
-		
-		// Build list of selected media items
-		for _, index := range selectedIndices {
-			if index >= 0 && index < len(filteredMedia) {
-				selectedMediaItems = append(selectedMediaItems, &filteredMedia[index])
-			}
-		}
-	} else {
-		// Fallback to manual selection (no fzf required)
-		var err error
-		selectedMedia, err := selectMediaManual(filteredMedia)
-		if err != nil {
-			return err
-		}
-		selectedMediaItems = []*plex.MediaItem{selectedMedia}
-	}
-
-	if len(selectedMediaItems) == 0 {
-		return fmt.Errorf("no media selected")
-	}
-
-	// Ask what to do
-	action, err := ui.PromptAction(cfg.FzfPath)
-	if err != nil {
-		if err.Error() == "cancelled by user" {
+			return handleStream(cfg, selectedMediaItems[0])
+		case "cancel":
+			return nil
+		default:
 			return nil
 		}
-		return err
-	}
-
-	switch action {
-	case "watch":
-		return handleWatchMultiple(cfg, selectedMediaItems)
-	case "download":
-		return handleDownloadMultiple(cfg, selectedMediaItems)
-	case "stream":
-		if len(selectedMediaItems) > 1 {
-			fmt.Println(warningStyle.Render("Note: Stream only supports single selection, using first item"))
-		}
-		return handleStream(cfg, selectedMediaItems[0])
-	case "cancel":
-		return nil
-	default:
-		return nil
 	}
 }
 
@@ -795,6 +826,259 @@ func handleStream(cfg *config.Config, media *plex.MediaItem) error {
 
 	fmt.Println(successStyle.Render("✓ Stream server stopped"))
 	return nil
+}
+
+// addToQueue appends items to queue, avoiding duplicates by Key
+func addToQueue(queue *[]*plex.MediaItem, items []*plex.MediaItem) {
+	existing := make(map[string]bool)
+	for _, item := range *queue {
+		existing[item.Key] = true
+	}
+
+	for _, item := range items {
+		if !existing[item.Key] {
+			*queue = append(*queue, item)
+			existing[item.Key] = true
+		}
+	}
+}
+
+// handleQueueView displays queue and handles queue actions
+// Returns "done" (after download), "back" (continue browsing), or error
+func handleQueueView(cfg *config.Config, queue *[]*plex.MediaItem) (string, error) {
+	if len(*queue) == 0 {
+		fmt.Println(warningStyle.Render("Queue is empty"))
+		return "back", nil
+	}
+
+	fmt.Println(titleStyle.Render("Download Queue"))
+	fmt.Println(infoStyle.Render(fmt.Sprintf("%d item(s) in queue:\n", len(*queue))))
+
+	for i, item := range *queue {
+		fmt.Printf("  %d. %s\n", i+1, item.FormatMediaTitle())
+	}
+	fmt.Println()
+
+	// Prompt for queue action
+	var action string
+	var err error
+
+	if ui.IsAvailable(cfg.FzfPath) {
+		action, err = ui.PromptQueueAction(cfg.FzfPath, len(*queue))
+		if err != nil {
+			if err.Error() == "cancelled by user" {
+				return "back", nil
+			}
+			return "", err
+		}
+	} else {
+		action, err = promptQueueActionManual(len(*queue))
+		if err != nil {
+			return "", err
+		}
+	}
+
+	switch action {
+	case "download":
+		err := handleDownloadMultiple(cfg, *queue)
+		if err != nil {
+			return "", err
+		}
+		*queue = nil // Clear queue after download
+		return "done", nil
+
+	case "clear":
+		*queue = nil
+		fmt.Println(successStyle.Render("Queue cleared"))
+		return "back", nil
+
+	case "remove":
+		if ui.IsAvailable(cfg.FzfPath) {
+			indices, err := ui.SelectQueueItemsForRemoval(*queue, cfg.FzfPath)
+			if err != nil {
+				if err.Error() == "cancelled by user" {
+					return "back", nil
+				}
+				return "", err
+			}
+			removeFromQueue(queue, indices)
+			fmt.Println(successStyle.Render(fmt.Sprintf("Removed %d item(s) from queue", len(indices))))
+		} else {
+			err := removeFromQueueManual(queue)
+			if err != nil {
+				return "", err
+			}
+		}
+		return "back", nil
+
+	case "back":
+		return "back", nil
+
+	default:
+		return "back", nil
+	}
+}
+
+// removeFromQueue removes items at specified indices from queue
+func removeFromQueue(queue *[]*plex.MediaItem, indices []int) {
+	if len(indices) == 0 {
+		return
+	}
+
+	// Sort indices in descending order to remove from end first
+	sort.Sort(sort.Reverse(sort.IntSlice(indices)))
+
+	for _, idx := range indices {
+		if idx >= 0 && idx < len(*queue) {
+			*queue = append((*queue)[:idx], (*queue)[idx+1:]...)
+		}
+	}
+}
+
+// promptQueueActionManual - fallback for no-fzf queue action selection
+func promptQueueActionManual(queueCount int) (string, error) {
+	fmt.Println(infoStyle.Render("\nQueue actions:"))
+	fmt.Printf("  1. Download All (%d items)\n", queueCount)
+	fmt.Println("  2. Clear Queue")
+	fmt.Println("  3. Remove Items")
+	fmt.Println("  4. Back to Browse")
+	fmt.Print("\nChoice (1-4): ")
+
+	var choice int
+	if _, err := fmt.Scanln(&choice); err != nil {
+		return "", fmt.Errorf("failed to read selection: %w", err)
+	}
+
+	switch choice {
+	case 1:
+		return "download", nil
+	case 2:
+		return "clear", nil
+	case 3:
+		return "remove", nil
+	case 4:
+		return "back", nil
+	default:
+		return "back", nil
+	}
+}
+
+// removeFromQueueManual - fallback for no-fzf queue item removal
+func removeFromQueueManual(queue *[]*plex.MediaItem) error {
+	fmt.Println(infoStyle.Render("\nSelect items to remove:"))
+	for i, item := range *queue {
+		fmt.Printf("  %d. %s\n", i+1, item.FormatMediaTitle())
+	}
+	fmt.Print("\nEnter item numbers to remove (comma-separated, e.g., 1,3,5): ")
+
+	var input string
+	if _, err := fmt.Scanln(&input); err != nil {
+		return fmt.Errorf("failed to read selection: %w", err)
+	}
+
+	// Parse comma-separated indices
+	parts := strings.Split(input, ",")
+	var indices []int
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		var num int
+		if _, err := fmt.Sscanf(part, "%d", &num); err == nil {
+			if num >= 1 && num <= len(*queue) {
+				indices = append(indices, num-1) // Convert to 0-based index
+			}
+		}
+	}
+
+	if len(indices) > 0 {
+		removeFromQueue(queue, indices)
+		fmt.Println(successStyle.Render(fmt.Sprintf("Removed %d item(s) from queue", len(indices))))
+	}
+
+	return nil
+}
+
+// selectMediaTypeManualWithQueue - fallback for no-fzf with queue option
+func selectMediaTypeManualWithQueue(queueCount int) (string, error) {
+	fmt.Println(infoStyle.Render("\nSelect media type:"))
+
+	optionNum := 1
+	if queueCount > 0 {
+		fmt.Printf("  %d. View Queue (%d items)\n", optionNum, queueCount)
+		optionNum++
+	}
+	fmt.Printf("  %d. Movies\n", optionNum)
+	fmt.Printf("  %d. TV Shows\n", optionNum+1)
+	fmt.Printf("  %d. All\n", optionNum+2)
+
+	maxChoice := optionNum + 2
+	fmt.Printf("\nChoice (1-%d): ", maxChoice)
+
+	var choice int
+	if _, err := fmt.Scanln(&choice); err != nil {
+		return "", fmt.Errorf("failed to read selection: %w", err)
+	}
+
+	if queueCount > 0 {
+		switch choice {
+		case 1:
+			return "queue", nil
+		case 2:
+			return "movies", nil
+		case 3:
+			return "tv shows", nil
+		case 4:
+			return "all", nil
+		default:
+			return "", fmt.Errorf("invalid selection")
+		}
+	} else {
+		switch choice {
+		case 1:
+			return "movies", nil
+		case 2:
+			return "tv shows", nil
+		case 3:
+			return "all", nil
+		default:
+			return "", fmt.Errorf("invalid selection")
+		}
+	}
+}
+
+// promptActionManualWithQueue - fallback for no-fzf action selection with queue
+func promptActionManualWithQueue(queueCount int) (string, error) {
+	queueLabel := "Add to Queue"
+	if queueCount > 0 {
+		queueLabel = fmt.Sprintf("Add to Queue (%d items)", queueCount)
+	}
+
+	fmt.Println(infoStyle.Render("\nSelect action:"))
+	fmt.Println("  1. Watch")
+	fmt.Println("  2. Download")
+	fmt.Printf("  3. %s\n", queueLabel)
+	fmt.Println("  4. Stream")
+	fmt.Println("  5. Cancel")
+	fmt.Print("\nChoice (1-5): ")
+
+	var choice int
+	if _, err := fmt.Scanln(&choice); err != nil {
+		return "", fmt.Errorf("failed to read selection: %w", err)
+	}
+
+	switch choice {
+	case 1:
+		return "watch", nil
+	case 2:
+		return "download", nil
+	case 3:
+		return "queue", nil
+	case 4:
+		return "stream", nil
+	case 5:
+		return "cancel", nil
+	default:
+		return "cancel", nil
+	}
 }
 
 func runCacheUpdate(cmd *cobra.Command, args []string) error {
