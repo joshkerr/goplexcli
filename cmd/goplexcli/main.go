@@ -6,7 +6,6 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
@@ -25,30 +24,8 @@ import (
 )
 
 // version is set at build time via ldflags: -X main.version=$(VERSION)
-// If not set during build, falls back to VERSION file
+// For development without ldflags, falls back to "dev"
 var version = "dev"
-
-func init() {
-	// If version wasn't set at build time, try to read from VERSION file
-	if version == "dev" {
-		// Try current directory first (development)
-		if data, err := os.ReadFile("VERSION"); err == nil {
-			if v := strings.TrimSpace(string(data)); v != "" {
-				version = v
-				return
-			}
-		}
-		// Try relative to executable (installed binary)
-		if exe, err := os.Executable(); err == nil {
-			versionPath := filepath.Join(filepath.Dir(exe), "VERSION")
-			if data, err := os.ReadFile(versionPath); err == nil {
-				if v := strings.TrimSpace(string(data)); v != "" {
-					version = v
-				}
-			}
-		}
-	}
-}
 
 var (
 	// Styles
