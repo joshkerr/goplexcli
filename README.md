@@ -6,6 +6,7 @@ A powerful, fast, and elegant command-line interface for browsing and streaming 
 
 - **Browse Media**: Quickly browse your entire Plex library using fzf's fuzzy finder
 - **Multi-Select**: Select multiple items with TAB for batch downloads or sequential playback
+- **Download Queue**: Add items to a persistent queue for batch downloads later
 - **Rich Previews**: View detailed metadata in the preview window
 - **Stream with MPV**: Watch movies and TV shows directly with MPV player
 - **Download with Rclone**: Download media files to your local system with beautiful progress bars
@@ -124,7 +125,7 @@ goplexcli browse
   - Plot summary
   - File path
 - Press **Enter** to confirm selection
-- Choose **Watch** to stream locally (creates playlist if multiple items), **Download** to save all, or **Stream** to publish for remote playback
+- Choose **Watch** to stream locally (creates playlist if multiple items), **Download** to save all, **Add to Queue** to save for later, or **Stream** to publish for remote playback
 
 **Multi-Select Examples:**
 ```bash
@@ -143,6 +144,28 @@ goplexcli browse
 # Press Enter
 # Choose "Download" - downloads all selected files
 ```
+
+**Using the Download Queue:**
+
+The queue lets you collect items across multiple browsing sessions and download them all at once:
+
+```bash
+# Add items to the queue
+goplexcli browse
+# Select media, press Enter
+# Choose "Add to Queue"
+
+# Later, view and download the queue
+goplexcli browse
+# Select "View Queue" from the media type menu
+# Choose "Download All" to download everything in the queue
+```
+
+Queue features:
+- **Persistent**: Queue survives between sessions
+- **Concurrent-safe**: Multiple instances can safely add to the queue while another downloads
+- **Deduplication**: Same item won't be added twice
+- **Manage items**: Remove individual items or clear the entire queue
 
 ### `goplexcli stream`
 
@@ -409,6 +432,8 @@ goplexcli/
 │   │   └── player.go        # MPV player integration
 │   ├── plex/
 │   │   └── client.go        # Plex API client
+│   ├── queue/
+│   │   └── queue.go         # Persistent download queue
 │   ├── stream/
 │   │   └── server.go        # Stream server and mDNS discovery
 │   └── ui/
@@ -427,6 +452,7 @@ goplexcli/
 - [charmbracelet/bubbletea](https://github.com/charmbracelet/bubbletea) - TUI framework
 - [spf13/cobra](https://github.com/spf13/cobra) - CLI framework
 - [joshkerr/rclone-golib](https://github.com/joshkerr/rclone-golib) - Rclone integration with progress bars
+- [gofrs/flock](https://github.com/gofrs/flock) - Cross-platform file locking
 - [golang.org/x/term](https://golang.org/x/term) - Secure terminal input
 
 **External Tools:**
