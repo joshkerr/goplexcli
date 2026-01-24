@@ -833,12 +833,22 @@ func handleQueueView(cfg *config.Config, q *queue.Queue) (string, error) {
 
 	switch action {
 	case "download":
+		// Capture keys of items being downloaded before starting
+		// This allows us to remove only these items after download,
+		// preserving any new items added by other instances during download
+		keysToRemove := make([]string, len(q.Items))
+		for i, item := range q.Items {
+			keysToRemove[i] = item.Key
+		}
+
 		err := handleDownloadMultiple(cfg, q.Items)
 		if err != nil {
 			return "", err
 		}
-		if err := q.Clear(); err != nil {
-			return "", fmt.Errorf("failed to clear queue: %w", err)
+
+		// Remove only the downloaded items (preserves items added during download)
+		if err := q.RemoveByKeys(keysToRemove); err != nil {
+			return "", fmt.Errorf("failed to update queue: %w", err)
 		}
 		return "done", nil
 

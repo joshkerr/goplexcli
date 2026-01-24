@@ -1,13 +1,24 @@
 package queue
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/joshkerr/goplexcli/internal/config"
 	"github.com/joshkerr/goplexcli/internal/plex"
+)
+
+const (
+	// lockTimeout is the maximum time to wait for acquiring a lock.
+	// Kept short (5s) so users don't wait too long if another instance crashes while holding the lock.
+	lockTimeout = 5 * time.Second
+	// lockRetryInterval is how often to retry acquiring a lock
+	lockRetryInterval = 100 * time.Millisecond
 )
 
 // Queue represents a persistent download queue
@@ -16,81 +27,175 @@ type Queue struct {
 	LastUpdated time.Time         `json:"last_updated"`
 }
 
+// testQueueDir is used to override the queue directory in tests.
+// When non-empty, it's used instead of config.GetCacheDir().
+var testQueueDir string
+
 // GetQueuePath returns the path to the queue file
 func GetQueuePath() (string, error) {
-	cacheDir, err := config.GetCacheDir()
+	cacheDir, err := getCacheDir()
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(cacheDir, "queue.json"), nil
 }
 
-// Load reads the queue from disk
-func Load() (*Queue, error) {
-	queuePath, err := GetQueuePath()
+// GetLockPath returns the path to the queue lock file
+func GetLockPath() (string, error) {
+	cacheDir, err := getCacheDir()
 	if err != nil {
-		return nil, err
+		return "", err
+	}
+	return filepath.Join(cacheDir, "queue.lock"), nil
+}
+
+// getCacheDir returns the cache directory, using testQueueDir if set (for testing)
+func getCacheDir() (string, error) {
+	if testQueueDir != "" {
+		return testQueueDir, nil
+	}
+	return config.GetCacheDir()
+}
+
+// withLock executes a function while holding a lock on the queue.
+// If exclusive is true, acquires an exclusive (write) lock; otherwise acquires a shared (read) lock.
+func withLock(exclusive bool, fn func() error) error {
+	lockPath, err := GetLockPath()
+	if err != nil {
+		return fmt.Errorf("failed to acquire queue lock: %w", err)
 	}
 
-	data, err := os.ReadFile(queuePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return &Queue{Items: []*plex.MediaItem{}, LastUpdated: time.Time{}}, nil
+	// For exclusive locks, ensure the cache directory exists (needed for write operations)
+	if exclusive {
+		cacheDir, err := getCacheDir()
+		if err != nil {
+			return fmt.Errorf("failed to acquire queue lock: %w", err)
 		}
-		return nil, err
+		if err := os.MkdirAll(cacheDir, 0755); err != nil {
+			return fmt.Errorf("failed to acquire queue lock: %w", err)
+		}
 	}
 
-	var q Queue
-	if err := json.Unmarshal(data, &q); err != nil {
-		return nil, err
-	}
+	fileLock := flock.New(lockPath)
+	ctx, cancel := context.WithTimeout(context.Background(), lockTimeout)
+	defer cancel()
 
-	return &q, nil
+	var locked bool
+	if exclusive {
+		locked, err = fileLock.TryLockContext(ctx, lockRetryInterval)
+	} else {
+		locked, err = fileLock.TryRLockContext(ctx, lockRetryInterval)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to acquire queue lock: %w", err)
+	}
+	if !locked {
+		return fmt.Errorf("failed to acquire queue lock within %v (another instance may be using the queue)", lockTimeout)
+	}
+	defer func() {
+		_ = fileLock.Unlock() // Error intentionally ignored - lock released on process exit regardless
+	}()
+
+	return fn()
 }
 
-// Save writes the queue to disk
+// withExclusiveLock executes a function while holding an exclusive lock on the queue
+func withExclusiveLock(fn func() error) error {
+	return withLock(true, fn)
+}
+
+// withSharedLock executes a function while holding a shared (read) lock on the queue
+func withSharedLock(fn func() error) error {
+	return withLock(false, fn)
+}
+
+// Load reads the queue from disk with a shared lock for concurrent read safety
+func Load() (*Queue, error) {
+	var q *Queue
+
+	err := withSharedLock(func() error {
+		queuePath, err := GetQueuePath()
+		if err != nil {
+			return err
+		}
+
+		data, err := os.ReadFile(queuePath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				q = &Queue{Items: []*plex.MediaItem{}, LastUpdated: time.Time{}}
+				return nil
+			}
+			return err
+		}
+
+		var loaded Queue
+		if err := json.Unmarshal(data, &loaded); err != nil {
+			return err
+		}
+
+		q = &loaded
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return q, nil
+}
+
+// Save writes the queue to disk with exclusive lock and atomic write for concurrent safety
 func (q *Queue) Save() error {
-	cacheDir, err := config.GetCacheDir()
-	if err != nil {
-		return err
-	}
+	return withExclusiveLock(func() error {
+		queuePath, err := GetQueuePath()
+		if err != nil {
+			return err
+		}
 
-	// Create cache directory if it doesn't exist
-	if err := os.MkdirAll(cacheDir, 0755); err != nil {
-		return err
-	}
+		q.LastUpdated = time.Now()
 
-	queuePath, err := GetQueuePath()
-	if err != nil {
-		return err
-	}
+		data, err := json.MarshalIndent(q, "", "  ")
+		if err != nil {
+			return err
+		}
 
-	q.LastUpdated = time.Now()
+		// Atomic write: write to temp file then rename
+		tempPath := queuePath + ".tmp"
+		if err := os.WriteFile(tempPath, data, 0644); err != nil {
+			return fmt.Errorf("failed to write temp file: %w", err)
+		}
 
-	data, err := json.MarshalIndent(q, "", "  ")
-	if err != nil {
-		return err
-	}
+		if err := os.Rename(tempPath, queuePath); err != nil {
+			// Clean up temp file on rename failure (error ignored - best effort cleanup)
+			_ = os.Remove(tempPath)
+			return fmt.Errorf("failed to rename temp file: %w", err)
+		}
 
-	return os.WriteFile(queuePath, data, 0644)
+		return nil
+	})
 }
 
-// Clear removes all items from the queue and deletes the file
+// Clear removes all items from the queue and deletes the file with exclusive lock
 func (q *Queue) Clear() error {
-	q.Items = []*plex.MediaItem{}
-	q.LastUpdated = time.Now()
+	return withExclusiveLock(func() error {
+		q.Items = []*plex.MediaItem{}
+		q.LastUpdated = time.Now()
 
-	queuePath, err := GetQueuePath()
-	if err != nil {
-		return err
-	}
+		queuePath, err := GetQueuePath()
+		if err != nil {
+			return err
+		}
 
-	// Remove the file if it exists
-	if err := os.Remove(queuePath); err != nil && !os.IsNotExist(err) {
-		return err
-	}
+		// Remove the file if it exists
+		if err := os.Remove(queuePath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
 
-	return nil
+		// Clean up any stale temp file (error ignored - best effort cleanup)
+		_ = os.Remove(queuePath + ".tmp")
+
+		return nil
+	})
 }
 
 // Add appends items to the queue, avoiding duplicates by Key
@@ -152,4 +257,85 @@ func (q *Queue) Len() int {
 // IsEmpty returns true if the queue has no items
 func (q *Queue) IsEmpty() bool {
 	return len(q.Items) == 0
+}
+
+// RemoveByKeys removes items with matching keys from the persisted queue.
+// This method reloads from disk, removes the specified items, and saves back.
+// This ensures items added by other instances while processing are preserved.
+// The in-memory queue (q) is also updated to reflect the new state.
+func (q *Queue) RemoveByKeys(keys []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+
+	return withExclusiveLock(func() error {
+		queuePath, err := GetQueuePath()
+		if err != nil {
+			return err
+		}
+
+		// Reload queue from disk to get current state (including items added by other instances)
+		data, err := os.ReadFile(queuePath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				// Queue file doesn't exist, nothing to remove
+				q.Items = []*plex.MediaItem{}
+				q.LastUpdated = time.Now()
+				return nil
+			}
+			return err
+		}
+
+		var diskQueue Queue
+		if err := json.Unmarshal(data, &diskQueue); err != nil {
+			return err
+		}
+
+		// Build set of keys to remove
+		keysToRemove := make(map[string]bool)
+		for _, key := range keys {
+			keysToRemove[key] = true
+		}
+
+		// Filter out items with matching keys
+		var remaining []*plex.MediaItem
+		for _, item := range diskQueue.Items {
+			if !keysToRemove[item.Key] {
+				remaining = append(remaining, item)
+			}
+		}
+
+		// Update in-memory queue
+		q.Items = remaining
+		q.LastUpdated = time.Now()
+
+		// If queue is empty, delete the file
+		if len(remaining) == 0 {
+			if err := os.Remove(queuePath); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			// Clean up any stale temp file (error ignored - best effort cleanup)
+			_ = os.Remove(queuePath + ".tmp")
+			return nil
+		}
+
+		// Save remaining items back to disk with atomic write
+		data, err = json.MarshalIndent(q, "", "  ")
+		if err != nil {
+			return err
+		}
+
+		tempPath := queuePath + ".tmp"
+		if err := os.WriteFile(tempPath, data, 0644); err != nil {
+			return fmt.Errorf("failed to write temp file: %w", err)
+		}
+
+		if err := os.Rename(tempPath, queuePath); err != nil {
+			// Clean up temp file on rename failure (error ignored - best effort cleanup)
+			_ = os.Remove(tempPath)
+			return fmt.Errorf("failed to rename temp file: %w", err)
+		}
+
+		return nil
+	})
 }
