@@ -7,6 +7,7 @@ require (
 	github.com/charmbracelet/bubbles v0.21.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
+	github.com/gofrs/flock v0.13.0
 	github.com/grandcat/zeroconf v1.0.0
 	github.com/joshkerr/rclone-golib v0.0.0-20251229062130-6ad185e49993
 	github.com/sahilm/fuzzy v0.1.1
