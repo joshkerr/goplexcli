@@ -16,6 +16,8 @@ import (
 const (
 	// lockTimeout is the maximum time to wait for acquiring a lock
 	lockTimeout = 30 * time.Second
+	// lockRetryInterval is how often to retry acquiring a lock
+	lockRetryInterval = 100 * time.Millisecond
 )
 
 // Queue represents a persistent download queue
@@ -24,9 +26,13 @@ type Queue struct {
 	LastUpdated time.Time         `json:"last_updated"`
 }
 
+// testQueueDir is used to override the queue directory in tests.
+// When non-empty, it's used instead of config.GetCacheDir().
+var testQueueDir string
+
 // GetQueuePath returns the path to the queue file
 func GetQueuePath() (string, error) {
-	cacheDir, err := config.GetCacheDir()
+	cacheDir, err := getCacheDir()
 	if err != nil {
 		return "", err
 	}
@@ -35,34 +41,50 @@ func GetQueuePath() (string, error) {
 
 // GetLockPath returns the path to the queue lock file
 func GetLockPath() (string, error) {
-	cacheDir, err := config.GetCacheDir()
+	cacheDir, err := getCacheDir()
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(cacheDir, "queue.lock"), nil
 }
 
-// withExclusiveLock executes a function while holding an exclusive lock on the queue
-func withExclusiveLock(fn func() error) error {
+// getCacheDir returns the cache directory, using testQueueDir if set (for testing)
+func getCacheDir() (string, error) {
+	if testQueueDir != "" {
+		return testQueueDir, nil
+	}
+	return config.GetCacheDir()
+}
+
+// withLock executes a function while holding a lock on the queue.
+// If exclusive is true, acquires an exclusive (write) lock; otherwise acquires a shared (read) lock.
+func withLock(exclusive bool, fn func() error) error {
 	lockPath, err := GetLockPath()
 	if err != nil {
 		return fmt.Errorf("failed to get lock path: %w", err)
 	}
 
-	// Ensure the cache directory exists
-	cacheDir, err := config.GetCacheDir()
-	if err != nil {
-		return fmt.Errorf("failed to get cache dir: %w", err)
-	}
-	if err := os.MkdirAll(cacheDir, 0755); err != nil {
-		return fmt.Errorf("failed to create cache dir: %w", err)
+	// For exclusive locks, ensure the cache directory exists (needed for write operations)
+	if exclusive {
+		cacheDir, err := config.GetCacheDir()
+		if err != nil {
+			return fmt.Errorf("failed to get cache dir: %w", err)
+		}
+		if err := os.MkdirAll(cacheDir, 0755); err != nil {
+			return fmt.Errorf("failed to create cache dir: %w", err)
+		}
 	}
 
 	fileLock := flock.New(lockPath)
 	ctx, cancel := context.WithTimeout(context.Background(), lockTimeout)
 	defer cancel()
 
-	locked, err := fileLock.TryLockContext(ctx, 100*time.Millisecond)
+	var locked bool
+	if exclusive {
+		locked, err = fileLock.TryLockContext(ctx, lockRetryInterval)
+	} else {
+		locked, err = fileLock.TryRLockContext(ctx, lockRetryInterval)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to acquire lock: %w", err)
 	}
@@ -76,50 +98,24 @@ func withExclusiveLock(fn func() error) error {
 	return fn()
 }
 
+// withExclusiveLock executes a function while holding an exclusive lock on the queue
+func withExclusiveLock(fn func() error) error {
+	return withLock(true, fn)
+}
+
 // withSharedLock executes a function while holding a shared (read) lock on the queue
 func withSharedLock(fn func() error) error {
-	lockPath, err := GetLockPath()
-	if err != nil {
-		return fmt.Errorf("failed to get lock path: %w", err)
-	}
-
-	// Ensure the cache directory exists
-	cacheDir, err := config.GetCacheDir()
-	if err != nil {
-		return fmt.Errorf("failed to get cache dir: %w", err)
-	}
-	if err := os.MkdirAll(cacheDir, 0755); err != nil {
-		return fmt.Errorf("failed to create cache dir: %w", err)
-	}
-
-	fileLock := flock.New(lockPath)
-	ctx, cancel := context.WithTimeout(context.Background(), lockTimeout)
-	defer cancel()
-
-	locked, err := fileLock.TryRLockContext(ctx, 100*time.Millisecond)
-	if err != nil {
-		return fmt.Errorf("failed to acquire shared lock: %w", err)
-	}
-	if !locked {
-		return fmt.Errorf("could not acquire queue lock within %v (another instance may be using the queue)", lockTimeout)
-	}
-	defer func() {
-		_ = fileLock.Unlock() // Error intentionally ignored - lock released on process exit regardless
-	}()
-
-	return fn()
+	return withLock(false, fn)
 }
 
 // Load reads the queue from disk with a shared lock for concurrent read safety
 func Load() (*Queue, error) {
 	var q *Queue
-	var loadErr error
 
 	err := withSharedLock(func() error {
 		queuePath, err := GetQueuePath()
 		if err != nil {
-			loadErr = err
-			return nil
+			return err
 		}
 
 		data, err := os.ReadFile(queuePath)
@@ -128,14 +124,12 @@ func Load() (*Queue, error) {
 				q = &Queue{Items: []*plex.MediaItem{}, LastUpdated: time.Time{}}
 				return nil
 			}
-			loadErr = err
-			return nil
+			return err
 		}
 
 		var loaded Queue
 		if err := json.Unmarshal(data, &loaded); err != nil {
-			loadErr = err
-			return nil
+			return err
 		}
 
 		q = &loaded
@@ -145,9 +139,6 @@ func Load() (*Queue, error) {
 	if err != nil {
 		return nil, err
 	}
-	if loadErr != nil {
-		return nil, loadErr
-	}
 
 	return q, nil
 }
@@ -155,16 +146,6 @@ func Load() (*Queue, error) {
 // Save writes the queue to disk with exclusive lock and atomic write for concurrent safety
 func (q *Queue) Save() error {
 	return withExclusiveLock(func() error {
-		cacheDir, err := config.GetCacheDir()
-		if err != nil {
-			return err
-		}
-
-		// Create cache directory if it doesn't exist
-		if err := os.MkdirAll(cacheDir, 0755); err != nil {
-			return err
-		}
-
 		queuePath, err := GetQueuePath()
 		if err != nil {
 			return err
