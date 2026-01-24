@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	// lockTimeout is the maximum time to wait for acquiring a lock
-	lockTimeout = 30 * time.Second
+	// lockTimeout is the maximum time to wait for acquiring a lock.
+	// Kept short (5s) so users don't wait too long if another instance crashes while holding the lock.
+	lockTimeout = 5 * time.Second
 	// lockRetryInterval is how often to retry acquiring a lock
 	lockRetryInterval = 100 * time.Millisecond
 )
@@ -61,17 +62,17 @@ func getCacheDir() (string, error) {
 func withLock(exclusive bool, fn func() error) error {
 	lockPath, err := GetLockPath()
 	if err != nil {
-		return fmt.Errorf("failed to get lock path: %w", err)
+		return fmt.Errorf("failed to acquire queue lock: %w", err)
 	}
 
 	// For exclusive locks, ensure the cache directory exists (needed for write operations)
 	if exclusive {
-		cacheDir, err := config.GetCacheDir()
+		cacheDir, err := getCacheDir()
 		if err != nil {
-			return fmt.Errorf("failed to get cache dir: %w", err)
+			return fmt.Errorf("failed to acquire queue lock: %w", err)
 		}
 		if err := os.MkdirAll(cacheDir, 0755); err != nil {
-			return fmt.Errorf("failed to create cache dir: %w", err)
+			return fmt.Errorf("failed to acquire queue lock: %w", err)
 		}
 	}
 
@@ -86,10 +87,10 @@ func withLock(exclusive bool, fn func() error) error {
 		locked, err = fileLock.TryRLockContext(ctx, lockRetryInterval)
 	}
 	if err != nil {
-		return fmt.Errorf("failed to acquire lock: %w", err)
+		return fmt.Errorf("failed to acquire queue lock: %w", err)
 	}
 	if !locked {
-		return fmt.Errorf("could not acquire queue lock within %v (another instance may be using the queue)", lockTimeout)
+		return fmt.Errorf("failed to acquire queue lock within %v (another instance may be using the queue)", lockTimeout)
 	}
 	defer func() {
 		_ = fileLock.Unlock() // Error intentionally ignored - lock released on process exit regardless
@@ -165,8 +166,8 @@ func (q *Queue) Save() error {
 		}
 
 		if err := os.Rename(tempPath, queuePath); err != nil {
-			// Clean up temp file on rename failure
-			os.Remove(tempPath)
+			// Clean up temp file on rename failure (error ignored - best effort cleanup)
+			_ = os.Remove(tempPath)
 			return fmt.Errorf("failed to rename temp file: %w", err)
 		}
 
@@ -190,8 +191,8 @@ func (q *Queue) Clear() error {
 			return err
 		}
 
-		// Also clean up any stale temp file
-		os.Remove(queuePath + ".tmp")
+		// Clean up any stale temp file (error ignored - best effort cleanup)
+		_ = os.Remove(queuePath + ".tmp")
 
 		return nil
 	})
@@ -313,7 +314,8 @@ func (q *Queue) RemoveByKeys(keys []string) error {
 			if err := os.Remove(queuePath); err != nil && !os.IsNotExist(err) {
 				return err
 			}
-			os.Remove(queuePath + ".tmp")
+			// Clean up any stale temp file (error ignored - best effort cleanup)
+			_ = os.Remove(queuePath + ".tmp")
 			return nil
 		}
 
@@ -329,7 +331,8 @@ func (q *Queue) RemoveByKeys(keys []string) error {
 		}
 
 		if err := os.Rename(tempPath, queuePath); err != nil {
-			os.Remove(tempPath)
+			// Clean up temp file on rename failure (error ignored - best effort cleanup)
+			_ = os.Remove(tempPath)
 			return fmt.Errorf("failed to rename temp file: %w", err)
 		}
 
