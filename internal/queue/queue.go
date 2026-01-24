@@ -69,7 +69,9 @@ func withExclusiveLock(fn func() error) error {
 	if !locked {
 		return fmt.Errorf("could not acquire queue lock within %v (another instance may be using the queue)", lockTimeout)
 	}
-	defer fileLock.Unlock()
+	defer func() {
+		_ = fileLock.Unlock() // Error intentionally ignored - lock released on process exit regardless
+	}()
 
 	return fn()
 }
@@ -101,7 +103,9 @@ func withSharedLock(fn func() error) error {
 	if !locked {
 		return fmt.Errorf("could not acquire queue lock within %v (another instance may be using the queue)", lockTimeout)
 	}
-	defer fileLock.Unlock()
+	defer func() {
+		_ = fileLock.Unlock() // Error intentionally ignored - lock released on process exit regardless
+	}()
 
 	return fn()
 }
