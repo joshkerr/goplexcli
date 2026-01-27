@@ -83,7 +83,7 @@ help:
 	@echo "Usage:"
 	@echo "  make build       - Build the application and preview helper"
 	@echo "  make build-all   - Build for all platforms"
-	@echo "  make install     - Install to /usr/local/bin"
+	@echo "  make install     - Install to GOPATH/bin"
 	@echo "  make clean       - Remove build artifacts"
 	@echo "  make test        - Run tests"
 	@echo "  make run         - Build and run"
