@@ -53,6 +53,7 @@ func main() {
 		Use:   "goplexcli",
 		Short: "A CLI tool for browsing and streaming from your Plex server",
 		Long:  "A powerful command-line interface for interacting with your Plex media server.\nBrowse, stream, and download your media with ease.",
+		RunE:  runBrowse, // Default to browse when no subcommand is specified
 	}
 
 	// Login command
@@ -414,17 +415,51 @@ func selectMediaManual(media []plex.MediaItem) (*plex.MediaItem, error) {
 		fmt.Printf("  %d. %s\n", i+1, item.FormatMediaTitle())
 	}
 	fmt.Printf("\nEnter number (1-%d): ", len(media))
-	
+
 	var choice int
 	if _, err := fmt.Scanln(&choice); err != nil {
 		return nil, fmt.Errorf("failed to read selection: %w", err)
 	}
-	
+
 	if choice < 1 || choice > len(media) {
 		return nil, fmt.Errorf("invalid selection")
 	}
-	
+
 	return &media[choice-1], nil
+}
+
+// selectMediaFlat handles flat media selection (for movies or "all" media type).
+// Returns selected media items, whether user cancelled, and any error.
+func selectMediaFlat(media []plex.MediaItem, cfg *config.Config, prompt string) ([]*plex.MediaItem, bool, error) {
+	var selectedMediaItems []*plex.MediaItem
+
+	if ui.IsAvailable(cfg.FzfPath) {
+		selectedIndices, err := ui.SelectMediaWithPreview(media, prompt, cfg.FzfPath, cfg.PlexURL, cfg.PlexToken)
+		if err != nil {
+			if err.Error() == "cancelled by user" {
+				return nil, true, nil
+			}
+			return nil, false, fmt.Errorf("media selection failed: %w", err)
+		}
+
+		// Build list of selected media items
+		for _, index := range selectedIndices {
+			if index >= 0 && index < len(media) {
+				selectedMediaItems = append(selectedMediaItems, &media[index])
+			} else {
+				fmt.Fprintf(os.Stderr, "Warning: invalid index %d ignored\n", index)
+			}
+		}
+	} else {
+		// Fallback to manual selection (no fzf required)
+		selectedMedia, err := selectMediaManual(media)
+		if err != nil {
+			return nil, false, err
+		}
+		selectedMediaItems = []*plex.MediaItem{selectedMedia}
+	}
+
+	return selectedMediaItems, false, nil
 }
 
 
@@ -526,33 +561,77 @@ browseLoop:
 			continue browseLoop
 		}
 
-		fmt.Println(infoStyle.Render(fmt.Sprintf("\nBrowsing %d items...\n", len(filteredMedia))))
-
-		// Use fzf with preview to select media if fzf available, otherwise use manual selection
+		// For TV shows, use hierarchical drill-down: Show -> Season -> Episode
 		var selectedMediaItems []*plex.MediaItem
-		if ui.IsAvailable(cfg.FzfPath) {
-			selectedIndices, err := ui.SelectMediaWithPreview(filteredMedia, "Select media (TAB for multi-select):", cfg.FzfPath, cfg.PlexURL, cfg.PlexToken)
+		if mediaType == "tv shows" && ui.IsAvailable(cfg.FzfPath) {
+			// Step 1: Select TV show
+			shows := ui.GetUniqueTVShows(filteredMedia)
+			if len(shows) == 0 {
+				fmt.Println(warningStyle.Render("No TV shows found."))
+				continue browseLoop
+			}
+
+			fmt.Println(infoStyle.Render(fmt.Sprintf("\nFound %d TV shows...\n", len(shows))))
+
+			selectedShow, err := ui.SelectTVShow(shows, cfg.FzfPath)
 			if err != nil {
 				if err.Error() == "cancelled by user" {
-					return nil
+					continue browseLoop
 				}
-				return fmt.Errorf("media selection failed: %w", err)
+				return fmt.Errorf("show selection failed: %w", err)
 			}
 
-			// Build list of selected media items
-			for _, index := range selectedIndices {
-				if index >= 0 && index < len(filteredMedia) {
-					selectedMediaItems = append(selectedMediaItems, &filteredMedia[index])
-				}
+			// Step 2: Select season
+			seasons := ui.GetSeasonsForShow(filteredMedia, selectedShow)
+			if len(seasons) == 0 {
+				fmt.Println(warningStyle.Render("No seasons found for this show."))
+				continue browseLoop
 			}
-		} else {
-			// Fallback to manual selection (no fzf required)
-			var err error
-			selectedMedia, err := selectMediaManual(filteredMedia)
+
+			fmt.Println(infoStyle.Render(fmt.Sprintf("\n%s has %d seasons...\n", selectedShow, len(seasons))))
+
+			selectedSeason, err := ui.SelectSeason(seasons, selectedShow, cfg.FzfPath)
+			if err != nil {
+				if err.Error() == "cancelled by user" {
+					continue browseLoop
+				}
+				return fmt.Errorf("season selection failed: %w", err)
+			}
+
+			// Step 3: Select episodes from that season
+			episodesInSeason := ui.GetEpisodesForSeason(filteredMedia, selectedShow, selectedSeason)
+			if len(episodesInSeason) == 0 {
+				fmt.Println(warningStyle.Render("No episodes found for this season."))
+				continue browseLoop
+			}
+
+			seasonLabel := fmt.Sprintf("Season %d", selectedSeason)
+			if selectedSeason == 0 {
+				seasonLabel = "Specials"
+			}
+			fmt.Println(infoStyle.Render(fmt.Sprintf("\n%s has %d episodes...\n", seasonLabel, len(episodesInSeason))))
+
+			var cancelled bool
+			selectedMediaItems, cancelled, err = selectMediaFlat(episodesInSeason, cfg, "Select episode(s) (TAB for multi-select):")
 			if err != nil {
 				return err
 			}
-			selectedMediaItems = []*plex.MediaItem{selectedMedia}
+			if cancelled {
+				continue browseLoop
+			}
+		} else {
+			// For movies or "all", use flat selection
+			fmt.Println(infoStyle.Render(fmt.Sprintf("\nBrowsing %d items...\n", len(filteredMedia))))
+
+			var cancelled bool
+			var err error
+			selectedMediaItems, cancelled, err = selectMediaFlat(filteredMedia, cfg, "Select media (TAB for multi-select):")
+			if err != nil {
+				return err
+			}
+			if cancelled {
+				continue browseLoop
+			}
 		}
 
 		if len(selectedMediaItems) == 0 {

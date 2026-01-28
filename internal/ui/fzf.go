@@ -11,8 +11,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
-	
+
 	"github.com/joshkerr/goplexcli/internal/plex"
 )
 
@@ -618,6 +619,129 @@ func DownloadPoster(plexURL, thumbPath, token string) string {
 		os.Remove(posterFile)
 		return ""
 	}
-	
+
 	return posterFile
+}
+
+// GetUniqueTVShows extracts unique TV show titles from a slice of media items.
+// It only considers items with Type "episode" and a non-empty ParentTitle.
+// Returns an alphabetically sorted slice of unique show names.
+// Returns an empty slice if no TV shows are found.
+func GetUniqueTVShows(episodes []plex.MediaItem) []string {
+	showMap := make(map[string]bool)
+	var shows []string
+
+	for _, ep := range episodes {
+		if ep.Type == "episode" && ep.ParentTitle != "" {
+			if !showMap[ep.ParentTitle] {
+				showMap[ep.ParentTitle] = true
+				shows = append(shows, ep.ParentTitle)
+			}
+		}
+	}
+
+	// Sort alphabetically
+	sort.Strings(shows)
+	return shows
+}
+
+// GetSeasonsForShow extracts unique season numbers for a specific show.
+// It filters episodes by show name and collects unique ParentIndex values.
+// Season 0 (specials) is placed at the end of the list if present.
+// Returns a numerically sorted slice of season numbers.
+func GetSeasonsForShow(episodes []plex.MediaItem, showName string) []int {
+	seasonMap := make(map[int]bool)
+	var seasons []int
+	hasSpecials := false
+
+	for _, ep := range episodes {
+		if ep.Type == "episode" && ep.ParentTitle == showName {
+			seasonNum := int(ep.ParentIndex)
+			if seasonNum == 0 {
+				hasSpecials = true
+				continue // Handle specials separately
+			}
+			if !seasonMap[seasonNum] {
+				seasonMap[seasonNum] = true
+				seasons = append(seasons, seasonNum)
+			}
+		}
+	}
+
+	// Sort numerically
+	sort.Ints(seasons)
+
+	// Add specials (Season 0) at the end if present
+	if hasSpecials {
+		seasons = append(seasons, 0)
+	}
+
+	return seasons
+}
+
+// GetEpisodesForSeason filters episodes for a specific show and season number.
+// It returns all episodes matching the show name and season (ParentIndex).
+// Use seasonNum=0 to get specials. Returns episodes sorted by episode number (Index).
+// Returns an empty slice if no matching episodes are found.
+func GetEpisodesForSeason(episodes []plex.MediaItem, showName string, seasonNum int) []plex.MediaItem {
+	var filtered []plex.MediaItem
+
+	for _, ep := range episodes {
+		if ep.Type == "episode" && ep.ParentTitle == showName && int(ep.ParentIndex) == seasonNum {
+			filtered = append(filtered, ep)
+		}
+	}
+
+	// Sort by episode number
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].Index < filtered[j].Index
+	})
+
+	return filtered
+}
+
+// SelectTVShow presents TV shows in fzf and returns the selected show name.
+// It displays the shows in an interactive fzf picker.
+// Returns the selected show name or an error if cancelled or no shows available.
+func SelectTVShow(shows []string, fzfPath string) (string, error) {
+	if len(shows) == 0 {
+		return "", fmt.Errorf("no shows to select from")
+	}
+
+	selected, _, err := SelectWithFzf(shows, "Select TV show:", fzfPath)
+	if err != nil {
+		return "", err
+	}
+
+	return selected, nil
+}
+
+// SelectSeason presents seasons in fzf and returns the selected season number.
+// It displays "Specials" for Season 0 and "Season N" for regular seasons.
+// Returns the season number (0 for specials, positive for regular seasons).
+// Returns -1 and an error if no seasons are available or selection fails.
+func SelectSeason(seasons []int, showName string, fzfPath string) (int, error) {
+	if len(seasons) == 0 {
+		return -1, fmt.Errorf("no seasons to select from")
+	}
+
+	var items []string
+	for _, s := range seasons {
+		if s == 0 {
+			items = append(items, "Specials")
+		} else {
+			items = append(items, fmt.Sprintf("Season %d", s))
+		}
+	}
+
+	selected, index, err := SelectWithFzf(items, fmt.Sprintf("Select season for %s:", showName), fzfPath)
+	if err != nil {
+		return -1, err
+	}
+
+	if index < 0 || index >= len(seasons) {
+		return -1, fmt.Errorf("invalid selection: %s", selected)
+	}
+
+	return seasons[index], nil
 }
