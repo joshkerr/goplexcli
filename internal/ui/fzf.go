@@ -11,8 +11,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
-	
+
 	"github.com/joshkerr/goplexcli/internal/plex"
 )
 
@@ -618,6 +619,99 @@ func DownloadPoster(plexURL, thumbPath, token string) string {
 		os.Remove(posterFile)
 		return ""
 	}
-	
+
 	return posterFile
+}
+
+// GetUniqueTVShows extracts unique TV show names from episodes
+func GetUniqueTVShows(episodes []plex.MediaItem) []string {
+	showMap := make(map[string]bool)
+	var shows []string
+
+	for _, ep := range episodes {
+		if ep.Type == "episode" && ep.ParentTitle != "" {
+			if !showMap[ep.ParentTitle] {
+				showMap[ep.ParentTitle] = true
+				shows = append(shows, ep.ParentTitle)
+			}
+		}
+	}
+
+	// Sort alphabetically
+	sort.Strings(shows)
+	return shows
+}
+
+// GetSeasonsForShow extracts unique seasons for a specific show
+func GetSeasonsForShow(episodes []plex.MediaItem, showName string) []int {
+	seasonMap := make(map[int]bool)
+	var seasons []int
+
+	for _, ep := range episodes {
+		if ep.Type == "episode" && ep.ParentTitle == showName {
+			if !seasonMap[int(ep.ParentIndex)] {
+				seasonMap[int(ep.ParentIndex)] = true
+				seasons = append(seasons, int(ep.ParentIndex))
+			}
+		}
+	}
+
+	// Sort numerically
+	sort.Ints(seasons)
+	return seasons
+}
+
+// GetEpisodesForSeason filters episodes for a specific show and season
+func GetEpisodesForSeason(episodes []plex.MediaItem, showName string, seasonNum int) []plex.MediaItem {
+	var filtered []plex.MediaItem
+
+	for _, ep := range episodes {
+		if ep.Type == "episode" && ep.ParentTitle == showName && int(ep.ParentIndex) == seasonNum {
+			filtered = append(filtered, ep)
+		}
+	}
+
+	// Sort by episode number
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].Index < filtered[j].Index
+	})
+
+	return filtered
+}
+
+// SelectTVShow presents TV shows in fzf and returns the selected show name
+func SelectTVShow(shows []string, fzfPath string) (string, error) {
+	if len(shows) == 0 {
+		return "", fmt.Errorf("no shows to select from")
+	}
+
+	selected, _, err := SelectWithFzf(shows, "Select TV show:", fzfPath)
+	if err != nil {
+		return "", err
+	}
+
+	return selected, nil
+}
+
+// SelectSeason presents seasons in fzf and returns the selected season number
+func SelectSeason(seasons []int, showName string, fzfPath string) (int, error) {
+	if len(seasons) == 0 {
+		return -1, fmt.Errorf("no seasons to select from")
+	}
+
+	var items []string
+	for _, s := range seasons {
+		items = append(items, fmt.Sprintf("Season %d", s))
+	}
+
+	selected, index, err := SelectWithFzf(items, fmt.Sprintf("Select season for %s:", showName), fzfPath)
+	if err != nil {
+		return -1, err
+	}
+
+	if index < 0 || index >= len(seasons) {
+		return -1, fmt.Errorf("invalid selection: %s", selected)
+	}
+
+	return seasons[index], nil
 }
