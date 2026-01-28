@@ -605,7 +605,11 @@ browseLoop:
 				continue browseLoop
 			}
 
-			fmt.Println(infoStyle.Render(fmt.Sprintf("\nSeason %d has %d episodes...\n", selectedSeason, len(episodesInSeason))))
+			seasonLabel := fmt.Sprintf("Season %d", selectedSeason)
+			if selectedSeason == 0 {
+				seasonLabel = "Specials"
+			}
+			fmt.Println(infoStyle.Render(fmt.Sprintf("\n%s has %d episodes...\n", seasonLabel, len(episodesInSeason))))
 
 			var cancelled bool
 			selectedMediaItems, cancelled, err = selectMediaFlat(episodesInSeason, cfg, "Select episode(s) (TAB for multi-select):")
