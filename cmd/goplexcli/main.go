@@ -415,17 +415,51 @@ func selectMediaManual(media []plex.MediaItem) (*plex.MediaItem, error) {
 		fmt.Printf("  %d. %s\n", i+1, item.FormatMediaTitle())
 	}
 	fmt.Printf("\nEnter number (1-%d): ", len(media))
-	
+
 	var choice int
 	if _, err := fmt.Scanln(&choice); err != nil {
 		return nil, fmt.Errorf("failed to read selection: %w", err)
 	}
-	
+
 	if choice < 1 || choice > len(media) {
 		return nil, fmt.Errorf("invalid selection")
 	}
-	
+
 	return &media[choice-1], nil
+}
+
+// selectMediaFlat handles flat media selection (for movies or "all" media type).
+// Returns selected media items, whether user cancelled, and any error.
+func selectMediaFlat(media []plex.MediaItem, cfg *config.Config, prompt string) ([]*plex.MediaItem, bool, error) {
+	var selectedMediaItems []*plex.MediaItem
+
+	if ui.IsAvailable(cfg.FzfPath) {
+		selectedIndices, err := ui.SelectMediaWithPreview(media, prompt, cfg.FzfPath, cfg.PlexURL, cfg.PlexToken)
+		if err != nil {
+			if err.Error() == "cancelled by user" {
+				return nil, true, nil
+			}
+			return nil, false, fmt.Errorf("media selection failed: %w", err)
+		}
+
+		// Build list of selected media items
+		for _, index := range selectedIndices {
+			if index >= 0 && index < len(media) {
+				selectedMediaItems = append(selectedMediaItems, &media[index])
+			} else {
+				fmt.Fprintf(os.Stderr, "Warning: invalid index %d ignored\n", index)
+			}
+		}
+	} else {
+		// Fallback to manual selection (no fzf required)
+		selectedMedia, err := selectMediaManual(media)
+		if err != nil {
+			return nil, false, err
+		}
+		selectedMediaItems = []*plex.MediaItem{selectedMedia}
+	}
+
+	return selectedMediaItems, false, nil
 }
 
 
@@ -542,7 +576,7 @@ browseLoop:
 			selectedShow, err := ui.SelectTVShow(shows, cfg.FzfPath)
 			if err != nil {
 				if err.Error() == "cancelled by user" {
-					return nil
+					continue browseLoop
 				}
 				return fmt.Errorf("show selection failed: %w", err)
 			}
@@ -559,7 +593,7 @@ browseLoop:
 			selectedSeason, err := ui.SelectSeason(seasons, selectedShow, cfg.FzfPath)
 			if err != nil {
 				if err.Error() == "cancelled by user" {
-					return nil
+					continue browseLoop
 				}
 				return fmt.Errorf("season selection failed: %w", err)
 			}
@@ -573,47 +607,26 @@ browseLoop:
 
 			fmt.Println(infoStyle.Render(fmt.Sprintf("\nSeason %d has %d episodes...\n", selectedSeason, len(episodesInSeason))))
 
-			selectedIndices, err := ui.SelectMediaWithPreview(episodesInSeason, "Select episode(s) (TAB for multi-select):", cfg.FzfPath, cfg.PlexURL, cfg.PlexToken)
+			var cancelled bool
+			selectedMediaItems, cancelled, err = selectMediaFlat(episodesInSeason, cfg, "Select episode(s) (TAB for multi-select):")
 			if err != nil {
-				if err.Error() == "cancelled by user" {
-					return nil
-				}
-				return fmt.Errorf("episode selection failed: %w", err)
+				return err
 			}
-
-			// Build list of selected media items
-			for _, index := range selectedIndices {
-				if index >= 0 && index < len(episodesInSeason) {
-					selectedMediaItems = append(selectedMediaItems, &episodesInSeason[index])
-				}
+			if cancelled {
+				continue browseLoop
 			}
 		} else {
 			// For movies or "all", use flat selection
 			fmt.Println(infoStyle.Render(fmt.Sprintf("\nBrowsing %d items...\n", len(filteredMedia))))
 
-			if ui.IsAvailable(cfg.FzfPath) {
-				selectedIndices, err := ui.SelectMediaWithPreview(filteredMedia, "Select media (TAB for multi-select):", cfg.FzfPath, cfg.PlexURL, cfg.PlexToken)
-				if err != nil {
-					if err.Error() == "cancelled by user" {
-						return nil
-					}
-					return fmt.Errorf("media selection failed: %w", err)
-				}
-
-				// Build list of selected media items
-				for _, index := range selectedIndices {
-					if index >= 0 && index < len(filteredMedia) {
-						selectedMediaItems = append(selectedMediaItems, &filteredMedia[index])
-					}
-				}
-			} else {
-				// Fallback to manual selection (no fzf required)
-				var err error
-				selectedMedia, err := selectMediaManual(filteredMedia)
-				if err != nil {
-					return err
-				}
-				selectedMediaItems = []*plex.MediaItem{selectedMedia}
+			var cancelled bool
+			var err error
+			selectedMediaItems, cancelled, err = selectMediaFlat(filteredMedia, cfg, "Select media (TAB for multi-select):")
+			if err != nil {
+				return err
+			}
+			if cancelled {
+				continue browseLoop
 			}
 		}
 
