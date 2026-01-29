@@ -62,6 +62,27 @@ func main() {
 		RunE:  runLogin,
 	}
 
+	// Movie command
+	movieCmd := &cobra.Command{
+		Use:   "movie",
+		Short: "Browse and play movies from your Plex server",
+		RunE:  runMovie,
+	}
+
+	// TV command
+	tvCmd := &cobra.Command{
+		Use:   "tv",
+		Short: "Browse and play TV shows from your Plex server",
+		RunE:  runTV,
+	}
+
+	// Queue command
+	queueCmd := &cobra.Command{
+		Use:   "queue",
+		Short: "View and manage download queue",
+		RunE:  runQueueCommand,
+	}
+
 	// Browse command
 	browseCmd := &cobra.Command{
 		Use:   "browse",
@@ -153,7 +174,7 @@ func main() {
 		},
 	}
 
-	rootCmd.AddCommand(loginCmd, browseCmd, cacheCmd, configCmd, streamCmd, serverCmd, versionCmd)
+	rootCmd.AddCommand(loginCmd, movieCmd, tvCmd, queueCmd, browseCmd, cacheCmd, configCmd, streamCmd, serverCmd, versionCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(errorStyle.Render("Error: " + err.Error()))
