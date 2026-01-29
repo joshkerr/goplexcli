@@ -198,31 +198,49 @@ func (m *BrowserModel) View() string {
 
 	var b strings.Builder
 
-	// Header
+	// Header with enhanced styling
 	headerStyle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("205")).
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("240")).
+		Foreground(lipgloss.Color("#C084FC")).
+		Background(lipgloss.Color("#1F1F23")).
+		Padding(0, 1).
+		BorderStyle(lipgloss.ThickBorder()).
+		BorderForeground(lipgloss.Color("#C084FC")).
 		BorderBottom(true).
 		Width(m.width - 2)
 
-	header := fmt.Sprintf("  Media Browser - %d items", len(m.filteredMedia))
+	countStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#9CA3AF"))
+
+	header := fmt.Sprintf("Media Browser %s", countStyle.Render(fmt.Sprintf("(%d items)", len(m.filteredMedia))))
 	b.WriteString(headerStyle.Render(header))
 	b.WriteString("\n\n")
 
-	// Search bar
+	// Search bar with improved styling
 	if m.searching {
-		searchStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("205")).
+		searchLabelStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#C084FC")).
 			Bold(true)
-		b.WriteString(searchStyle.Render("  Search: "))
+		b.WriteString(searchLabelStyle.Render("  Search: "))
 		b.WriteString(m.searchInput.View())
+		b.WriteString("\n")
+		// Divider line
+		dividerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#374151"))
+		b.WriteString(dividerStyle.Render("  " + strings.Repeat("─", min(m.width-6, 60))))
 		b.WriteString("\n\n")
 	} else if m.searchInput.Value() != "" {
-		searchStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240"))
-		b.WriteString(searchStyle.Render(fmt.Sprintf("  Filter: %s (press / to search again, esc to clear)", m.searchInput.Value())))
+		filterLabelStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#9CA3AF"))
+		filterValueStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#C084FC")).
+			Bold(true)
+		hintStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#6B7280")).
+			Italic(true)
+		b.WriteString(fmt.Sprintf("  %s %s %s",
+			filterLabelStyle.Render("Filter:"),
+			filterValueStyle.Render(m.searchInput.Value()),
+			hintStyle.Render("(/ to edit, esc to clear)")))
 		b.WriteString("\n\n")
 	}
 
@@ -241,7 +259,7 @@ func (m *BrowserModel) View() string {
 			Width(listWidth).
 			Height(listHeight).
 			BorderStyle(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("240"))
+			BorderForeground(lipgloss.Color("#4B5563"))
 
 		var listItems []string
 		for i := listStart; i < listEnd; i++ {
@@ -251,7 +269,7 @@ func (m *BrowserModel) View() string {
 				cursor = ">"
 			}
 
-			line := m.formatListItem(item, cursor, i == m.cursor)
+			line := m.formatListItem(item, cursor, i == m.cursor, i%2 == 1)
 			listItems = append(listItems, line)
 		}
 
@@ -276,7 +294,7 @@ func (m *BrowserModel) View() string {
 			if i == m.cursor {
 				cursor = ">"
 			}
-			b.WriteString(m.formatListItem(item, cursor, i == m.cursor))
+			b.WriteString(m.formatListItem(item, cursor, i == m.cursor, i%2 == 1))
 			b.WriteString("\n")
 		}
 
@@ -287,28 +305,57 @@ func (m *BrowserModel) View() string {
 		}
 	}
 
-	// Footer with help
+	// Footer with styled help bar
 	b.WriteString("\n\n")
-	helpStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("240"))
+	keyStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#C084FC")).
+		Bold(true)
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#6B7280"))
+	sepStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#374151"))
 
-	help := "  ↑/↓: navigate • /: search • p: toggle poster • enter: select • q: quit"
-	b.WriteString(helpStyle.Render(help))
+	sep := sepStyle.Render(" · ")
+	help := "  " +
+		keyStyle.Render("↑↓") + descStyle.Render(" navigate") + sep +
+		keyStyle.Render("/") + descStyle.Render(" search") + sep +
+		keyStyle.Render("p") + descStyle.Render(" poster") + sep +
+		keyStyle.Render("enter") + descStyle.Render(" select") + sep +
+		keyStyle.Render("q") + descStyle.Render(" quit")
+	b.WriteString(help)
 
 	return b.String()
 }
 
-func (m *BrowserModel) formatListItem(item plex.MediaItem, cursor string, selected bool) string {
+func (m *BrowserModel) formatListItem(item plex.MediaItem, cursor string, selected bool, alternate bool) string {
 	style := lipgloss.NewStyle()
+
 	if selected {
-		style = style.Foreground(lipgloss.Color("205")).Bold(true)
+		// Selected item: accent color with subtle background highlight
+		style = style.
+			Foreground(lipgloss.Color("#C084FC")).
+			Background(lipgloss.Color("#2D2D35")).
+			Bold(true)
+	} else if alternate {
+		// Alternating rows: slightly dimmer for visual rhythm
+		style = style.Foreground(lipgloss.Color("#9CA3AF"))
+	} else {
+		style = style.Foreground(lipgloss.Color("#D1D5DB"))
 	}
 
 	var line string
 	if item.Type == "movie" {
-		line = fmt.Sprintf("%s %s (%d)", cursor, item.Title, item.Year)
+		yearStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280"))
+		if selected {
+			yearStyle = yearStyle.Foreground(lipgloss.Color("#9CA3AF"))
+		}
+		line = fmt.Sprintf("%s %s %s", cursor, item.Title, yearStyle.Render(fmt.Sprintf("(%d)", item.Year)))
 	} else if item.Type == "episode" {
-		line = fmt.Sprintf("%s %s - S%02dE%02d: %s", cursor, item.ParentTitle, item.ParentIndex, item.Index, item.Title)
+		epStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280"))
+		if selected {
+			epStyle = epStyle.Foreground(lipgloss.Color("#9CA3AF"))
+		}
+		line = fmt.Sprintf("%s %s %s %s", cursor, item.ParentTitle, epStyle.Render(fmt.Sprintf("S%02dE%02d", item.ParentIndex, item.Index)), item.Title)
 	} else {
 		line = fmt.Sprintf("%s %s", cursor, item.Title)
 	}
@@ -321,35 +368,56 @@ func (m *BrowserModel) renderDetails(item plex.MediaItem, width, height int) str
 		Width(width).
 		Height(height).
 		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("240")).
+		BorderForeground(lipgloss.Color("#4B5563")).
 		Padding(1)
 
 	var details strings.Builder
 
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
+	// Title with accent color
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#C084FC"))
 	details.WriteString(titleStyle.Render(item.Title))
 	details.WriteString("\n\n")
 
+	// Styled labels and values
+	labelStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#6B7280")).
+		Width(10)
+	valueStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#E5E7EB"))
+
 	if item.Type == "movie" && item.Year > 0 {
-		details.WriteString(fmt.Sprintf("Year: %d\n", item.Year))
+		details.WriteString(labelStyle.Render("Year"))
+		details.WriteString(valueStyle.Render(fmt.Sprintf("%d", item.Year)))
+		details.WriteString("\n")
 	} else if item.Type == "episode" {
-		details.WriteString(fmt.Sprintf("Show: %s\n", item.ParentTitle))
-		details.WriteString(fmt.Sprintf("Season %d, Episode %d\n", item.ParentIndex, item.Index))
+		details.WriteString(labelStyle.Render("Show"))
+		details.WriteString(valueStyle.Render(item.ParentTitle))
+		details.WriteString("\n")
+		details.WriteString(labelStyle.Render("Episode"))
+		details.WriteString(valueStyle.Render(fmt.Sprintf("Season %d, Episode %d", item.ParentIndex, item.Index)))
+		details.WriteString("\n")
 	}
 
 	if item.Rating > 0 {
-		details.WriteString(fmt.Sprintf("Rating: %.1f/10\n", item.Rating))
+		details.WriteString(labelStyle.Render("Rating"))
+		ratingStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FBBF24"))
+		details.WriteString(ratingStyle.Render(fmt.Sprintf("%.1f", item.Rating)))
+		details.WriteString(valueStyle.Render("/10"))
+		details.WriteString("\n")
 	}
 
 	if item.Duration > 0 {
 		minutes := item.Duration / 60000
-		details.WriteString(fmt.Sprintf("Duration: %d min\n", minutes))
+		details.WriteString(labelStyle.Render("Duration"))
+		details.WriteString(valueStyle.Render(fmt.Sprintf("%d min", minutes)))
+		details.WriteString("\n")
 	}
 
 	if item.Summary != "" {
 		details.WriteString("\n")
+		summaryStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#9CA3AF"))
 		wrapped := wrapText(item.Summary, width-4)
-		details.WriteString(wrapped)
+		details.WriteString(summaryStyle.Render(wrapped))
 	}
 
 	// Render poster if available
@@ -361,8 +429,12 @@ func (m *BrowserModel) renderDetails(item plex.MediaItem, width, height int) str
 				details.WriteString(rendered)
 			}
 		} else if !m.posterLoading[item.Thumb] {
-			// Show loading indicator
-			details.WriteString("\n\nLoading poster...")
+			// Show styled loading indicator
+			loadingStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#6B7280")).
+				Italic(true)
+			details.WriteString("\n\n")
+			details.WriteString(loadingStyle.Render("Loading poster..."))
 		}
 	}
 
@@ -370,29 +442,40 @@ func (m *BrowserModel) renderDetails(item plex.MediaItem, width, height int) str
 }
 
 func (m *BrowserModel) renderDetailsCompact(item plex.MediaItem) string {
-	var details strings.Builder
+	// Box container for compact details
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#4B5563")).
+		Padding(0, 1)
 
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
-	details.WriteString("  ")
-	details.WriteString(titleStyle.Render(item.Title))
-	details.WriteString(" - ")
+	var content strings.Builder
+
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#C084FC"))
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280"))
+	sepStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#374151"))
+
+	content.WriteString(titleStyle.Render(item.Title))
 
 	if item.Type == "movie" && item.Year > 0 {
-		details.WriteString(fmt.Sprintf("%d", item.Year))
+		content.WriteString(dimStyle.Render(fmt.Sprintf(" (%d)", item.Year)))
 	} else if item.Type == "episode" {
-		details.WriteString(fmt.Sprintf("%s S%02dE%02d", item.ParentTitle, item.ParentIndex, item.Index))
+		content.WriteString(dimStyle.Render(fmt.Sprintf(" · %s S%02dE%02d", item.ParentTitle, item.ParentIndex, item.Index)))
 	}
 
 	if item.Rating > 0 {
-		details.WriteString(fmt.Sprintf(" • %.1f★", item.Rating))
+		content.WriteString(sepStyle.Render(" · "))
+		ratingStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FBBF24"))
+		content.WriteString(ratingStyle.Render(fmt.Sprintf("%.1f", item.Rating)))
+		content.WriteString(dimStyle.Render("/10"))
 	}
 
 	if item.Duration > 0 {
 		minutes := item.Duration / 60000
-		details.WriteString(fmt.Sprintf(" • %dm", minutes))
+		content.WriteString(sepStyle.Render(" · "))
+		content.WriteString(dimStyle.Render(fmt.Sprintf("%dm", minutes)))
 	}
 
-	return details.String()
+	return "  " + boxStyle.Render(content.String())
 }
 
 // maybeDownloadPoster checks if current item needs poster download and triggers it

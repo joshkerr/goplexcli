@@ -28,24 +28,31 @@ import (
 var version = "dev"
 
 var (
-	// Styles
+	// Refined color palette for cohesive UI
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("205")).
+			Foreground(lipgloss.Color("#C084FC")). // Purple accent
 			MarginBottom(1)
 
 	successStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("42"))
+			Foreground(lipgloss.Color("#4ADE80")) // Green (matches logo)
 
 	errorStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("196")).
+			Foreground(lipgloss.Color("#F87171")). // Softer red
 			Bold(true)
 
 	infoStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("86"))
+			Foreground(lipgloss.Color("#60A5FA")) // Softer blue
 
 	warningStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("214"))
+			Foreground(lipgloss.Color("#FBBF24")) // Amber
+
+	// Additional styles for enhanced output
+	dimStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#6B7280"))
+
+	labelStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#9CA3AF"))
 )
 
 func main() {
@@ -814,20 +821,20 @@ func handleStream(cfg *config.Config, media *plex.MediaItem) error {
 	fmt.Println(infoStyle.Render(fmt.Sprintf("Title: %s", media.FormatMediaTitle())))
 	fmt.Println(warningStyle.Render(fmt.Sprintf("\n🌐 Stream server running on port %d", stream.DefaultPort)))
 	
-	fmt.Println(successStyle.Render("\n📱 Click to open in your player:"))
+	fmt.Println(successStyle.Render("\nClick to open in your player:"))
 	fmt.Println()
-	
-	playerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("86")).Bold(true)
-	linkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Underline(true)
-	
-	fmt.Printf("  %s  %s\n", playerStyle.Render("Infuse:"), linkStyle.Render(fmt.Sprintf("infuse://x-callback-url/play?url=%s", encodedURL)))
-	fmt.Printf("  %s  %s\n", playerStyle.Render("OutPlayer:"), linkStyle.Render(fmt.Sprintf("outplayer://x-callback-url/play?url=%s", encodedURL)))
-	fmt.Printf("  %s  %s\n", playerStyle.Render("SenPlayer:"), linkStyle.Render(fmt.Sprintf("senplayer://x-callback-url/play?url=%s", encodedURL)))
-	fmt.Printf("  %s  %s\n", playerStyle.Render("VLC:"), linkStyle.Render(fmt.Sprintf("vlc://%s", encodedURL)))
-	fmt.Printf("  %s  %s\n", playerStyle.Render("VidHub:"), linkStyle.Render(fmt.Sprintf("open-vidhub://x-callback-url/open?url=%s", encodedURL)))
-	
+
+	playerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#C084FC")).Bold(true).Width(12)
+	linkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#60A5FA")).Underline(true)
+
+	fmt.Printf("  %s %s\n", playerStyle.Render("Infuse"), linkStyle.Render(fmt.Sprintf("infuse://x-callback-url/play?url=%s", encodedURL)))
+	fmt.Printf("  %s %s\n", playerStyle.Render("OutPlayer"), linkStyle.Render(fmt.Sprintf("outplayer://x-callback-url/play?url=%s", encodedURL)))
+	fmt.Printf("  %s %s\n", playerStyle.Render("SenPlayer"), linkStyle.Render(fmt.Sprintf("senplayer://x-callback-url/play?url=%s", encodedURL)))
+	fmt.Printf("  %s %s\n", playerStyle.Render("VLC"), linkStyle.Render(fmt.Sprintf("vlc://%s", encodedURL)))
+	fmt.Printf("  %s %s\n", playerStyle.Render("VidHub"), linkStyle.Render(fmt.Sprintf("open-vidhub://x-callback-url/open?url=%s", encodedURL)))
+
 	fmt.Println()
-	fmt.Println(successStyle.Render("🌐 Web UI: ") + linkStyle.Render(webURL))
+	fmt.Println(successStyle.Render("Web UI: ") + linkStyle.Render(webURL))
 	fmt.Println()
 	fmt.Println(infoStyle.Render("Press Ctrl+C or 'q' to stop the server\n"))
 
