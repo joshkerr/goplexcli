@@ -44,13 +44,13 @@ type BrowserModel struct {
 }
 
 type keyMap struct {
-	Up       key.Binding
-	Down     key.Binding
-	Search   key.Binding
-	Select   key.Binding
+	Up           key.Binding
+	Down         key.Binding
+	Search       key.Binding
+	Select       key.Binding
 	TogglePoster key.Binding
-	Quit     key.Binding
-	ClearSearch key.Binding
+	Quit         key.Binding
+	ClearSearch  key.Binding
 }
 
 var keys = keyMap{
@@ -92,15 +92,15 @@ func NewBrowser(media []plex.MediaItem, plexURL, plexToken string) *BrowserModel
 	ti.Width = 50
 
 	return &BrowserModel{
-		media:         media,
-		filteredMedia: media,
-		searchInput:   ti,
-		plexURL:       plexURL,
-		plexToken:     plexToken,
-		posterCache:   make(map[string]string),
-		posterLoading: make(map[string]bool),
+		media:          media,
+		filteredMedia:  media,
+		searchInput:    ti,
+		plexURL:        plexURL,
+		plexToken:      plexToken,
+		posterCache:    make(map[string]string),
+		posterLoading:  make(map[string]bool),
 		renderedPoster: make(map[string]string),
-		showPoster:    true,
+		showPoster:     true,
 	}
 }
 
@@ -121,14 +121,14 @@ func (m *BrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		delete(m.posterLoading, msg.thumbPath)
 		return m, nil
-	
+
 	case posterRenderedMsg:
 		// Store rendered poster
 		if msg.renderedOutput != "" {
 			m.renderedPoster[msg.posterPath] = msg.renderedOutput
 		}
 		return m, nil
-	
+
 	case tea.KeyMsg:
 		// If searching, handle search input
 		if m.searching {
@@ -344,19 +344,20 @@ func (m *BrowserModel) formatListItem(item plex.MediaItem, cursor string, select
 	}
 
 	var line string
-	if item.Type == "movie" {
+	switch item.Type {
+	case "movie":
 		yearStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280"))
 		if selected {
 			yearStyle = yearStyle.Foreground(lipgloss.Color("#9CA3AF"))
 		}
 		line = fmt.Sprintf("%s %s %s", cursor, item.Title, yearStyle.Render(fmt.Sprintf("(%d)", item.Year)))
-	} else if item.Type == "episode" {
+	case "episode":
 		epStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280"))
 		if selected {
 			epStyle = epStyle.Foreground(lipgloss.Color("#9CA3AF"))
 		}
 		line = fmt.Sprintf("%s %s %s %s", cursor, item.ParentTitle, epStyle.Render(fmt.Sprintf("S%02dE%02d", item.ParentIndex, item.Index)), item.Title)
-	} else {
+	default:
 		line = fmt.Sprintf("%s %s", cursor, item.Title)
 	}
 
@@ -483,12 +484,12 @@ func (m *BrowserModel) maybeDownloadPoster() tea.Cmd {
 	if !m.showPoster || len(m.filteredMedia) == 0 {
 		return nil
 	}
-	
+
 	item := m.filteredMedia[m.cursor]
 	if item.Thumb == "" {
 		return nil
 	}
-	
+
 	// Already cached or loading?
 	if _, ok := m.posterCache[item.Thumb]; ok {
 		return nil
@@ -496,7 +497,7 @@ func (m *BrowserModel) maybeDownloadPoster() tea.Cmd {
 	if m.posterLoading[item.Thumb] {
 		return nil
 	}
-	
+
 	// Mark as loading and download
 	m.posterLoading[item.Thumb] = true
 	return m.downloadPosterAsync(item.Thumb)
@@ -520,16 +521,16 @@ func (m *BrowserModel) renderPosterAsync(posterPath string) tea.Cmd {
 		if _, ok := m.renderedPoster[posterPath]; ok {
 			return posterRenderedMsg{}
 		}
-		
+
 		// Check if chafa is available
 		if _, err := exec.LookPath("chafa"); err != nil {
 			return posterRenderedMsg{}
 		}
-		
+
 		// Use fixed size for consistency
 		width := 40
 		height := int(float64(width) * 1.5) // 2:3 aspect ratio
-		
+
 		// Run chafa with better quality settings
 		cmd := exec.Command("chafa",
 			"--size", fmt.Sprintf("%dx%d", width, height),
@@ -541,7 +542,7 @@ func (m *BrowserModel) renderPosterAsync(posterPath string) tea.Cmd {
 		if err != nil {
 			return posterRenderedMsg{}
 		}
-		
+
 		return posterRenderedMsg{
 			posterPath:     posterPath,
 			renderedOutput: string(output),
