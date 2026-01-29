@@ -1,3 +1,5 @@
+// Package download provides file download functionality using rclone.
+// It supports single and batch downloads with progress UI using Bubble Tea.
 package download
 
 import (
@@ -14,6 +16,62 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	rclone "github.com/joshkerr/rclone-golib"
 )
+
+// RcloneDownloader implements the Downloader interface using rclone.
+// It provides efficient file transfers with progress display.
+type RcloneDownloader struct {
+	// Path is the path to the rclone executable. If empty, "rclone" is used.
+	Path string
+
+	// DryRun when true, shows what would be downloaded without actually downloading.
+	DryRun bool
+}
+
+// NewRcloneDownloader creates a new RcloneDownloader with the specified path.
+// If path is empty, the system PATH will be searched for rclone.
+func NewRcloneDownloader(path string) *RcloneDownloader {
+	return &RcloneDownloader{Path: path}
+}
+
+// Download downloads a single file from a remote path to a local destination.
+func (d *RcloneDownloader) Download(ctx context.Context, remotePath, destDir string) error {
+	if d.DryRun {
+		fmt.Printf("[DRY RUN] Would download: %s -> %s\n", remotePath, destDir)
+		return nil
+	}
+	return Download(ctx, remotePath, destDir, d.getPath())
+}
+
+// DownloadMultiple downloads multiple files from remote paths.
+func (d *RcloneDownloader) DownloadMultiple(ctx context.Context, remotePaths []string, destDir string) error {
+	if d.DryRun {
+		fmt.Printf("[DRY RUN] Would download %d files to %s:\n", len(remotePaths), destDir)
+		for _, path := range remotePaths {
+			fmt.Printf("  - %s\n", filepath.Base(path))
+		}
+		return nil
+	}
+	return DownloadMultiple(ctx, remotePaths, destDir, d.getPath())
+}
+
+// IsAvailable checks if rclone is available on the system.
+func (d *RcloneDownloader) IsAvailable() bool {
+	_, err := exec.LookPath(d.getPath())
+	return err == nil
+}
+
+// SetDryRun enables or disables dry run mode.
+func (d *RcloneDownloader) SetDryRun(dryRun bool) {
+	d.DryRun = dryRun
+}
+
+// getPath returns the rclone path, defaulting to "rclone" if not set.
+func (d *RcloneDownloader) getPath() string {
+	if d.Path == "" {
+		return "rclone"
+	}
+	return d.Path
+}
 
 // generateTransferID creates a unique transfer ID using crypto/rand
 func generateTransferID(index int, filename string) string {

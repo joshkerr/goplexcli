@@ -27,25 +27,28 @@ import (
 // For development without ldflags, falls back to "dev"
 var version = "dev"
 
+// dryRun when true shows what would be downloaded without actually downloading
+var dryRun bool
+
 var (
-	// Styles
+	// Refined color palette for cohesive UI
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("205")).
+			Foreground(lipgloss.Color("#C084FC")). // Purple accent
 			MarginBottom(1)
 
 	successStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("42"))
+			Foreground(lipgloss.Color("#4ADE80")) // Green (matches logo)
 
 	errorStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("196")).
+			Foreground(lipgloss.Color("#F87171")). // Softer red
 			Bold(true)
 
 	infoStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("86"))
+			Foreground(lipgloss.Color("#60A5FA")) // Softer blue
 
 	warningStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("214"))
+			Foreground(lipgloss.Color("#FBBF24")) // Amber
 )
 
 func main() {
@@ -69,6 +72,7 @@ func main() {
 		Short: "Browse and play media from your Plex server",
 		RunE:  runBrowse,
 	}
+	browseCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be downloaded without actually downloading")
 
 	// Cache command
 	cacheCmd := &cobra.Command{
@@ -193,11 +197,11 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	// Select server
 	var selectedServer plex.Server
 	var selectedURL string
-	
+
 	if len(servers) == 1 {
 		selectedServer = servers[0]
 		fmt.Println(infoStyle.Render(fmt.Sprintf("\nFound server: %s", selectedServer.Name)))
-		
+
 		// If server has multiple connections, let user choose
 		if len(selectedServer.Connections) > 1 {
 			selectedURL, err = selectConnection(selectedServer)
@@ -250,7 +254,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 			}
 			selectedServer = servers[choice-1]
 		}
-		
+
 		// Now select connection for the chosen server
 		if len(selectedServer.Connections) > 1 {
 			selectedURL, err = selectConnection(selectedServer)
@@ -269,7 +273,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
-	
+
 	// Check if we want to add this as an additional server or replace
 	if len(cfg.Servers) > 0 {
 		fmt.Print("\nAdd this as an additional server? (y/n): ")
@@ -277,7 +281,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 		if _, err := fmt.Scanln(&addMore); err != nil {
 			addMore = "n" // Default to no on error
 		}
-		
+
 		if strings.ToLower(addMore) == "y" || strings.ToLower(addMore) == "yes" {
 			// Check if server already exists
 			serverExists := false
@@ -289,7 +293,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 					break
 				}
 			}
-			
+
 			if !serverExists {
 				// Add new server
 				cfg.Servers = append(cfg.Servers, config.PlexServer{
@@ -320,7 +324,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 			},
 		}
 	}
-	
+
 	// Update legacy fields for backward compatibility
 	cfg.PlexURL = selectedURL
 	cfg.PlexToken = token
@@ -331,7 +335,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Println(successStyle.Render("✓ Configuration saved"))
-	
+
 	if len(cfg.Servers) > 1 {
 		fmt.Println(infoStyle.Render(fmt.Sprintf("\nYou now have %d servers configured:", len(cfg.Servers))))
 		for _, s := range cfg.Servers {
@@ -344,7 +348,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	} else {
 		fmt.Println(infoStyle.Render("\nServer URL: " + selectedURL))
 	}
-	
+
 	fmt.Println(infoStyle.Render("\nRun 'goplexcli cache reindex' to build your media cache"))
 
 	return nil
@@ -352,10 +356,10 @@ func runLogin(cmd *cobra.Command, args []string) error {
 
 func selectConnection(server plex.Server) (string, error) {
 	fmt.Println(infoStyle.Render(fmt.Sprintf("\nServer '%s' has %d available connections:", server.Name, len(server.Connections))))
-	
+
 	// Load config to check for fzf
 	cfg, _ := config.Load()
-	
+
 	// Format connections for selection
 	var connectionDescs []string
 	for i, conn := range server.Connections {
@@ -364,17 +368,17 @@ func selectConnection(server plex.Server) (string, error) {
 			connType = "Local"
 		} else {
 			// Check if this connection looks local (private IP)
-			if strings.HasPrefix(conn, "http://192.168.") || 
-			   strings.HasPrefix(conn, "http://10.") || 
-			   strings.HasPrefix(conn, "http://172.") {
+			if strings.HasPrefix(conn, "http://192.168.") ||
+				strings.HasPrefix(conn, "http://10.") ||
+				strings.HasPrefix(conn, "http://172.") {
 				connType = "Local"
 			}
 		}
 		connectionDescs = append(connectionDescs, fmt.Sprintf("%d. %s [%s]", i+1, conn, connType))
 	}
-	
+
 	var selectedIdx int
-	
+
 	// Check if fzf is available
 	if ui.IsAvailable(cfg.FzfPath) {
 		_, idx, err := ui.SelectWithFzf(connectionDescs, "Select connection:", cfg.FzfPath)
@@ -397,11 +401,11 @@ func selectConnection(server plex.Server) (string, error) {
 		}
 		selectedIdx = choice - 1
 	}
-	
+
 	if selectedIdx < 0 || selectedIdx >= len(server.Connections) {
 		return "", fmt.Errorf("invalid connection selection")
 	}
-	
+
 	return server.Connections[selectedIdx], nil
 }
 
@@ -461,7 +465,6 @@ func selectMediaFlat(media []plex.MediaItem, cfg *config.Config, prompt string) 
 
 	return selectedMediaItems, false, nil
 }
-
 
 func runBrowse(cmd *cobra.Command, args []string) error {
 	// Show logo for interactive browse command
@@ -712,7 +715,7 @@ func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error
 			len(mediaItems),
 			media.FormatMediaTitle(),
 		)
-		
+
 		streamURL, err := client.GetStreamURL(media.Key)
 		if err != nil {
 			fmt.Println()
@@ -761,6 +764,16 @@ func handleDownloadMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) er
 		return fmt.Errorf("no valid rclone paths available")
 	}
 
+	// Handle dry-run mode
+	if dryRun {
+		fmt.Println(warningStyle.Render("\n[DRY RUN] Would download the following files:"))
+		for _, path := range rclonePaths {
+			fmt.Println(infoStyle.Render(fmt.Sprintf("  - %s", path)))
+		}
+		fmt.Println(warningStyle.Render(fmt.Sprintf("\n[DRY RUN] Total: %d files to current directory", len(rclonePaths))))
+		return nil
+	}
+
 	fmt.Println(successStyle.Render(fmt.Sprintf("\n✓ Starting download of %d items...", len(rclonePaths))))
 
 	// Get current directory
@@ -802,32 +815,32 @@ func handleStream(cfg *config.Config, media *plex.MediaItem) error {
 
 	// Publish the stream
 	streamID := server.PublishStream(media, streamURL, cfg.PlexURL, cfg.PlexToken)
-	
+
 	localIP := stream.GetLocalIP()
 	webURL := fmt.Sprintf("http://%s:%d", localIP, stream.DefaultPort)
-	
+
 	// URL encode for deep links
 	encodedURL := url.QueryEscape(streamURL)
-	
+
 	fmt.Println(successStyle.Render("✓ Stream published"))
 	fmt.Println(infoStyle.Render(fmt.Sprintf("Stream ID: %s", streamID)))
 	fmt.Println(infoStyle.Render(fmt.Sprintf("Title: %s", media.FormatMediaTitle())))
-	fmt.Println(warningStyle.Render(fmt.Sprintf("\n🌐 Stream server running on port %d", stream.DefaultPort)))
-	
-	fmt.Println(successStyle.Render("\n📱 Click to open in your player:"))
+	fmt.Println(warningStyle.Render(fmt.Sprintf("\nStream server running on port %d", stream.DefaultPort)))
+
+	fmt.Println(successStyle.Render("\nClick to open in your player:"))
 	fmt.Println()
-	
-	playerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("86")).Bold(true)
-	linkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Underline(true)
-	
-	fmt.Printf("  %s  %s\n", playerStyle.Render("Infuse:"), linkStyle.Render(fmt.Sprintf("infuse://x-callback-url/play?url=%s", encodedURL)))
-	fmt.Printf("  %s  %s\n", playerStyle.Render("OutPlayer:"), linkStyle.Render(fmt.Sprintf("outplayer://x-callback-url/play?url=%s", encodedURL)))
-	fmt.Printf("  %s  %s\n", playerStyle.Render("SenPlayer:"), linkStyle.Render(fmt.Sprintf("senplayer://x-callback-url/play?url=%s", encodedURL)))
-	fmt.Printf("  %s  %s\n", playerStyle.Render("VLC:"), linkStyle.Render(fmt.Sprintf("vlc://%s", encodedURL)))
-	fmt.Printf("  %s  %s\n", playerStyle.Render("VidHub:"), linkStyle.Render(fmt.Sprintf("open-vidhub://x-callback-url/open?url=%s", encodedURL)))
-	
+
+	playerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#C084FC")).Bold(true).Width(12)
+	linkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#60A5FA")).Underline(true)
+
+	fmt.Printf("  %s %s\n", playerStyle.Render("Infuse"), linkStyle.Render(fmt.Sprintf("infuse://x-callback-url/play?url=%s", encodedURL)))
+	fmt.Printf("  %s %s\n", playerStyle.Render("OutPlayer"), linkStyle.Render(fmt.Sprintf("outplayer://x-callback-url/play?url=%s", encodedURL)))
+	fmt.Printf("  %s %s\n", playerStyle.Render("SenPlayer"), linkStyle.Render(fmt.Sprintf("senplayer://x-callback-url/play?url=%s", encodedURL)))
+	fmt.Printf("  %s %s\n", playerStyle.Render("VLC"), linkStyle.Render(fmt.Sprintf("vlc://%s", encodedURL)))
+	fmt.Printf("  %s %s\n", playerStyle.Render("VidHub"), linkStyle.Render(fmt.Sprintf("open-vidhub://x-callback-url/open?url=%s", encodedURL)))
+
 	fmt.Println()
-	fmt.Println(successStyle.Render("🌐 Web UI: ") + linkStyle.Render(webURL))
+	fmt.Println(successStyle.Render("Web UI: ") + linkStyle.Render(webURL))
 	fmt.Println()
 	fmt.Println(infoStyle.Render("Press Ctrl+C or 'q' to stop the server\n"))
 
@@ -1145,14 +1158,14 @@ func updateCache(fullReindex bool) error {
 
 	// Check if we have multiple servers
 	enabledServers := cfg.GetEnabledServers()
-	
+
 	var media []plex.MediaItem
 	ctx := context.Background()
 
 	if len(enabledServers) > 1 {
 		// Multi-server mode
 		fmt.Println(infoStyle.Render(fmt.Sprintf("Found %d enabled servers", len(enabledServers))))
-		
+
 		// Build server configs
 		var serverConfigs []struct{ Name, URL, Token string }
 		for _, server := range enabledServers {
@@ -1208,7 +1221,7 @@ func updateCache(fullReindex bool) error {
 
 		// Get all media with progress
 		totalItems := 0
-		
+
 		media, err = client.GetAllMedia(ctx, func(libraryName string, itemCount, totalLibs, currentLib int) {
 			totalItems += itemCount
 			fmt.Printf("\r\x1b[K%s [%d/%d] %s: %d items (Total: %d)",
@@ -1224,7 +1237,7 @@ func updateCache(fullReindex bool) error {
 			return fmt.Errorf("failed to get media: %w", err)
 		}
 	}
-	
+
 	fmt.Println() // New line after progress
 
 	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Retrieved %d media items", len(media))))
@@ -1239,12 +1252,12 @@ func updateCache(fullReindex bool) error {
 	}
 
 	fmt.Println(successStyle.Render("✓ Cache saved successfully"))
-	
+
 	// Count by type and by server
 	movieCount := 0
 	episodeCount := 0
 	serverCounts := make(map[string]int)
-	
+
 	for _, item := range media {
 		switch item.Type {
 		case "movie":
@@ -1256,11 +1269,11 @@ func updateCache(fullReindex bool) error {
 			serverCounts[item.ServerName]++
 		}
 	}
-	
+
 	fmt.Println(infoStyle.Render(fmt.Sprintf("\nTotal items: %d", len(media))))
 	fmt.Println(infoStyle.Render(fmt.Sprintf("  Movies: %d", movieCount)))
 	fmt.Println(infoStyle.Render(fmt.Sprintf("  Episodes: %d", episodeCount)))
-	
+
 	if len(serverCounts) > 1 {
 		fmt.Println(infoStyle.Render("\nBy server:"))
 		for serverName, count := range serverCounts {
@@ -1485,7 +1498,7 @@ func runStream(cmd *cobra.Command, args []string) error {
 
 func runCacheSearch(cmd *cobra.Command, args []string) error {
 	searchTitle := strings.Join(args, " ")
-	
+
 	// Load config
 	cfg, err := config.Load()
 	if err != nil {
@@ -1525,7 +1538,7 @@ func runCacheSearch(cmd *cobra.Command, args []string) error {
 
 	// Search in Plex directly
 	fmt.Println(infoStyle.Render("=== Checking Plex Server ==="))
-	
+
 	client, err := plex.New(cfg.PlexURL, cfg.PlexToken)
 	if err != nil {
 		return fmt.Errorf("failed to create plex client: %w", err)
@@ -1562,7 +1575,7 @@ func runCacheSearch(cmd *cobra.Command, args []string) error {
 				fmt.Printf("  Key: %s\n", item.Key)
 				fmt.Printf("  FilePath: %s\n", item.FilePath)
 				fmt.Printf("  RclonePath: %s\n", item.RclonePath)
-				
+
 				if item.FilePath == "" {
 					fmt.Println(warningStyle.Render("  ⚠ WARNING: No file path found!"))
 				}
@@ -1621,7 +1634,7 @@ func runServerList(cmd *cobra.Command, args []string) error {
 
 func runServerEnable(cmd *cobra.Command, args []string) error {
 	serverName := strings.Join(args, " ")
-	
+
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
@@ -1652,7 +1665,7 @@ func runServerEnable(cmd *cobra.Command, args []string) error {
 
 func runServerDisable(cmd *cobra.Command, args []string) error {
 	serverName := strings.Join(args, " ")
-	
+
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)

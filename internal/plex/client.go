@@ -1,3 +1,6 @@
+// Package plex provides a client for interacting with Plex Media Server.
+// It supports authentication, library browsing, and stream URL generation.
+// The client handles API versioning gracefully and logs warnings for unexpected responses.
 package plex
 
 import (
@@ -5,12 +8,29 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/LukeHagar/plexgo"
 	"github.com/LukeHagar/plexgo/models/operations"
 )
+
+// apiLogger is used for logging API warnings (defaults to stderr, silent in production)
+var apiLogger = log.New(os.Stderr, "[plex] ", log.LstdFlags)
+
+// SetAPILogger allows customizing the logger for API warnings
+func SetAPILogger(l *log.Logger) {
+	if l != nil {
+		apiLogger = l
+	}
+}
+
+// SilenceAPIWarnings disables API warning logging
+func SilenceAPIWarnings() {
+	apiLogger = log.New(io.Discard, "", 0)
+}
 
 type Client struct {
 	sdk        *plexgo.PlexAPI
@@ -36,6 +56,8 @@ type MediaItem struct {
 	Thumb       string // Poster/thumbnail URL path
 	ServerName  string // Name of the Plex server this item belongs to
 	ServerURL   string // URL of the Plex server this item belongs to
+	ViewOffset  int    // Playback position in milliseconds (0 if not started)
+	ViewCount   int    // Number of times fully watched
 }
 
 // New creates a new Plex client
@@ -98,43 +120,65 @@ type sectionsResponse struct {
 func (c *Client) GetLibraries(ctx context.Context) ([]Library, error) {
 	// Use direct HTTP request to avoid library's unmarshaling issues with hidden field
 	url := fmt.Sprintf("%s/library/sections?X-Plex-Token=%s", c.serverURL, c.token)
-	
+
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	
+
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Plex-Client-Identifier", "goplexcli")
 	req.Header.Set("X-Plex-Product", "GoplexCLI")
 	req.Header.Set("X-Plex-Version", "1.0")
-	
+
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get sections: %w", err)
 	}
 	defer resp.Body.Close()
-	
+
+	// Check HTTP status code
+	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusUnauthorized {
+			return nil, fmt.Errorf("authentication failed: invalid or expired token (status %d)", resp.StatusCode)
+		}
+		if resp.StatusCode == http.StatusNotFound {
+			return nil, fmt.Errorf("library sections endpoint not found - Plex API may have changed (status %d)", resp.StatusCode)
+		}
+		return nil, fmt.Errorf("unexpected status code %d from Plex server", resp.StatusCode)
+	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
-	
+
 	var sectionsResp sectionsResponse
 	if err := json.Unmarshal(body, &sectionsResp); err != nil {
+		apiLogger.Printf("warning: failed to parse sections response, API format may have changed: %v", err)
 		return nil, fmt.Errorf("failed to parse sections: %w", err)
 	}
-	
+
+	// Log warning if response structure seems unexpected
+	if len(sectionsResp.MediaContainer.Directory) == 0 {
+		apiLogger.Printf("warning: no library sections returned - server may be empty or API format changed")
+	}
+
 	var libraries []Library
 	for _, dir := range sectionsResp.MediaContainer.Directory {
+		// Validate required fields
+		if dir.Key == "" {
+			apiLogger.Printf("warning: library section missing key field, skipping")
+			continue
+		}
 		libraries = append(libraries, Library{
 			Key:   dir.Key,
 			Title: dir.Title,
 			Type:  dir.Type,
 		})
 	}
-	
+
 	return libraries, nil
 }
 
@@ -153,7 +197,7 @@ func (c *Client) GetAllMedia(ctx context.Context, progressCallback ProgressCallb
 
 	var allMedia []MediaItem
 	totalLibs := 0
-	
+
 	// Count libraries we'll actually process
 	for _, lib := range libraries {
 		if lib.Type == "movie" || lib.Type == "show" {
@@ -170,7 +214,7 @@ func (c *Client) GetAllMedia(ctx context.Context, progressCallback ProgressCallb
 				return nil, fmt.Errorf("failed to get media from section %s: %w", lib.Title, err)
 			}
 			allMedia = append(allMedia, media...)
-			
+
 			// Report progress
 			if progressCallback != nil {
 				progressCallback(lib.Title, len(media), totalLibs, currentLib)
@@ -242,44 +286,58 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 		// For movies, use the default all endpoint
 		url = fmt.Sprintf("%s/library/sections/%s/all?X-Plex-Token=%s", c.serverURL, sectionKey, c.token)
 	}
-	
+
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	
+
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Plex-Client-Identifier", "goplexcli")
 	req.Header.Set("X-Plex-Product", "GoplexCLI")
 	req.Header.Set("X-Plex-Version", "1.0")
-	
+
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get library items: %w", err)
 	}
 	defer resp.Body.Close()
-	
+
+	// Check HTTP status code
+	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusUnauthorized {
+			return nil, fmt.Errorf("authentication failed: invalid or expired token (status %d)", resp.StatusCode)
+		}
+		if resp.StatusCode == http.StatusNotFound {
+			apiLogger.Printf("warning: section %s not found - it may have been removed", sectionKey)
+			return nil, fmt.Errorf("library section %s not found (status %d)", sectionKey, resp.StatusCode)
+		}
+		return nil, fmt.Errorf("unexpected status code %d from Plex server", resp.StatusCode)
+	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
-	
+
 	// Parse the response
 	var mediaResp struct {
 		MediaContainer struct {
 			Metadata []struct {
-				Key              string  `json:"key"`
-				Title            string  `json:"title"`
-				Year             *int    `json:"year"`
-				Summary          *string `json:"summary"`
+				Key              string   `json:"key"`
+				Title            string   `json:"title"`
+				Year             *int     `json:"year"`
+				Summary          *string  `json:"summary"`
 				Rating           *float32 `json:"rating"`
-				Duration         *int    `json:"duration"`
-				Thumb            *string `json:"thumb"`
-				GrandparentTitle *string `json:"grandparentTitle"`
-				ParentTitle      *string `json:"parentTitle"`
-				Index            *int    `json:"index"`
-				ParentIndex      *int    `json:"parentIndex"`
+				Duration         *int     `json:"duration"`
+				Thumb            *string  `json:"thumb"`
+				GrandparentTitle *string  `json:"grandparentTitle"`
+				ParentTitle      *string  `json:"parentTitle"`
+				Index            *int     `json:"index"`
+				ParentIndex      *int     `json:"parentIndex"`
+				ViewOffset       *int     `json:"viewOffset"`
+				ViewCount        *int     `json:"viewCount"`
 				Media            []struct {
 					Part []struct {
 						File *string `json:"file"`
@@ -288,14 +346,24 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 			} `json:"Metadata"`
 		} `json:"MediaContainer"`
 	}
-	
+
 	if err := json.Unmarshal(body, &mediaResp); err != nil {
+		apiLogger.Printf("warning: failed to parse media response for section %s, API format may have changed: %v", sectionKey, err)
 		return nil, fmt.Errorf("failed to parse media response: %w", err)
 	}
 
 	if sectionType == "movie" {
 		// Process movies
 		for _, metadata := range mediaResp.MediaContainer.Metadata {
+			// Validate required fields
+			if metadata.Key == "" {
+				apiLogger.Printf("warning: movie item missing key field, skipping")
+				continue
+			}
+			if metadata.Title == "" {
+				apiLogger.Printf("warning: movie item %s missing title field", metadata.Key)
+			}
+
 			item := MediaItem{
 				Key:        metadata.Key,
 				Title:      metadata.Title,
@@ -307,12 +375,16 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 				Thumb:      valueOrEmpty(metadata.Thumb),
 				ServerName: c.serverName,
 				ServerURL:  c.serverURL,
+				ViewOffset: valueOrZeroInt(metadata.ViewOffset),
+				ViewCount:  valueOrZeroInt(metadata.ViewCount),
 			}
 
 			// Get file path
 			if len(metadata.Media) > 0 && len(metadata.Media[0].Part) > 0 {
 				item.FilePath = valueOrEmpty(metadata.Media[0].Part[0].File)
 				item.RclonePath = convertToRclonePath(item.FilePath)
+			} else {
+				apiLogger.Printf("warning: movie %q has no media parts", metadata.Title)
 			}
 
 			items = append(items, item)
@@ -320,6 +392,15 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 	} else if sectionType == "show" {
 		// For TV shows, we explicitly requested type=4 (episodes)
 		for _, metadata := range mediaResp.MediaContainer.Metadata {
+			// Validate required fields
+			if metadata.Key == "" {
+				apiLogger.Printf("warning: episode item missing key field, skipping")
+				continue
+			}
+			if metadata.Title == "" {
+				apiLogger.Printf("warning: episode item %s missing title field", metadata.Key)
+			}
+
 			item := MediaItem{
 				Key:         metadata.Key,
 				Title:       metadata.Title,
@@ -335,12 +416,16 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 				ParentIndex: int64(valueOrZeroInt(metadata.ParentIndex)),
 				ServerName:  c.serverName,
 				ServerURL:   c.serverURL,
+				ViewOffset:  valueOrZeroInt(metadata.ViewOffset),
+				ViewCount:   valueOrZeroInt(metadata.ViewCount),
 			}
 
 			// Get file path
 			if len(metadata.Media) > 0 && len(metadata.Media[0].Part) > 0 {
 				item.FilePath = valueOrEmpty(metadata.Media[0].Part[0].File)
 				item.RclonePath = convertToRclonePath(item.FilePath)
+			} else {
+				apiLogger.Printf("warning: episode %q has no media parts", metadata.Title)
 			}
 
 			items = append(items, item)
@@ -355,29 +440,40 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 func (c *Client) GetStreamURL(mediaKey string) (string, error) {
 	// First, get the metadata for this item to find the media part key
 	url := fmt.Sprintf("%s%s?X-Plex-Token=%s", c.serverURL, mediaKey, c.token)
-	
+
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
-	
+
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Plex-Client-Identifier", "goplexcli")
 	req.Header.Set("X-Plex-Product", "GoplexCLI")
 	req.Header.Set("X-Plex-Version", "1.0")
-	
+
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to get metadata: %w", err)
 	}
 	defer resp.Body.Close()
-	
+
+	// Check HTTP status code
+	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusUnauthorized {
+			return "", fmt.Errorf("authentication failed: invalid or expired token (status %d)", resp.StatusCode)
+		}
+		if resp.StatusCode == http.StatusNotFound {
+			return "", fmt.Errorf("media item not found: %s (status %d)", mediaKey, resp.StatusCode)
+		}
+		return "", fmt.Errorf("unexpected status code %d from Plex server", resp.StatusCode)
+	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("failed to read response: %w", err)
 	}
-	
+
 	// Parse to get the media part
 	var metadataResp struct {
 		MediaContainer struct {
@@ -390,28 +486,30 @@ func (c *Client) GetStreamURL(mediaKey string) (string, error) {
 			} `json:"Metadata"`
 		} `json:"MediaContainer"`
 	}
-	
+
 	if err := json.Unmarshal(body, &metadataResp); err != nil {
+		apiLogger.Printf("warning: failed to parse stream metadata for %s, API format may have changed: %v", mediaKey, err)
 		return "", fmt.Errorf("failed to parse metadata: %w", err)
 	}
-	
+
 	// Get the part key
 	if len(metadataResp.MediaContainer.Metadata) > 0 &&
 		len(metadataResp.MediaContainer.Metadata[0].Media) > 0 &&
 		len(metadataResp.MediaContainer.Metadata[0].Media[0].Part) > 0 {
-		
+
 		partKey := metadataResp.MediaContainer.Metadata[0].Media[0].Part[0].Key
 		if partKey != nil && *partKey != "" {
 			// Use download=1 to get direct file (no transcoding)
 			// This is faster and works better with most players
-			streamURL := fmt.Sprintf("%s%s?download=1&X-Plex-Token=%s", 
+			streamURL := fmt.Sprintf("%s%s?download=1&X-Plex-Token=%s",
 				c.serverURL, *partKey, c.token)
 			return streamURL, nil
 		}
 	}
-	
+
 	// Fallback to simple download URL if part key not found
-	streamURL := fmt.Sprintf("%s%s?download=1&X-Plex-Token=%s", 
+	apiLogger.Printf("warning: could not find media part key for %s, using fallback URL", mediaKey)
+	streamURL := fmt.Sprintf("%s%s?download=1&X-Plex-Token=%s",
 		c.serverURL, mediaKey, c.token)
 	return streamURL, nil
 }
@@ -455,12 +553,12 @@ func (m *MediaItem) FormatMediaTitle() string {
 	default:
 		title = m.Title
 	}
-	
+
 	// Add server name if present and multiple servers might be in use
 	if m.ServerName != "" && m.ServerName != "Default Server" {
 		title = fmt.Sprintf("[%s] %s", m.ServerName, title)
 	}
-	
+
 	return title
 }
 
