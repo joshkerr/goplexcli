@@ -627,6 +627,164 @@ browseLoop:
 	}
 }
 
+// runMediaBrowser handles the shared media browsing flow for movie and tv commands
+// mediaType should be "movie" or "episode"
+func runMediaBrowser(mediaType string) error {
+	// Show logo
+	ui.Logo(version)
+
+	// Load config
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("invalid config: %w. Please run 'goplexcli login' first", err)
+	}
+
+	// Load cache
+	mediaCache, err := cache.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load cache: %w", err)
+	}
+
+	if len(mediaCache.Media) == 0 {
+		fmt.Println(warningStyle.Render("Cache is empty. Run 'goplexcli cache reindex' first."))
+		return nil
+	}
+
+	// Load queue
+	q, err := queue.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load queue: %w", err)
+	}
+
+	// Filter media by type
+	var filteredMedia []plex.MediaItem
+	for _, item := range mediaCache.Media {
+		if item.Type == mediaType {
+			filteredMedia = append(filteredMedia, item)
+		}
+	}
+
+	if len(filteredMedia) == 0 {
+		typeName := "movies"
+		if mediaType == "episode" {
+			typeName = "TV shows"
+		}
+		fmt.Println(warningStyle.Render(fmt.Sprintf("No %s found in cache.", typeName)))
+		return nil
+	}
+
+	fmt.Println(infoStyle.Render(fmt.Sprintf("Loaded %d items from cache", len(filteredMedia))))
+	fmt.Println(infoStyle.Render(fmt.Sprintf("Last updated: %s", mediaCache.LastUpdated.Format(time.RFC822))))
+
+	if q.Len() > 0 {
+		fmt.Println(infoStyle.Render(fmt.Sprintf("Queue has %s", ui.PluralizeItems(q.Len()))))
+	}
+
+browseLoop:
+	for {
+		// Check if user wants to view queue first (show option at top of list)
+		if q.Len() > 0 && ui.IsAvailable(cfg.FzfPath) {
+			// Show queue option in selection
+			viewQueue, err := ui.PromptViewQueue(cfg.FzfPath, q.Len())
+			if err != nil {
+				if err.Error() == "cancelled by user" {
+					return nil
+				}
+				return err
+			}
+			if viewQueue {
+				result, err := handleQueueView(cfg, q)
+				if err != nil {
+					return err
+				}
+				if result == "done" {
+					return nil
+				}
+				continue browseLoop
+			}
+		}
+
+		fmt.Println(infoStyle.Render(fmt.Sprintf("\nBrowsing %d items...\n", len(filteredMedia))))
+
+		// Select media
+		var selectedMediaItems []*plex.MediaItem
+		if ui.IsAvailable(cfg.FzfPath) {
+			selectedIndices, err := ui.SelectMediaWithPreview(filteredMedia, "Select media (TAB for multi-select):", cfg.FzfPath, cfg.PlexURL, cfg.PlexToken)
+			if err != nil {
+				if err.Error() == "cancelled by user" {
+					return nil
+				}
+				return fmt.Errorf("media selection failed: %w", err)
+			}
+
+			for _, index := range selectedIndices {
+				if index >= 0 && index < len(filteredMedia) {
+					selectedMediaItems = append(selectedMediaItems, &filteredMedia[index])
+				}
+			}
+		} else {
+			selectedMedia, err := selectMediaManual(filteredMedia)
+			if err != nil {
+				return err
+			}
+			selectedMediaItems = []*plex.MediaItem{selectedMedia}
+		}
+
+		if len(selectedMediaItems) == 0 {
+			return fmt.Errorf("no media selected")
+		}
+
+		// Ask what to do
+		var action string
+		if ui.IsAvailable(cfg.FzfPath) {
+			action, err = ui.PromptActionWithQueue(cfg.FzfPath, q.Len())
+			if err != nil {
+				if err.Error() == "cancelled by user" {
+					return nil
+				}
+				return err
+			}
+		} else {
+			action, err = promptActionManualWithQueue(q.Len())
+			if err != nil {
+				return err
+			}
+		}
+
+		switch action {
+		case "watch":
+			return handleWatchMultiple(cfg, selectedMediaItems)
+		case "download":
+			return handleDownloadMultiple(cfg, selectedMediaItems)
+		case "queue":
+			added := q.Add(selectedMediaItems)
+			if err := q.Save(); err != nil {
+				return fmt.Errorf("failed to save queue: %w", err)
+			}
+			skipped := len(selectedMediaItems) - added
+			if skipped > 0 {
+				fmt.Println(successStyle.Render(fmt.Sprintf("Added %d item(s) to queue (%d duplicate(s) skipped). Queue now has %s.", added, skipped, ui.PluralizeItems(q.Len()))))
+			} else {
+				fmt.Println(successStyle.Render(fmt.Sprintf("Added %d item(s) to queue. Queue now has %s.", added, ui.PluralizeItems(q.Len()))))
+			}
+			continue browseLoop
+		case "stream":
+			if len(selectedMediaItems) > 1 {
+				fmt.Println(warningStyle.Render("Note: Stream only supports single selection, using first item"))
+			}
+			return handleStream(cfg, selectedMediaItems[0])
+		case "cancel":
+			return nil
+		default:
+			return nil
+		}
+	}
+}
+
 func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error {
 	if len(mediaItems) == 0 {
 		return fmt.Errorf("no media items provided")
