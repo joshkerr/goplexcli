@@ -359,6 +359,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	}
 	
 	fmt.Println(infoStyle.Render("\nRun 'goplexcli cache reindex' to build your media cache"))
+	fmt.Println(infoStyle.Render("Then use 'goplexcli movie' or 'goplexcli tv' to browse"))
 
 	return nil
 }
