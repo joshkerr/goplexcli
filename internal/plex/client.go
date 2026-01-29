@@ -514,6 +514,38 @@ func (c *Client) GetStreamURL(mediaKey string) (string, error) {
 	return streamURL, nil
 }
 
+// UpdateTimeline reports playback progress to the Plex server.
+// This updates the resume position and shows "Now Playing" on the Plex dashboard.
+// state should be "playing", "paused", or "stopped".
+// timeMs is the current position in milliseconds.
+// durationMs is the total duration in milliseconds.
+func (c *Client) UpdateTimeline(ratingKey string, state string, timeMs int, durationMs int) error {
+	url := fmt.Sprintf("%s/:/timeline?ratingKey=%s&key=/library/metadata/%s&state=%s&time=%d&duration=%d&X-Plex-Token=%s",
+		c.serverURL, ratingKey, ratingKey, state, timeMs, durationMs, c.token)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create timeline request: %w", err)
+	}
+
+	req.Header.Set("X-Plex-Client-Identifier", "goplexcli")
+	req.Header.Set("X-Plex-Product", "GoplexCLI")
+	req.Header.Set("X-Plex-Version", "1.0")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to update timeline: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("timeline update failed with status %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
 // convertToRclonePath converts a Plex file path to an rclone remote path
 // Input: /home/joshkerr/plexcloudservers2/Media/TV/...
 // Output: plexcloudservers2:/Media/TV/...
