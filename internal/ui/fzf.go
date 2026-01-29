@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	
+
 	"github.com/joshkerr/goplexcli/internal/plex"
 )
 
@@ -21,19 +21,19 @@ func SelectWithFzf(items []string, prompt string, fzfPath string) (string, int, 
 	if len(items) == 0 {
 		return "", -1, fmt.Errorf("no items to select from")
 	}
-	
+
 	if fzfPath == "" {
 		fzfPath = "fzf"
 	}
-	
+
 	// Check if fzf is available
 	if _, err := exec.LookPath(fzfPath); err != nil {
 		return "", -1, fmt.Errorf("fzf not found in PATH. Please install fzf or specify the path in config")
 	}
-	
+
 	// Join items with newlines
 	input := strings.Join(items, "\n")
-	
+
 	// Build fzf command
 	args := []string{
 		"--height=90%",
@@ -41,16 +41,16 @@ func SelectWithFzf(items []string, prompt string, fzfPath string) (string, int, 
 		"--border",
 		"--prompt=" + prompt + " ",
 	}
-	
+
 	cmd := exec.Command(fzfPath, args...)
-	
+
 	// Set up pipes
 	cmd.Stdin = strings.NewReader(input)
 	cmd.Stderr = os.Stderr
-	
+
 	var outBuf bytes.Buffer
 	cmd.Stdout = &outBuf
-	
+
 	// Run fzf
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -61,13 +61,13 @@ func SelectWithFzf(items []string, prompt string, fzfPath string) (string, int, 
 		}
 		return "", -1, fmt.Errorf("fzf failed: %w", err)
 	}
-	
+
 	// Get selected item
 	selected := strings.TrimSpace(outBuf.String())
 	if selected == "" {
 		return "", -1, fmt.Errorf("no selection made")
 	}
-	
+
 	// Find the index of the selected item
 	index := -1
 	for i, item := range items {
@@ -76,7 +76,7 @@ func SelectWithFzf(items []string, prompt string, fzfPath string) (string, int, 
 			break
 		}
 	}
-	
+
 	return selected, index, nil
 }
 
@@ -85,34 +85,34 @@ func SelectMediaWithPreview(media []plex.MediaItem, prompt string, fzfPath strin
 	if len(media) == 0 {
 		return nil, fmt.Errorf("no items to select from")
 	}
-	
+
 	if fzfPath == "" {
 		fzfPath = "fzf"
 	}
-	
+
 	// Check if fzf is available
 	if _, err := exec.LookPath(fzfPath); err != nil {
 		return nil, fmt.Errorf("fzf not found in PATH. Please install fzf or specify the path in config")
 	}
-	
+
 	// Create formatted items with index prefix for preview script
 	var items []string
 	for i, item := range media {
 		items = append(items, fmt.Sprintf("%d\t%s", i, item.FormatMediaTitle()))
 	}
 	input := strings.Join(items, "\n")
-	
+
 	// Create a temporary preview script and data file
 	previewScript, err := createPreviewScript(media, plexURL, plexToken)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create preview script: %w", err)
 	}
 	defer os.Remove(previewScript)
-	
+
 	// Also clean up the data file containing the token
 	dataPath := filepath.Join(os.TempDir(), "goplexcli-preview-data.json")
 	defer os.Remove(dataPath)
-	
+
 	// Build fzf command with preview and multi-select support
 	args := []string{
 		"--multi",
@@ -127,16 +127,16 @@ func SelectMediaWithPreview(media []plex.MediaItem, prompt string, fzfPath strin
 		"--bind=ctrl-p:toggle-preview",
 		"--bind=ctrl-/:toggle-preview",
 	}
-	
+
 	cmd := exec.Command(fzfPath, args...)
-	
+
 	// Set up pipes
 	cmd.Stdin = strings.NewReader(input)
 	cmd.Stderr = os.Stderr
-	
+
 	var outBuf bytes.Buffer
 	cmd.Stdout = &outBuf
-	
+
 	// Run fzf
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -147,110 +147,110 @@ func SelectMediaWithPreview(media []plex.MediaItem, prompt string, fzfPath strin
 		}
 		return nil, fmt.Errorf("fzf failed: %w", err)
 	}
-	
+
 	// Get selected items and extract indices
 	output := strings.TrimSpace(outBuf.String())
 	if output == "" {
 		return nil, fmt.Errorf("no selection made")
 	}
-	
+
 	// Parse multiple selections (one per line)
 	lines := strings.Split(output, "\n")
 	var indices []int
 	var invalidCount int
-	
+
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		
+
 		// Parse the index from the selected line
 		parts := strings.SplitN(line, "\t", 2)
 		if len(parts) == 0 {
 			invalidCount++
 			continue
 		}
-		
+
 		var index int
 		if _, err := fmt.Sscanf(parts[0], "%d", &index); err != nil {
 			invalidCount++
 			continue
 		}
-		
+
 		if index >= 0 && index < len(media) {
 			indices = append(indices, index)
 		} else {
 			invalidCount++
 		}
 	}
-	
+
 	if len(indices) == 0 {
 		if invalidCount > 0 {
 			return nil, fmt.Errorf("no valid selection made (%d invalid selections ignored)", invalidCount)
 		}
 		return nil, fmt.Errorf("no valid selection made")
 	}
-	
+
 	// Warn if some selections were invalid
 	if invalidCount > 0 {
 		fmt.Fprintf(os.Stderr, "Warning: %d invalid selection(s) were ignored\n", invalidCount)
 	}
-	
+
 	return indices, nil
 }
 
 // createPreviewScript creates a preview binary and returns its path
 func createPreviewScript(media []plex.MediaItem, plexURL string, plexToken string) (string, error) {
 	tmpDir := os.TempDir()
-	
+
 	// Create JSON data file for the preview to read
 	dataPath := filepath.Join(tmpDir, "goplexcli-preview-data.json")
-	
+
 	type PreviewData struct {
 		Media     []plex.MediaItem `json:"media"`
 		PlexURL   string           `json:"plex_url"`
 		PlexToken string           `json:"plex_token"`
 	}
-	
+
 	data := PreviewData{
 		Media:     media,
 		PlexURL:   plexURL,
 		PlexToken: plexToken,
 	}
-	
+
 	jsonData, err := json.Marshal(data)
 	if err != nil {
 		return "", err
 	}
-	
+
 	// Use restrictive permissions (0600) to protect the Plex token
 	if err := os.WriteFile(dataPath, jsonData, 0600); err != nil {
 		return "", err
 	}
-	
+
 	// First, try to find in PATH
 	var previewBinary string
 	var previewBinaryName string
-	
+
 	// On Windows, look for .exe extension
 	if runtime.GOOS == "windows" {
 		previewBinaryName = "goplexcli-preview.exe"
 	} else {
 		previewBinaryName = "goplexcli-preview"
 	}
-	
+
 	if pathBinary, err := exec.LookPath(previewBinaryName); err == nil {
 		previewBinary = pathBinary
 	} else {
 		// Look for the preview binary in common locations
 		// Get current working directory
 		cwd, _ := os.Getwd()
-		
+
 		possiblePaths := []string{
-			filepath.Join(cwd, previewBinaryName),            // Current directory
+			filepath.Join(cwd, previewBinaryName), // Current directory
 		}
-		
+
 		// Add Unix-specific paths on non-Windows systems
 		if runtime.GOOS != "windows" {
 			possiblePaths = append(possiblePaths,
@@ -258,7 +258,7 @@ func createPreviewScript(media []plex.MediaItem, plexURL string, plexToken strin
 				filepath.Join(os.Getenv("HOME"), "bin", "goplexcli-preview"),
 			)
 		}
-		
+
 		for _, path := range possiblePaths {
 			if stat, err := os.Stat(path); err == nil && !stat.IsDir() {
 				previewBinary, _ = filepath.Abs(path)
@@ -266,12 +266,12 @@ func createPreviewScript(media []plex.MediaItem, plexURL string, plexToken strin
 			}
 		}
 	}
-	
+
 	// If not found, return error with helpful message
 	if previewBinary == "" {
 		var scriptPath string
 		var script string
-		
+
 		if runtime.GOOS == "windows" {
 			scriptPath = filepath.Join(tmpDir, "goplexcli-preview.bat")
 			script = `@echo off
@@ -302,11 +302,11 @@ echo "  - ~/bin/goplexcli-preview"
 		_ = os.WriteFile(scriptPath, []byte(script), 0755) // Ignore error - will fail in wrapper script anyway
 		return scriptPath, nil
 	}
-	
+
 	// Create wrapper script that calls the binary
 	var scriptPath string
 	var script string
-	
+
 	if runtime.GOOS == "windows" {
 		// Windows batch file
 		scriptPath = filepath.Join(tmpDir, "goplexcli-preview.bat")
@@ -327,11 +327,11 @@ echo "  - ~/bin/goplexcli-preview"
 '%s' '%s' "$1"
 `, escapedBinary, escapedDataPath)
 	}
-	
+
 	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
 		return "", err
 	}
-	
+
 	return scriptPath, nil
 }
 
@@ -340,7 +340,7 @@ func IsAvailable(fzfPath string) bool {
 	if fzfPath == "" {
 		fzfPath = "fzf"
 	}
-	
+
 	_, err := exec.LookPath(fzfPath)
 	return err == nil
 }
@@ -353,12 +353,12 @@ func PromptAction(fzfPath string) (string, error) {
 		"Stream",
 		"Cancel",
 	}
-	
+
 	selected, _, err := SelectWithFzf(actions, "Select action:", fzfPath)
 	if err != nil {
 		return "", err
 	}
-	
+
 	return strings.ToLower(selected), nil
 }
 
@@ -547,23 +547,23 @@ func SelectMedia(media []plex.MediaItem, prompt string, fzfPath string) (*plex.M
 	if len(media) == 0 {
 		return nil, fmt.Errorf("no media to select from")
 	}
-	
+
 	// Format media items for display
 	var items []string
 	for _, item := range media {
 		items = append(items, item.FormatMediaTitle())
 	}
-	
+
 	// Use fzf to select
 	_, index, err := SelectWithFzf(items, prompt, fzfPath)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	if index < 0 || index >= len(media) {
 		return nil, fmt.Errorf("invalid selection")
 	}
-	
+
 	return &media[index], nil
 }
 
@@ -572,22 +572,22 @@ func DownloadPoster(plexURL, thumbPath, token string) string {
 	if thumbPath == "" {
 		return ""
 	}
-	
+
 	// Create cache directory
 	cacheDir := filepath.Join(os.TempDir(), "goplexcli-posters")
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
 		return ""
 	}
-	
+
 	// Create filename from hash of thumb path
 	hash := md5.Sum([]byte(thumbPath))
 	posterFile := filepath.Join(cacheDir, fmt.Sprintf("%x.jpg", hash))
-	
+
 	// Check if already downloaded
 	if _, err := os.Stat(posterFile); err == nil {
 		return posterFile
 	}
-	
+
 	// Download poster
 	url := plexURL + thumbPath + "?X-Plex-Token=" + token
 	resp, err := http.Get(url)
@@ -595,22 +595,22 @@ func DownloadPoster(plexURL, thumbPath, token string) string {
 		return ""
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != 200 {
 		return ""
 	}
-	
+
 	// Save to file
 	out, err := os.Create(posterFile)
 	if err != nil {
 		return ""
 	}
 	defer out.Close()
-	
+
 	if _, err := io.Copy(out, resp.Body); err != nil {
 		os.Remove(posterFile)
 		return ""
 	}
-	
+
 	return posterFile
 }

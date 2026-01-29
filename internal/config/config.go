@@ -9,9 +9,9 @@ import (
 )
 
 type PlexServer struct {
-	Name     string `json:"name"`
-	URL      string `json:"url"`
-	Enabled  bool   `json:"enabled"` // Whether to index this server
+	Name    string `json:"name"`
+	URL     string `json:"url"`
+	Enabled bool   `json:"enabled"` // Whether to index this server
 }
 
 type Config struct {
@@ -19,10 +19,10 @@ type Config struct {
 	PlexURL      string `json:"plex_url,omitempty"`
 	PlexToken    string `json:"plex_token"`
 	PlexUsername string `json:"plex_username,omitempty"`
-	
+
 	// Multi-server support
-	Servers    []PlexServer `json:"servers,omitempty"`
-	
+	Servers []PlexServer `json:"servers,omitempty"`
+
 	// Tool paths
 	MPVPath    string `json:"mpv_path,omitempty"`
 	RclonePath string `json:"rclone_path,omitempty"`
@@ -32,7 +32,7 @@ type Config struct {
 // GetConfigDir returns the platform-specific config directory
 func GetConfigDir() (string, error) {
 	var baseDir string
-	
+
 	switch runtime.GOOS {
 	case "darwin":
 		home, err := os.UserHomeDir()
@@ -59,7 +59,7 @@ func GetConfigDir() (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported platform: %s", runtime.GOOS)
 	}
-	
+
 	configDir := filepath.Join(baseDir, "goplexcli")
 	return configDir, nil
 }
@@ -88,7 +88,7 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -96,17 +96,17 @@ func Load() (*Config, error) {
 		}
 		return nil, err
 	}
-	
+
 	var config Config
 	if err := json.Unmarshal(data, &config); err != nil {
 		return nil, err
 	}
-	
+
 	// Migrate legacy single-server config to multi-server
 	if err := config.MigrateLegacy(); err != nil {
 		return nil, err
 	}
-	
+
 	return &config, nil
 }
 
@@ -116,22 +116,22 @@ func (c *Config) Save() error {
 	if err != nil {
 		return err
 	}
-	
+
 	// Create config directory if it doesn't exist
 	if err := os.MkdirAll(configDir, 0755); err != nil {
 		return err
 	}
-	
+
 	configPath, err := GetConfigPath()
 	if err != nil {
 		return err
 	}
-	
+
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
-	
+
 	return os.WriteFile(configPath, data, 0600)
 }
 

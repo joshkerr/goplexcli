@@ -39,7 +39,7 @@ func init() {
 // WebHandler serves the web UI
 func (s *Server) handleWebUI(w http.ResponseWriter, r *http.Request) {
 	streams := s.ListStreams()
-	
+
 	data := struct {
 		Streams    []*StreamItem
 		ServerName string
@@ -53,7 +53,7 @@ func (s *Server) handleWebUI(w http.ResponseWriter, r *http.Request) {
 		Time:       time.Now().Format("15:04:05"),
 		LocalIP:    getLocalIP(),
 	}
-	
+
 	if err := templates.ExecuteTemplate(w, "index.html", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

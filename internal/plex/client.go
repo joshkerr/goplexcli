@@ -98,34 +98,34 @@ type sectionsResponse struct {
 func (c *Client) GetLibraries(ctx context.Context) ([]Library, error) {
 	// Use direct HTTP request to avoid library's unmarshaling issues with hidden field
 	url := fmt.Sprintf("%s/library/sections?X-Plex-Token=%s", c.serverURL, c.token)
-	
+
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	
+
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Plex-Client-Identifier", "goplexcli")
 	req.Header.Set("X-Plex-Product", "GoplexCLI")
 	req.Header.Set("X-Plex-Version", "1.0")
-	
+
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get sections: %w", err)
 	}
 	defer resp.Body.Close()
-	
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
-	
+
 	var sectionsResp sectionsResponse
 	if err := json.Unmarshal(body, &sectionsResp); err != nil {
 		return nil, fmt.Errorf("failed to parse sections: %w", err)
 	}
-	
+
 	var libraries []Library
 	for _, dir := range sectionsResp.MediaContainer.Directory {
 		libraries = append(libraries, Library{
@@ -134,7 +134,7 @@ func (c *Client) GetLibraries(ctx context.Context) ([]Library, error) {
 			Type:  dir.Type,
 		})
 	}
-	
+
 	return libraries, nil
 }
 
@@ -153,7 +153,7 @@ func (c *Client) GetAllMedia(ctx context.Context, progressCallback ProgressCallb
 
 	var allMedia []MediaItem
 	totalLibs := 0
-	
+
 	// Count libraries we'll actually process
 	for _, lib := range libraries {
 		if lib.Type == "movie" || lib.Type == "show" {
@@ -170,7 +170,7 @@ func (c *Client) GetAllMedia(ctx context.Context, progressCallback ProgressCallb
 				return nil, fmt.Errorf("failed to get media from section %s: %w", lib.Title, err)
 			}
 			allMedia = append(allMedia, media...)
-			
+
 			// Report progress
 			if progressCallback != nil {
 				progressCallback(lib.Title, len(media), totalLibs, currentLib)
@@ -242,44 +242,44 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 		// For movies, use the default all endpoint
 		url = fmt.Sprintf("%s/library/sections/%s/all?X-Plex-Token=%s", c.serverURL, sectionKey, c.token)
 	}
-	
+
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	
+
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Plex-Client-Identifier", "goplexcli")
 	req.Header.Set("X-Plex-Product", "GoplexCLI")
 	req.Header.Set("X-Plex-Version", "1.0")
-	
+
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get library items: %w", err)
 	}
 	defer resp.Body.Close()
-	
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
-	
+
 	// Parse the response
 	var mediaResp struct {
 		MediaContainer struct {
 			Metadata []struct {
-				Key              string  `json:"key"`
-				Title            string  `json:"title"`
-				Year             *int    `json:"year"`
-				Summary          *string `json:"summary"`
+				Key              string   `json:"key"`
+				Title            string   `json:"title"`
+				Year             *int     `json:"year"`
+				Summary          *string  `json:"summary"`
 				Rating           *float32 `json:"rating"`
-				Duration         *int    `json:"duration"`
-				Thumb            *string `json:"thumb"`
-				GrandparentTitle *string `json:"grandparentTitle"`
-				ParentTitle      *string `json:"parentTitle"`
-				Index            *int    `json:"index"`
-				ParentIndex      *int    `json:"parentIndex"`
+				Duration         *int     `json:"duration"`
+				Thumb            *string  `json:"thumb"`
+				GrandparentTitle *string  `json:"grandparentTitle"`
+				ParentTitle      *string  `json:"parentTitle"`
+				Index            *int     `json:"index"`
+				ParentIndex      *int     `json:"parentIndex"`
 				Media            []struct {
 					Part []struct {
 						File *string `json:"file"`
@@ -288,7 +288,7 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 			} `json:"Metadata"`
 		} `json:"MediaContainer"`
 	}
-	
+
 	if err := json.Unmarshal(body, &mediaResp); err != nil {
 		return nil, fmt.Errorf("failed to parse media response: %w", err)
 	}
@@ -355,29 +355,29 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 func (c *Client) GetStreamURL(mediaKey string) (string, error) {
 	// First, get the metadata for this item to find the media part key
 	url := fmt.Sprintf("%s%s?X-Plex-Token=%s", c.serverURL, mediaKey, c.token)
-	
+
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
-	
+
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Plex-Client-Identifier", "goplexcli")
 	req.Header.Set("X-Plex-Product", "GoplexCLI")
 	req.Header.Set("X-Plex-Version", "1.0")
-	
+
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to get metadata: %w", err)
 	}
 	defer resp.Body.Close()
-	
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("failed to read response: %w", err)
 	}
-	
+
 	// Parse to get the media part
 	var metadataResp struct {
 		MediaContainer struct {
@@ -390,28 +390,28 @@ func (c *Client) GetStreamURL(mediaKey string) (string, error) {
 			} `json:"Metadata"`
 		} `json:"MediaContainer"`
 	}
-	
+
 	if err := json.Unmarshal(body, &metadataResp); err != nil {
 		return "", fmt.Errorf("failed to parse metadata: %w", err)
 	}
-	
+
 	// Get the part key
 	if len(metadataResp.MediaContainer.Metadata) > 0 &&
 		len(metadataResp.MediaContainer.Metadata[0].Media) > 0 &&
 		len(metadataResp.MediaContainer.Metadata[0].Media[0].Part) > 0 {
-		
+
 		partKey := metadataResp.MediaContainer.Metadata[0].Media[0].Part[0].Key
 		if partKey != nil && *partKey != "" {
 			// Use download=1 to get direct file (no transcoding)
 			// This is faster and works better with most players
-			streamURL := fmt.Sprintf("%s%s?download=1&X-Plex-Token=%s", 
+			streamURL := fmt.Sprintf("%s%s?download=1&X-Plex-Token=%s",
 				c.serverURL, *partKey, c.token)
 			return streamURL, nil
 		}
 	}
-	
+
 	// Fallback to simple download URL if part key not found
-	streamURL := fmt.Sprintf("%s%s?download=1&X-Plex-Token=%s", 
+	streamURL := fmt.Sprintf("%s%s?download=1&X-Plex-Token=%s",
 		c.serverURL, mediaKey, c.token)
 	return streamURL, nil
 }
@@ -455,12 +455,12 @@ func (m *MediaItem) FormatMediaTitle() string {
 	default:
 		title = m.Title
 	}
-	
+
 	// Add server name if present and multiple servers might be in use
 	if m.ServerName != "" && m.ServerName != "Default Server" {
 		title = fmt.Sprintf("[%s] %s", m.ServerName, title)
 	}
-	
+
 	return title
 }
 

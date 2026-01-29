@@ -31,7 +31,7 @@ func Load() (*Cache, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	data, err := os.ReadFile(cachePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -39,12 +39,12 @@ func Load() (*Cache, error) {
 		}
 		return nil, err
 	}
-	
+
 	var cache Cache
 	if err := json.Unmarshal(data, &cache); err != nil {
 		return nil, err
 	}
-	
+
 	return &cache, nil
 }
 
@@ -54,24 +54,24 @@ func (c *Cache) Save() error {
 	if err != nil {
 		return err
 	}
-	
+
 	// Create cache directory if it doesn't exist
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
 		return err
 	}
-	
+
 	cachePath, err := GetCachePath()
 	if err != nil {
 		return err
 	}
-	
+
 	c.LastUpdated = time.Now()
-	
+
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
-	
+
 	return os.WriteFile(cachePath, data, 0644)
 }
 

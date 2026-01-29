@@ -30,19 +30,19 @@ func Download(ctx context.Context, rclonePath, destinationDir, rcloneBinary stri
 	if rclonePath == "" {
 		return fmt.Errorf("rclone path is empty")
 	}
-	
+
 	if rcloneBinary == "" {
 		rcloneBinary = "rclone"
 	}
-	
+
 	// Check if rclone is available
 	if _, err := exec.LookPath(rcloneBinary); err != nil {
 		return fmt.Errorf("rclone not found in PATH. Please install rclone or specify the path in config")
 	}
-	
+
 	// Get the filename from the rclone path
 	filename := filepath.Base(rclonePath)
-	
+
 	// Set destination to current directory if not specified
 	if destinationDir == "" {
 		var err error
@@ -51,21 +51,21 @@ func Download(ctx context.Context, rclonePath, destinationDir, rcloneBinary stri
 			return fmt.Errorf("failed to get current directory: %w", err)
 		}
 	}
-	
+
 	// Ensure destination directory exists
 	if err := os.MkdirAll(destinationDir, 0755); err != nil {
 		return fmt.Errorf("failed to create destination directory: %w", err)
 	}
-	
+
 	destinationPath := filepath.Join(destinationDir, filename)
-	
+
 	// Create transfer manager and executor
 	manager := rclone.NewManager()
 	transferID := fmt.Sprintf("download_%d", time.Now().UnixNano())
-	
+
 	// Add transfer to manager
 	manager.Add(transferID, rclonePath, destinationPath)
-	
+
 	// Start the Bubble Tea UI for progress in a goroutine
 	var wg sync.WaitGroup
 	var uiErr error
@@ -80,16 +80,16 @@ func Download(ctx context.Context, rclonePath, destinationDir, rcloneBinary stri
 			uiErr = err
 		}
 	}()
-	
+
 	// Wait for UI to be ready before proceeding
 	<-uiReady
-	
+
 	// Create executor
 	executor := rclone.NewExecutor(manager)
-	
+
 	// Mark as started
 	manager.Start(transferID)
-	
+
 	// Configure rclone options
 	opts := rclone.RcloneOptions{
 		Command:       rclone.RcloneCopyTo,
@@ -98,7 +98,7 @@ func Download(ctx context.Context, rclonePath, destinationDir, rcloneBinary stri
 		StatsInterval: "500ms",
 		Context:       ctx,
 	}
-	
+
 	// Execute the transfer
 	err := executor.Execute(transferID, opts)
 	if err != nil {
@@ -106,7 +106,7 @@ func Download(ctx context.Context, rclonePath, destinationDir, rcloneBinary stri
 		wg.Wait() // Wait for UI to finish
 		return fmt.Errorf("download failed: %w", err)
 	}
-	
+
 	manager.Complete(transferID)
 
 	// Set modification time to now instead of preserving server time
@@ -131,16 +131,16 @@ func DownloadMultiple(ctx context.Context, rclonePaths []string, destinationDir,
 	if len(rclonePaths) == 0 {
 		return fmt.Errorf("no rclone paths provided")
 	}
-	
+
 	if rcloneBinary == "" {
 		rcloneBinary = "rclone"
 	}
-	
+
 	// Check if rclone is available
 	if _, err := exec.LookPath(rcloneBinary); err != nil {
 		return fmt.Errorf("rclone not found in PATH. Please install rclone or specify the path in config")
 	}
-	
+
 	// Set destination to current directory if not specified
 	if destinationDir == "" {
 		var err error
@@ -149,15 +149,15 @@ func DownloadMultiple(ctx context.Context, rclonePaths []string, destinationDir,
 			return fmt.Errorf("failed to get current directory: %w", err)
 		}
 	}
-	
+
 	// Ensure destination directory exists
 	if err := os.MkdirAll(destinationDir, 0755); err != nil {
 		return fmt.Errorf("failed to create destination directory: %w", err)
 	}
-	
+
 	// Create transfer manager and executor
 	manager := rclone.NewManager()
-	
+
 	// Add all transfers to manager
 	var transferIDs []string
 	for i, rclonePath := range rclonePaths {
@@ -167,7 +167,7 @@ func DownloadMultiple(ctx context.Context, rclonePaths []string, destinationDir,
 		transferIDs = append(transferIDs, transferID)
 		manager.Add(transferID, rclonePath, destinationPath)
 	}
-	
+
 	// Start the Bubble Tea UI for progress in a goroutine
 	var wg sync.WaitGroup
 	var uiErr error
@@ -182,18 +182,18 @@ func DownloadMultiple(ctx context.Context, rclonePaths []string, destinationDir,
 			uiErr = err
 		}
 	}()
-	
+
 	// Wait for UI to be ready before proceeding
 	<-uiReady
-	
+
 	// Create executor
 	executor := rclone.NewExecutor(manager)
-	
+
 	// Execute transfers sequentially
 	var firstErr error
 	for i, transferID := range transferIDs {
 		manager.Start(transferID)
-		
+
 		opts := rclone.RcloneOptions{
 			Command:       rclone.RcloneCopyTo,
 			Source:        rclonePaths[i],
@@ -201,7 +201,7 @@ func DownloadMultiple(ctx context.Context, rclonePaths []string, destinationDir,
 			StatsInterval: "500ms",
 			Context:       ctx,
 		}
-		
+
 		err := executor.Execute(transferID, opts)
 		if err != nil {
 			manager.Fail(transferID, err)
@@ -218,18 +218,18 @@ func DownloadMultiple(ctx context.Context, rclonePaths []string, destinationDir,
 			}
 		}
 	}
-	
+
 	// Wait for UI to finish
 	wg.Wait()
-	
+
 	if uiErr != nil {
 		return fmt.Errorf("UI error: %w", uiErr)
 	}
-	
+
 	if firstErr != nil {
 		return fmt.Errorf("download failed: %w", firstErr)
 	}
-	
+
 	return nil
 }
 
@@ -238,8 +238,7 @@ func IsAvailable(rclonePath string) bool {
 	if rclonePath == "" {
 		rclonePath = "rclone"
 	}
-	
+
 	_, err := exec.LookPath(rclonePath)
 	return err == nil
 }
-

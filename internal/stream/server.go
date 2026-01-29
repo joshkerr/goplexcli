@@ -15,9 +15,9 @@ import (
 )
 
 const (
-	ServiceType = "_goplexcli._tcp"
+	ServiceType   = "_goplexcli._tcp"
 	ServiceDomain = "local."
-	DefaultPort = 8765
+	DefaultPort   = 8765
 )
 
 // StreamItem represents a media item available for streaming
@@ -87,12 +87,12 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Register mDNS service
 	mdnsServer, err := zeroconf.Register(
-		s.hostname,      // Instance name
-		ServiceType,     // Service type
-		ServiceDomain,   // Domain
-		s.port,          // Port
+		s.hostname,                // Instance name
+		ServiceType,               // Service type
+		ServiceDomain,             // Domain
+		s.port,                    // Port
 		[]string{"path=/streams"}, // TXT records
-		nil,             // Network interface (nil = all)
+		nil,                       // Network interface (nil = all)
 	)
 	if err != nil {
 		_ = s.httpServer.Shutdown(context.Background())
@@ -119,7 +119,7 @@ func (s *Server) Shutdown() error {
 			s.mdnsServer.Shutdown()
 			close(done)
 		}()
-		
+
 		select {
 		case <-done:
 			// mDNS shutdown completed
@@ -127,7 +127,7 @@ func (s *Server) Shutdown() error {
 			// mDNS shutdown timed out, continue anyway
 		}
 	}
-	
+
 	// Shutdown HTTP server
 	if s.httpServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -143,13 +143,13 @@ func (s *Server) PublishStream(media *plex.MediaItem, streamURL string, plexURL 
 	defer s.streamsMu.Unlock()
 
 	id := generateStreamID()
-	
+
 	// Build full poster URL if thumb path exists
 	posterURL := ""
 	if media.Thumb != "" {
 		posterURL = fmt.Sprintf("%s%s?X-Plex-Token=%s", plexURL, media.Thumb, plexToken)
 	}
-	
+
 	stream := &StreamItem{
 		ID:          id,
 		Title:       media.FormatMediaTitle(),
@@ -258,7 +258,7 @@ func Discover(ctx context.Context, timeout time.Duration) ([]*DiscoveredServer, 
 		defer wg.Done()
 		for entry := range entries {
 			mu.Lock()
-			
+
 			// Collect both IPv4 and IPv6 addresses
 			addresses := make([]string, 0, len(entry.AddrIPv4)+len(entry.AddrIPv6))
 			for _, ip := range entry.AddrIPv4 {
@@ -267,7 +267,7 @@ func Discover(ctx context.Context, timeout time.Duration) ([]*DiscoveredServer, 
 			for _, ip := range entry.AddrIPv6 {
 				addresses = append(addresses, ip.String())
 			}
-			
+
 			server := &DiscoveredServer{
 				Name:      entry.Instance,
 				Host:      entry.HostName,
@@ -293,7 +293,7 @@ func Discover(ctx context.Context, timeout time.Duration) ([]*DiscoveredServer, 
 
 	// Wait for context to expire
 	<-discoverCtx.Done()
-	
+
 	// Wait for goroutine to finish processing all entries
 	wg.Wait()
 
@@ -315,7 +315,7 @@ func FetchStreams(server *DiscoveredServer) ([]*StreamItem, error) {
 			host = "[" + addr + "]"
 		}
 		url := fmt.Sprintf("http://%s:%d/streams", host, server.Port)
-		
+
 		client := &http.Client{Timeout: 5 * time.Second}
 		resp, err := client.Get(url)
 		if err != nil {
@@ -326,7 +326,7 @@ func FetchStreams(server *DiscoveredServer) ([]*StreamItem, error) {
 		// Use anonymous function to ensure body is closed before continue
 		result, err := func() ([]*StreamItem, error) {
 			defer resp.Body.Close()
-			
+
 			if resp.StatusCode != http.StatusOK {
 				return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
 			}
@@ -340,12 +340,12 @@ func FetchStreams(server *DiscoveredServer) ([]*StreamItem, error) {
 
 			return result.Streams, nil
 		}()
-		
+
 		if err != nil {
 			lastErr = err
 			continue
 		}
-		
+
 		// Success!
 		return result, nil
 	}
