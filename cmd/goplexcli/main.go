@@ -991,54 +991,6 @@ func removeFromQueueManual(q *queue.Queue) error {
 	return nil
 }
 
-// selectMediaTypeManualWithQueue - fallback for no-fzf with queue option
-func selectMediaTypeManualWithQueue(queueCount int) (string, error) {
-	fmt.Println(infoStyle.Render("\nSelect media type:"))
-
-	optionNum := 1
-	if queueCount > 0 {
-		fmt.Printf("  %d. View Queue (%s)\n", optionNum, ui.PluralizeItems(queueCount))
-		optionNum++
-	}
-	fmt.Printf("  %d. Movies\n", optionNum)
-	fmt.Printf("  %d. TV Shows\n", optionNum+1)
-	fmt.Printf("  %d. All\n", optionNum+2)
-
-	maxChoice := optionNum + 2
-	fmt.Printf("\nChoice (1-%d): ", maxChoice)
-
-	var choice int
-	if _, err := fmt.Scanln(&choice); err != nil {
-		return "", fmt.Errorf("failed to read selection: %w", err)
-	}
-
-	if queueCount > 0 {
-		switch choice {
-		case 1:
-			return "queue", nil
-		case 2:
-			return "movies", nil
-		case 3:
-			return "tv shows", nil
-		case 4:
-			return "all", nil
-		default:
-			return "", fmt.Errorf("invalid selection")
-		}
-	} else {
-		switch choice {
-		case 1:
-			return "movies", nil
-		case 2:
-			return "tv shows", nil
-		case 3:
-			return "all", nil
-		default:
-			return "", fmt.Errorf("invalid selection")
-		}
-	}
-}
-
 // promptActionManualWithQueue - fallback for no-fzf action selection with queue
 func promptActionManualWithQueue(queueCount int) (string, error) {
 	queueLabel := "Add to Queue"
