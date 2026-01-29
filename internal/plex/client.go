@@ -56,6 +56,8 @@ type MediaItem struct {
 	Thumb       string // Poster/thumbnail URL path
 	ServerName  string // Name of the Plex server this item belongs to
 	ServerURL   string // URL of the Plex server this item belongs to
+	ViewOffset  int    // Playback position in milliseconds (0 if not started)
+	ViewCount   int    // Number of times fully watched
 }
 
 // New creates a new Plex client
@@ -334,6 +336,8 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 				ParentTitle      *string  `json:"parentTitle"`
 				Index            *int     `json:"index"`
 				ParentIndex      *int     `json:"parentIndex"`
+				ViewOffset       *int     `json:"viewOffset"`
+				ViewCount        *int     `json:"viewCount"`
 				Media            []struct {
 					Part []struct {
 						File *string `json:"file"`
@@ -371,6 +375,8 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 				Thumb:      valueOrEmpty(metadata.Thumb),
 				ServerName: c.serverName,
 				ServerURL:  c.serverURL,
+				ViewOffset: valueOrZeroInt(metadata.ViewOffset),
+				ViewCount:  valueOrZeroInt(metadata.ViewCount),
 			}
 
 			// Get file path
@@ -410,6 +416,8 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 				ParentIndex: int64(valueOrZeroInt(metadata.ParentIndex)),
 				ServerName:  c.serverName,
 				ServerURL:   c.serverURL,
+				ViewOffset:  valueOrZeroInt(metadata.ViewOffset),
+				ViewCount:   valueOrZeroInt(metadata.ViewCount),
 			}
 
 			// Get file path
