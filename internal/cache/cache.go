@@ -1,3 +1,7 @@
+// Package cache provides persistent storage for Plex media library data.
+// It caches media items locally for fast offline browsing without requiring
+// repeated API calls to the Plex server. The cache is stored as JSON in the
+// user's config directory.
 package cache
 
 import (
@@ -11,9 +15,13 @@ import (
 	"github.com/joshkerr/goplexcli/internal/plex"
 )
 
+// Cache stores media items and metadata about when the cache was last updated.
+// Use Load() to read from disk and Save() to persist changes.
 type Cache struct {
-	Media       []plex.MediaItem `json:"media"`
-	LastUpdated time.Time        `json:"last_updated"`
+	// Media contains all cached media items from the Plex library
+	Media []plex.MediaItem `json:"media"`
+	// LastUpdated tracks when the cache was last refreshed from Plex
+	LastUpdated time.Time `json:"last_updated"`
 }
 
 // GetCachePath returns the path to the cache file

@@ -3,7 +3,7 @@
 VERSION ?= $(shell cat VERSION 2>/dev/null || echo "0.1.0")
 LDFLAGS = -ldflags "-s -w -X main.version=$(VERSION)"
 
-.PHONY: build install clean test run help
+.PHONY: build install clean test run help lint vet
 
 # Build the application
 build:
@@ -61,6 +61,16 @@ test:
 	@echo "Running tests..."
 	@go test -v ./...
 
+# Run linter
+lint:
+	@echo "Running linter..."
+	@golangci-lint run ./...
+
+# Run go vet
+vet:
+	@echo "Running go vet..."
+	@go vet ./...
+
 # Run the application
 run: build
 ifeq ($(OS),Windows_NT)
@@ -86,6 +96,8 @@ help:
 	@echo "  make install     - Install to GOPATH/bin"
 	@echo "  make clean       - Remove build artifacts"
 	@echo "  make test        - Run tests"
+	@echo "  make lint        - Run golangci-lint"
+	@echo "  make vet         - Run go vet"
 	@echo "  make run         - Build and run"
 	@echo "  make deps        - Download and tidy dependencies"
 	@echo "  make help        - Show this help message"

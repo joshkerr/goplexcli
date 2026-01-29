@@ -590,19 +590,7 @@ func (m *BrowserModel) GetSelected() *plex.MediaItem {
 }
 
 // Helper functions
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
+// Note: min() and max() are Go 1.21+ builtins
 
 func wrapText(text string, width int) string {
 	words := strings.Fields(text)

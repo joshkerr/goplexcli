@@ -27,6 +27,9 @@ import (
 // For development without ldflags, falls back to "dev"
 var version = "dev"
 
+// dryRun when true shows what would be downloaded without actually downloading
+var dryRun bool
+
 var (
 	// Refined color palette for cohesive UI
 	titleStyle = lipgloss.NewStyle().
@@ -76,6 +79,7 @@ func main() {
 		Short: "Browse and play media from your Plex server",
 		RunE:  runBrowse,
 	}
+	browseCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be downloaded without actually downloading")
 
 	// Cache command
 	cacheCmd := &cobra.Command{
@@ -768,6 +772,16 @@ func handleDownloadMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) er
 		return fmt.Errorf("no valid rclone paths available")
 	}
 
+	// Handle dry-run mode
+	if dryRun {
+		fmt.Println(warningStyle.Render("\n[DRY RUN] Would download the following files:"))
+		for _, path := range rclonePaths {
+			fmt.Println(infoStyle.Render(fmt.Sprintf("  - %s", path)))
+		}
+		fmt.Println(warningStyle.Render(fmt.Sprintf("\n[DRY RUN] Total: %d files to current directory", len(rclonePaths))))
+		return nil
+	}
+
 	fmt.Println(successStyle.Render(fmt.Sprintf("\n✓ Starting download of %d items...", len(rclonePaths))))
 
 	// Get current directory
@@ -821,7 +835,7 @@ func handleStream(cfg *config.Config, media *plex.MediaItem) error {
 	fmt.Println(infoStyle.Render(fmt.Sprintf("Title: %s", media.FormatMediaTitle())))
 	fmt.Println(warningStyle.Render(fmt.Sprintf("\n🌐 Stream server running on port %d", stream.DefaultPort)))
 	
-	fmt.Println(successStyle.Render("\nClick to open in your player:"))
+	fmt.Println(successStyle.Render("\n📱 Click to open in your player:"))
 	fmt.Println()
 
 	playerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#C084FC")).Bold(true).Width(12)
@@ -834,7 +848,7 @@ func handleStream(cfg *config.Config, media *plex.MediaItem) error {
 	fmt.Printf("  %s %s\n", playerStyle.Render("VidHub"), linkStyle.Render(fmt.Sprintf("open-vidhub://x-callback-url/open?url=%s", encodedURL)))
 
 	fmt.Println()
-	fmt.Println(successStyle.Render("Web UI: ") + linkStyle.Render(webURL))
+	fmt.Println(successStyle.Render("🌐 Web UI: ") + linkStyle.Render(webURL))
 	fmt.Println()
 	fmt.Println(infoStyle.Render("Press Ctrl+C or 'q' to stop the server\n"))
 
