@@ -562,11 +562,12 @@ func (m *BrowserModel) filterMedia() {
 	var searchStrings []string
 	for _, item := range m.media {
 		var searchStr string
-		if item.Type == "movie" {
+		switch item.Type {
+		case "movie":
 			searchStr = fmt.Sprintf("%s %d", item.Title, item.Year)
-		} else if item.Type == "episode" {
+		case "episode":
 			searchStr = fmt.Sprintf("%s %s S%02dE%02d", item.ParentTitle, item.Title, item.ParentIndex, item.Index)
-		} else {
+		default:
 			searchStr = item.Title
 		}
 		searchStrings = append(searchStrings, searchStr)
