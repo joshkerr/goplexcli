@@ -785,6 +785,49 @@ browseLoop:
 	}
 }
 
+func runMovie(cmd *cobra.Command, args []string) error {
+	return runMediaBrowser("movie")
+}
+
+func runTV(cmd *cobra.Command, args []string) error {
+	return runMediaBrowser("episode")
+}
+
+func runQueueCommand(cmd *cobra.Command, args []string) error {
+	// Show logo
+	ui.Logo(version)
+
+	// Load config
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Load queue
+	q, err := queue.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load queue: %w", err)
+	}
+
+	if q.IsEmpty() {
+		fmt.Println(warningStyle.Render("Queue is empty."))
+		fmt.Println(infoStyle.Render("Add items with 'goplexcli movie' or 'goplexcli tv'"))
+		return nil
+	}
+
+	result, err := handleQueueView(cfg, q)
+	if err != nil {
+		return err
+	}
+
+	// If user wants to go back, just exit (no browse to return to)
+	if result == "back" {
+		return nil
+	}
+
+	return nil
+}
+
 func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error {
 	if len(mediaItems) == 0 {
 		return fmt.Errorf("no media items provided")
