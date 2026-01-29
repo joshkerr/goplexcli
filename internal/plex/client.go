@@ -591,6 +591,24 @@ func (m *MediaItem) FormatMediaTitle() string {
 		title = fmt.Sprintf("[%s] %s", m.ServerName, title)
 	}
 
+	// Add progress indicator
+	if m.Duration > 0 {
+		if m.ViewCount > 0 {
+			// Watched
+			title = fmt.Sprintf("%s ✓", title)
+		} else if m.ViewOffset > 0 {
+			// Calculate percentage
+			pct := m.ViewOffset * 100 / m.Duration
+			if pct >= 95 {
+				// >=95% complete, show as watched (consistent with HasResumableProgress)
+				title = fmt.Sprintf("%s ✓", title)
+			} else {
+				// In progress
+				title = fmt.Sprintf("%s ▶ %d%%", title, pct)
+			}
+		}
+	}
+
 	return title
 }
 
