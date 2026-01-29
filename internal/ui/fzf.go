@@ -414,29 +414,6 @@ func PromptActionWithQueue(fzfPath string, queueCount int) (string, error) {
 	return strings.ToLower(selected), nil
 }
 
-// SelectMediaTypeWithQueue adds "View Queue" option when queue has items
-func SelectMediaTypeWithQueue(fzfPath string, queueCount int) (string, error) {
-	var types []string
-
-	if queueCount > 0 {
-		types = append(types, fmt.Sprintf("View Queue (%s)", PluralizeItems(queueCount)))
-	}
-
-	types = append(types, "Movies", "TV Shows", "All")
-
-	selected, _, err := SelectWithFzf(types, "Select media type:", fzfPath)
-	if err != nil {
-		return "", err
-	}
-
-	// Check if user selected queue
-	if strings.HasPrefix(selected, "View Queue") {
-		return "queue", nil
-	}
-
-	return strings.ToLower(selected), nil
-}
-
 // PromptViewQueue asks if user wants to view queue before browsing
 // Returns true if user wants to view queue, false to continue browsing
 func PromptViewQueue(fzfPath string, queueCount int) (bool, error) {
