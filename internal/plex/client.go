@@ -197,7 +197,7 @@ func (c *Client) GetAllMedia(ctx context.Context, progressCallback ProgressCallb
 
 	var allMedia []MediaItem
 	totalLibs := 0
-	
+
 	// Count libraries we'll actually process
 	for _, lib := range libraries {
 		if lib.Type == "movie" || lib.Type == "show" {
@@ -214,7 +214,7 @@ func (c *Client) GetAllMedia(ctx context.Context, progressCallback ProgressCallb
 				return nil, fmt.Errorf("failed to get media from section %s: %w", lib.Title, err)
 			}
 			allMedia = append(allMedia, media...)
-			
+
 			// Report progress
 			if progressCallback != nil {
 				progressCallback(lib.Title, len(media), totalLibs, currentLib)
@@ -553,12 +553,12 @@ func (m *MediaItem) FormatMediaTitle() string {
 	default:
 		title = m.Title
 	}
-	
+
 	// Add server name if present and multiple servers might be in use
 	if m.ServerName != "" && m.ServerName != "Default Server" {
 		title = fmt.Sprintf("[%s] %s", m.ServerName, title)
 	}
-	
+
 	return title
 }
 
