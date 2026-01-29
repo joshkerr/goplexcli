@@ -16,6 +16,7 @@ import (
 	"github.com/joshkerr/goplexcli/internal/download"
 	"github.com/joshkerr/goplexcli/internal/player"
 	"github.com/joshkerr/goplexcli/internal/plex"
+	"github.com/joshkerr/goplexcli/internal/progress"
 	"github.com/joshkerr/goplexcli/internal/queue"
 	"github.com/joshkerr/goplexcli/internal/stream"
 	"github.com/joshkerr/goplexcli/internal/ui"
@@ -706,6 +707,81 @@ func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error
 		return fmt.Errorf("failed to create plex client: %w", err)
 	}
 
+	// Check for items with progress
+	var itemsWithProgress []*plex.MediaItem
+	for _, media := range mediaItems {
+		if ui.HasResumableProgress(media) {
+			itemsWithProgress = append(itemsWithProgress, media)
+		}
+	}
+
+	// Determine start positions based on user choice
+	startPositions := make([]int, len(mediaItems))
+	if len(itemsWithProgress) > 0 {
+		if len(itemsWithProgress) == 1 && len(mediaItems) == 1 {
+			// Single item with progress - show simple resume prompt
+			choice, err := ui.PromptResume(ui.ResumePromptOptions{
+				Title:      mediaItems[0].FormatMediaTitle(),
+				ViewOffset: mediaItems[0].ViewOffset,
+				Duration:   mediaItems[0].Duration,
+				FzfPath:    cfg.FzfPath,
+			})
+			if err != nil {
+				if err.Error() == "cancelled by user" {
+					return nil
+				}
+				// On error, default to start from beginning
+				fmt.Println(warningStyle.Render("Resume prompt failed, starting from beginning"))
+			} else if choice == ui.ResumeFromPosition {
+				// Convert milliseconds to seconds for MPV
+				startPositions[0] = mediaItems[0].ViewOffset / 1000
+			}
+		} else {
+			// Multiple items or multiple items with progress - show multi-resume prompt
+			choice, err := ui.PromptMultiResume(len(itemsWithProgress), len(mediaItems), cfg.FzfPath)
+			if err != nil {
+				if err.Error() == "cancelled by user" {
+					return nil
+				}
+				// On error, default to start from beginning
+				fmt.Println(warningStyle.Render("Resume prompt failed, starting all from beginning"))
+			} else {
+				switch choice {
+				case ui.ResumeAll:
+					// Set start positions for all items with progress
+					for i, media := range mediaItems {
+						if ui.HasResumableProgress(media) {
+							startPositions[i] = media.ViewOffset / 1000
+						}
+					}
+				case ui.ChooseIndividually:
+					// Prompt for each item with progress
+					for i, media := range mediaItems {
+						if ui.HasResumableProgress(media) {
+							itemChoice, err := ui.PromptResume(ui.ResumePromptOptions{
+								Title:      media.FormatMediaTitle(),
+								ViewOffset: media.ViewOffset,
+								Duration:   media.Duration,
+								FzfPath:    cfg.FzfPath,
+							})
+							if err != nil {
+								if err.Error() == "cancelled by user" {
+									return nil
+								}
+								// On error, start this item from beginning
+								continue
+							}
+							if itemChoice == ui.ResumeFromPosition {
+								startPositions[i] = media.ViewOffset / 1000
+							}
+						}
+					}
+					// case ui.StartAllFromBeginning: all positions remain 0
+				}
+			}
+		}
+	}
+
 	// Get stream URLs for all items
 	var streamURLs []string
 	for i, media := range mediaItems {
@@ -725,11 +801,39 @@ func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error
 	}
 	fmt.Println()
 
+	// Set up progress tracking
+	socketPath := progress.GenerateSocketPath()
+	mpvClient := progress.NewMPVClient(socketPath)
+	tracker := progress.NewTracker(mediaItems, mpvClient, client)
+
+	// Prepare playback options
+	opts := player.PlaybackOptions{
+		SocketPath: socketPath,
+		StartPos:   startPositions[0], // First item's start position
+	}
+
 	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Starting playback of %d items...", len(mediaItems))))
 	fmt.Println(infoStyle.Render("Use 'n' in MPV to skip to next item"))
 
-	// Play with MPV (creates a playlist)
-	if err := player.PlayMultiple(streamURLs, cfg.MPVPath); err != nil {
+	// Start MPV in goroutine
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- player.PlayMultipleWithOptions(streamURLs, cfg.MPVPath, opts)
+	}()
+
+	// Connect to MPV IPC and start tracking
+	if err := mpvClient.Connect(); err != nil {
+		fmt.Println(warningStyle.Render("Note: Progress tracking unavailable (IPC connection failed)"))
+	} else {
+		defer mpvClient.Close()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		tracker.Start(ctx, 10*time.Second)
+		defer tracker.Stop()
+	}
+
+	// Wait for playback to finish
+	if err := <-errCh; err != nil {
 		return fmt.Errorf("playback failed: %w", err)
 	}
 
