@@ -803,10 +803,13 @@ func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error
 	}
 	fmt.Println()
 
-	// Set up progress tracking using TCP for cross-platform compatibility
-	ipcAddress := progress.GenerateIPCAddress()
-	mpvClient := progress.NewMPVClient(ipcAddress)
+	// Set up progress tracking using Unix socket (macOS/Linux) or named pipe (Windows)
+	socketPath := progress.GenerateIPCPath()
+	mpvClient := progress.NewMPVClient(socketPath)
 	tracker := progress.NewTracker(mediaItems, mpvClient, client)
+
+	// Clean up socket file when done (Unix only, no-op on Windows)
+	defer os.Remove(socketPath)
 
 	// Prepare playback options
 	// Note: MPV's --start flag only applies to the first file in a playlist.
@@ -831,7 +834,7 @@ func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error
 	}
 
 	opts := player.PlaybackOptions{
-		IPCAddress: ipcAddress,
+		SocketPath: socketPath,
 		StartPos:   startPos,
 	}
 

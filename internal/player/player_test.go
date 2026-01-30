@@ -9,7 +9,7 @@ func TestBuildMPVArgs(t *testing.T) {
 	tests := []struct {
 		name       string
 		urls       []string
-		ipcAddress string
+		socketPath string
 		startPos   int
 		wantIPC    bool
 		wantStart  bool
@@ -17,15 +17,15 @@ func TestBuildMPVArgs(t *testing.T) {
 		{
 			name:       "basic playback",
 			urls:       []string{"http://example.com/video.mp4"},
-			ipcAddress: "",
+			socketPath: "",
 			startPos:   0,
 			wantIPC:    false,
 			wantStart:  false,
 		},
 		{
-			name:       "with IPC address",
+			name:       "with socket path",
 			urls:       []string{"http://example.com/video.mp4"},
-			ipcAddress: "127.0.0.1:19000",
+			socketPath: "/tmp/mpv-12345.sock",
 			startPos:   0,
 			wantIPC:    true,
 			wantStart:  false,
@@ -33,7 +33,7 @@ func TestBuildMPVArgs(t *testing.T) {
 		{
 			name:       "with resume position",
 			urls:       []string{"http://example.com/video.mp4"},
-			ipcAddress: "127.0.0.1:19000",
+			socketPath: "/tmp/mpv-12345.sock",
 			startPos:   125,
 			wantIPC:    true,
 			wantStart:  true,
@@ -42,7 +42,7 @@ func TestBuildMPVArgs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			args := buildMPVArgs(tt.urls, tt.ipcAddress, tt.startPos)
+			args := buildMPVArgs(tt.urls, tt.socketPath, tt.startPos)
 
 			hasIPC := false
 			hasStart := false

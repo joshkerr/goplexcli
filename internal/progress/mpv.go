@@ -2,8 +2,7 @@
 // It includes an IPC client for communicating with MPV media player to track
 // playback position and state, which is then used to report progress to Plex.
 //
-// The IPC connection uses TCP sockets on localhost for cross-platform compatibility
-// (works on Windows, macOS, and Linux).
+// The IPC connection uses Unix domain sockets on macOS/Linux and named pipes on Windows.
 package progress
 
 import (
@@ -12,7 +11,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
-	"net"
+	"os"
+	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -45,43 +46,36 @@ func buildMPVCommand(cmd string, args ...string) mpvCommand {
 }
 
 // MPVClient provides communication with MPV via its JSON IPC protocol.
-// It connects to MPV over a TCP socket on localhost and can query playback state.
-// TCP is used instead of Unix sockets for cross-platform compatibility (Windows/macOS/Linux).
+// It connects to MPV over a Unix socket (macOS/Linux) or named pipe (Windows).
 type MPVClient struct {
-	address string
-	conn    net.Conn
-	reader  *bufio.Reader
-	mu      sync.Mutex
+	socketPath string
+	conn       interface{ Read([]byte) (int, error); Write([]byte) (int, error); Close() error }
+	reader     *bufio.Reader
+	mu         sync.Mutex
 }
 
-// NewMPVClient creates a new MPV IPC client for the given address.
-// The address should be in the format "127.0.0.1:PORT".
+// NewMPVClient creates a new MPV IPC client for the given socket path.
+// On macOS/Linux, this should be a Unix socket path (e.g., /tmp/mpv-12345.sock).
+// On Windows, this should be a named pipe path (e.g., \\.\pipe\mpv-12345).
 // The client is not connected until Connect is called.
-func NewMPVClient(address string) *MPVClient {
+func NewMPVClient(socketPath string) *MPVClient {
 	return &MPVClient{
-		address: address,
+		socketPath: socketPath,
 	}
 }
 
-// GenerateIPCAddress creates a unique IPC address for MPV communication.
-// Returns a TCP address on localhost with an available random port.
-// The port is in the range 19000-19999 to avoid conflicts with common services.
-func GenerateIPCAddress() string {
-	// Try up to 10 times to find an available port
-	for i := 0; i < 10; i++ {
-		port := 19000 + rand.Intn(1000)
-		addr := fmt.Sprintf("127.0.0.1:%d", port)
+// GenerateIPCPath creates a unique IPC socket/pipe path for MPV communication.
+// On macOS/Linux, returns a Unix socket path in the temp directory.
+// On Windows, returns a named pipe path.
+func GenerateIPCPath() string {
+	id := fmt.Sprintf("%d-%d", os.Getpid(), rand.Intn(10000))
 
-		// Check if port is available by attempting to listen
-		listener, err := net.Listen("tcp", addr)
-		if err == nil {
-			listener.Close()
-			return addr
-		}
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf(`\\.\pipe\mpv-%s`, id)
 	}
 
-	// Fallback: return a random port without checking (unlikely to reach here)
-	return fmt.Sprintf("127.0.0.1:%d", 19000+rand.Intn(1000))
+	// Unix socket path
+	return filepath.Join(os.TempDir(), fmt.Sprintf("mpv-%s.sock", id))
 }
 
 // Connect establishes a connection to the MPV IPC server.
@@ -112,7 +106,7 @@ func (c *MPVClient) ConnectWithContext(ctx context.Context) error {
 		default:
 		}
 
-		conn, err := net.Dial("tcp", c.address)
+		conn, err := dialMPV(c.socketPath)
 		if err == nil {
 			c.conn = conn
 			c.reader = bufio.NewReader(conn)
