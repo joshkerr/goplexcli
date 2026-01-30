@@ -1439,7 +1439,12 @@ func runConfig(cmd *cobra.Command, args []string) error {
 	if cfg.PlexUsername != "" {
 		fmt.Println(infoStyle.Render("Username: " + cfg.PlexUsername))
 	}
-	fmt.Println(infoStyle.Render("Token: " + cfg.PlexToken[:10] + "..."))
+	// Safely truncate token display to avoid panic on short tokens
+	tokenDisplay := cfg.PlexToken
+	if len(tokenDisplay) > 10 {
+		tokenDisplay = tokenDisplay[:10] + "..."
+	}
+	fmt.Println(infoStyle.Render("Token: " + tokenDisplay))
 
 	configPath, _ := config.GetConfigPath()
 	fmt.Println(infoStyle.Render("\nConfig file: " + configPath))
