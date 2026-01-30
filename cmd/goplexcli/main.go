@@ -668,8 +668,10 @@ browseLoop:
 			return handleWatchMultiple(cfg, selectedMediaItems)
 		case "download":
 			return handleDownloadMultiple(cfg, selectedMediaItems)
-		case "senplayer":
-			return handleSenPlayer(cfg, selectedMediaItems)
+		case "senplayer play":
+			return handleSenPlayer(cfg, selectedMediaItems, "play")
+		case "senplayer download":
+			return handleSenPlayer(cfg, selectedMediaItems, "download")
 		case "queue":
 			added := q.Add(selectedMediaItems)
 			if err := q.Save(); err != nil {
@@ -933,7 +935,7 @@ func handleDownloadMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) er
 	return nil
 }
 
-func handleSenPlayer(cfg *config.Config, mediaItems []*plex.MediaItem) error {
+func handleSenPlayer(cfg *config.Config, mediaItems []*plex.MediaItem, mode string) error {
 	if len(mediaItems) == 0 {
 		return fmt.Errorf("no media items provided")
 	}
@@ -944,7 +946,11 @@ func handleSenPlayer(cfg *config.Config, mediaItems []*plex.MediaItem) error {
 	}
 
 	media := mediaItems[0]
-	fmt.Println(infoStyle.Render("\nPreparing for SenPlayer: " + media.FormatMediaTitle()))
+	actionText := "Playing"
+	if mode == "download" {
+		actionText = "Downloading"
+	}
+	fmt.Println(infoStyle.Render(fmt.Sprintf("\nPreparing for SenPlayer (%s): %s", actionText, media.FormatMediaTitle())))
 
 	// Create Plex client
 	client, err := plex.New(cfg.PlexURL, cfg.PlexToken)
@@ -958,21 +964,26 @@ func handleSenPlayer(cfg *config.Config, mediaItems []*plex.MediaItem) error {
 		return fmt.Errorf("failed to get stream URL: %w", err)
 	}
 
-	// Build filename from media title
-	filename := media.Title
-	if media.Year > 0 {
-		filename = fmt.Sprintf("%s (%d)", media.Title, media.Year)
-	}
-	// Add extension based on typical Plex streams
-	filename += ".mkv"
+	var senplayerURL string
+	if mode == "download" {
+		// Download format: SenPlayer://x-callback-url/download?url=<url>
+		senplayerURL = fmt.Sprintf("SenPlayer://x-callback-url/download?url=%s",
+			url.QueryEscape(streamURL),
+		)
+	} else {
+		// Play format: SenPlayer://x-callback-url/play?url=<url>&name=<filename>&User-Agent=<ua>
+		filename := media.Title
+		if media.Year > 0 {
+			filename = fmt.Sprintf("%s (%d)", media.Title, media.Year)
+		}
+		filename += ".mkv"
 
-	// Build SenPlayer URL
-	// Format: SenPlayer://x-callback-url/play?url=<url>&name=<filename>&User-Agent=<ua>
-	senplayerURL := fmt.Sprintf("SenPlayer://x-callback-url/play?url=%s&name=%s&User-Agent=%s",
-		url.QueryEscape(streamURL),
-		url.QueryEscape(filename),
-		url.QueryEscape("GoplexCLI/1.0"),
-	)
+		senplayerURL = fmt.Sprintf("SenPlayer://x-callback-url/play?url=%s&name=%s&User-Agent=%s",
+			url.QueryEscape(streamURL),
+			url.QueryEscape(filename),
+			url.QueryEscape("GoplexCLI/1.0"),
+		)
+	}
 
 	// On macOS, open the URL directly
 	if runtime.GOOS == "darwin" {
@@ -984,7 +995,7 @@ func handleSenPlayer(cfg *config.Config, mediaItems []*plex.MediaItem) error {
 			fmt.Println(infoStyle.Render("\nCopy this URL to open in SenPlayer:"))
 			fmt.Println(senplayerURL)
 		} else {
-			fmt.Println(successStyle.Render("✓ Sent to SenPlayer"))
+			fmt.Println(successStyle.Render(fmt.Sprintf("✓ Sent to SenPlayer (%s)", mode)))
 		}
 	} else {
 		// On other platforms, show the URL for manual copying
@@ -1307,11 +1318,12 @@ func promptActionManualWithQueue(queueCount int) (string, error) {
 	fmt.Println(infoStyle.Render("\nSelect action:"))
 	fmt.Println("  1. Watch")
 	fmt.Println("  2. Download")
-	fmt.Println("  3. SenPlayer")
-	fmt.Printf("  4. %s\n", queueLabel)
-	fmt.Println("  5. Stream")
-	fmt.Println("  6. Cancel")
-	fmt.Print("\nChoice (1-6): ")
+	fmt.Println("  3. SenPlayer Play")
+	fmt.Println("  4. SenPlayer Download")
+	fmt.Printf("  5. %s\n", queueLabel)
+	fmt.Println("  6. Stream")
+	fmt.Println("  7. Cancel")
+	fmt.Print("\nChoice (1-7): ")
 
 	var choice int
 	if _, err := fmt.Scanln(&choice); err != nil {
@@ -1324,12 +1336,14 @@ func promptActionManualWithQueue(queueCount int) (string, error) {
 	case 2:
 		return "download", nil
 	case 3:
-		return "senplayer", nil
+		return "senplayer play", nil
 	case 4:
-		return "queue", nil
+		return "senplayer download", nil
 	case 5:
-		return "stream", nil
+		return "queue", nil
 	case 6:
+		return "stream", nil
+	case 7:
 		return "cancel", nil
 	default:
 		return "cancel", nil
