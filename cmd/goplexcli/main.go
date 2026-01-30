@@ -835,7 +835,7 @@ func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error
 	if err := mpvClient.Connect(); err != nil {
 		fmt.Println(warningStyle.Render("Note: Progress tracking unavailable (IPC connection failed)"))
 	} else {
-		defer mpvClient.Close()
+		defer func() { _ = mpvClient.Close() }()
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		tracker.Start(ctx, 10*time.Second)

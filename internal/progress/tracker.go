@@ -94,7 +94,7 @@ func (t *Tracker) trackLoop(ctx context.Context, interval time.Duration) {
 	defer ticker.Stop()
 
 	var lastPos float64
-	var lastIndex int = -1
+	lastIndex := -1
 
 	for {
 		select {

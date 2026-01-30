@@ -43,11 +43,7 @@ func HasResumableProgress(media *plex.MediaItem) bool {
 
 	// If >=95% complete, treat as watched
 	percentComplete := float64(media.ViewOffset) / float64(media.Duration)
-	if percentComplete >= 0.95 {
-		return false
-	}
-
-	return true
+	return percentComplete < 0.95
 }
 
 // CountItemsWithProgress counts how many items in the list have resumable progress.
