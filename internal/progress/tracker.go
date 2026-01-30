@@ -96,13 +96,16 @@ func (t *Tracker) trackLoop(ctx context.Context, interval time.Duration) {
 	var lastPos float64
 	lastIndex := -1
 
+	// Report initial position immediately (don't wait for first tick)
+	t.tick(&lastPos, &lastIndex)
+
 	for {
 		select {
 		case <-ctx.Done():
-			t.reportFinalPosition()
+			t.reportFinalPosition(lastPos, lastIndex)
 			return
 		case <-t.stopCh:
-			t.reportFinalPosition()
+			t.reportFinalPosition(lastPos, lastIndex)
 			return
 		case <-ticker.C:
 			t.tick(&lastPos, &lastIndex)
@@ -179,18 +182,28 @@ func (t *Tracker) reportPosition(index int, posSeconds float64, state string) {
 }
 
 // reportFinalPosition reports the final position when playback ends.
-func (t *Tracker) reportFinalPosition() {
-	if t.mpv == nil || t.plexClient == nil {
+// Uses the last known position since MPV may have already exited.
+func (t *Tracker) reportFinalPosition(lastPos float64, lastIndex int) {
+	if t.plexClient == nil {
 		return
 	}
 
-	pos, err := t.mpv.GetTimePos()
-	if err != nil {
-		return
+	// Try to get current position from MPV (may fail if MPV exited)
+	pos := lastPos
+	index := lastIndex
+	if t.mpv != nil {
+		if currentPos, err := t.mpv.GetTimePos(); err == nil {
+			pos = currentPos
+		}
+		if currentIndex, err := t.mpv.GetPlaylistPos(); err == nil {
+			index = currentIndex
+		}
 	}
 
-	index := t.CurrentIndex()
-	t.reportPosition(index, pos, "stopped")
+	// Only report if we have a valid position
+	if index >= 0 && pos > 0 {
+		t.reportPosition(index, pos, "stopped")
+	}
 }
 
 // FormatDuration formats milliseconds as HH:MM:SS or MM:SS.
