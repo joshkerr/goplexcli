@@ -1,6 +1,9 @@
 // Package progress provides playback progress tracking for media players.
 // It includes an IPC client for communicating with MPV media player to track
 // playback position and state, which is then used to report progress to Plex.
+//
+// The IPC connection uses TCP sockets on localhost for cross-platform compatibility
+// (works on Windows, macOS, and Linux).
 package progress
 
 import (
@@ -8,16 +11,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
 )
 
 // Connection retry settings for MPV IPC socket
 const (
-	maxConnectRetries  = 50                      // Maximum number of connection attempts
-	connectRetryDelay  = 100 * time.Millisecond  // Delay between connection attempts
+	maxConnectRetries = 50                     // Maximum number of connection attempts
+	connectRetryDelay = 100 * time.Millisecond // Delay between connection attempts
 )
 
 // mpvCommand represents a command to send to MPV via JSON IPC.
@@ -42,30 +43,35 @@ func buildMPVCommand(cmd string, args ...string) mpvCommand {
 }
 
 // MPVClient provides communication with MPV via its JSON IPC protocol.
-// It connects to MPV over a Unix socket and can query playback state.
+// It connects to MPV over a TCP socket on localhost and can query playback state.
+// TCP is used instead of Unix sockets for cross-platform compatibility (Windows/macOS/Linux).
 type MPVClient struct {
-	socketPath string
-	conn       net.Conn
-	reader     *bufio.Reader
-	mu         sync.Mutex
+	address string
+	conn    net.Conn
+	reader  *bufio.Reader
+	mu      sync.Mutex
 }
 
-// NewMPVClient creates a new MPV IPC client for the given socket path.
+// NewMPVClient creates a new MPV IPC client for the given address.
+// The address should be in the format "127.0.0.1:PORT".
 // The client is not connected until Connect is called.
-func NewMPVClient(socketPath string) *MPVClient {
+func NewMPVClient(address string) *MPVClient {
 	return &MPVClient{
-		socketPath: socketPath,
+		address: address,
 	}
 }
 
-// GenerateSocketPath creates a unique socket path for MPV IPC communication.
-// The path is placed in the system's temporary directory.
-func GenerateSocketPath() string {
-	return filepath.Join(os.TempDir(), fmt.Sprintf("mpv-ipc-%d.sock", os.Getpid()))
+// GenerateIPCAddress creates a unique IPC address for MPV communication.
+// Returns a TCP address on localhost with a semi-random port based on PID.
+// The port is in the range 19000-19999 to avoid conflicts with common services.
+func GenerateIPCAddress() string {
+	// Use PID to generate a semi-unique port in range 19000-19999
+	port := 19000 + (time.Now().UnixNano() % 1000)
+	return fmt.Sprintf("127.0.0.1:%d", port)
 }
 
-// Connect establishes a connection to the MPV IPC socket.
-// It retries with a short delay to allow MPV time to create the socket.
+// Connect establishes a connection to the MPV IPC server.
+// It retries with a short delay to allow MPV time to start the IPC server.
 func (c *MPVClient) Connect() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -74,10 +80,10 @@ func (c *MPVClient) Connect() error {
 		return nil // Already connected
 	}
 
-	// Retry connection with backoff since MPV may take time to create the socket
+	// Retry connection with backoff since MPV may take time to start IPC server
 	var lastErr error
 	for i := 0; i < maxConnectRetries; i++ {
-		conn, err := net.Dial("unix", c.socketPath)
+		conn, err := net.Dial("tcp", c.address)
 		if err == nil {
 			c.conn = conn
 			c.reader = bufio.NewReader(conn)
@@ -87,7 +93,7 @@ func (c *MPVClient) Connect() error {
 		time.Sleep(connectRetryDelay)
 	}
 
-	return fmt.Errorf("failed to connect to MPV socket after retries: %w", lastErr)
+	return fmt.Errorf("failed to connect to MPV IPC server after retries: %w", lastErr)
 }
 
 // Close closes the connection to MPV.

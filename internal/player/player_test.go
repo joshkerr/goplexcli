@@ -8,54 +8,54 @@ func TestBuildMPVArgs(t *testing.T) {
 	tests := []struct {
 		name       string
 		urls       []string
-		socketPath string
+		ipcAddress string
 		startPos   int
-		wantSocket bool
+		wantIPC    bool
 		wantStart  bool
 	}{
 		{
 			name:       "basic playback",
 			urls:       []string{"http://example.com/video.mp4"},
-			socketPath: "",
+			ipcAddress: "",
 			startPos:   0,
-			wantSocket: false,
+			wantIPC:    false,
 			wantStart:  false,
 		},
 		{
-			name:       "with IPC socket",
+			name:       "with IPC address",
 			urls:       []string{"http://example.com/video.mp4"},
-			socketPath: "/tmp/mpv.sock",
+			ipcAddress: "127.0.0.1:19000",
 			startPos:   0,
-			wantSocket: true,
+			wantIPC:    true,
 			wantStart:  false,
 		},
 		{
 			name:       "with resume position",
 			urls:       []string{"http://example.com/video.mp4"},
-			socketPath: "/tmp/mpv.sock",
+			ipcAddress: "127.0.0.1:19000",
 			startPos:   125,
-			wantSocket: true,
+			wantIPC:    true,
 			wantStart:  true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			args := buildMPVArgs(tt.urls, tt.socketPath, tt.startPos)
+			args := buildMPVArgs(tt.urls, tt.ipcAddress, tt.startPos)
 
-			hasSocket := false
+			hasIPC := false
 			hasStart := false
 			for _, arg := range args {
 				if len(arg) > 18 && arg[:18] == "--input-ipc-server" {
-					hasSocket = true
+					hasIPC = true
 				}
 				if len(arg) > 8 && arg[:8] == "--start=" {
 					hasStart = true
 				}
 			}
 
-			if hasSocket != tt.wantSocket {
-				t.Errorf("socket flag: got %v, want %v", hasSocket, tt.wantSocket)
+			if hasIPC != tt.wantIPC {
+				t.Errorf("IPC flag: got %v, want %v", hasIPC, tt.wantIPC)
 			}
 			if hasStart != tt.wantStart {
 				t.Errorf("start flag: got %v, want %v", hasStart, tt.wantStart)

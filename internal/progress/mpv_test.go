@@ -73,26 +73,26 @@ func TestBuildMPVCommand(t *testing.T) {
 	}
 }
 
-func TestGenerateSocketPath(t *testing.T) {
-	path := GenerateSocketPath()
+func TestGenerateIPCAddress(t *testing.T) {
+	addr := GenerateIPCAddress()
 
-	// Should start with expected prefix
-	if len(path) == 0 {
-		t.Error("expected non-empty socket path")
+	// Should be non-empty
+	if len(addr) == 0 {
+		t.Error("expected non-empty IPC address")
 	}
 
-	// Should contain mpv-ipc in the path
-	if !strings.Contains(path, "mpv-ipc") {
-		t.Errorf("expected path to contain 'mpv-ipc', got %s", path)
+	// Should be localhost address with port
+	if !strings.HasPrefix(addr, "127.0.0.1:") {
+		t.Errorf("expected address to start with '127.0.0.1:', got %s", addr)
 	}
 }
 
 func TestNewMPVClient(t *testing.T) {
-	socketPath := "/tmp/test-mpv.sock"
-	client := NewMPVClient(socketPath)
+	address := "127.0.0.1:19000"
+	client := NewMPVClient(address)
 
-	if client.socketPath != socketPath {
-		t.Errorf("expected socket path %s, got %s", socketPath, client.socketPath)
+	if client.address != address {
+		t.Errorf("expected address %s, got %s", address, client.address)
 	}
 
 	if client.conn != nil {

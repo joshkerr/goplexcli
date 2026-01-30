@@ -11,7 +11,7 @@ import (
 
 // PlaybackOptions configures MPV playback behavior.
 type PlaybackOptions struct {
-	SocketPath string // IPC socket path for progress tracking (empty to disable)
+	IPCAddress string // IPC address for progress tracking (e.g., "127.0.0.1:19000", empty to disable)
 	StartPos   int    // Start position in seconds (0 to start from beginning)
 }
 
@@ -57,15 +57,15 @@ func (p *MPVPlayer) getPath() string {
 }
 
 // buildMPVArgs constructs the argument list for MPV.
-func buildMPVArgs(urls []string, socketPath string, startPos int) []string {
+func buildMPVArgs(urls []string, ipcAddress string, startPos int) []string {
 	args := []string{
 		"--force-seekable=yes",
 		"--hr-seek=yes",
 	}
 
-	// Add IPC socket if specified
-	if socketPath != "" {
-		args = append(args, fmt.Sprintf("--input-ipc-server=%s", socketPath))
+	// Add IPC server if specified (using TCP for cross-platform compatibility)
+	if ipcAddress != "" {
+		args = append(args, fmt.Sprintf("--input-ipc-server=tcp://%s", ipcAddress))
 	} else {
 		// Only disable resume playback if we're not tracking
 		args = append(args, "--no-resume-playback")
@@ -92,7 +92,7 @@ func playWithMPV(mpvPath string, streamURLs []string, opts PlaybackOptions) erro
 	}
 
 	// Build mpv command using buildMPVArgs
-	args := buildMPVArgs(streamURLs, opts.SocketPath, opts.StartPos)
+	args := buildMPVArgs(streamURLs, opts.IPCAddress, opts.StartPos)
 
 	cmd := exec.Command(mpvPath, args...)
 

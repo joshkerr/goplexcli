@@ -803,10 +803,9 @@ func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error
 	}
 	fmt.Println()
 
-	// Set up progress tracking
-	socketPath := progress.GenerateSocketPath()
-	defer os.Remove(socketPath) // Clean up socket file after playback
-	mpvClient := progress.NewMPVClient(socketPath)
+	// Set up progress tracking using TCP for cross-platform compatibility
+	ipcAddress := progress.GenerateIPCAddress()
+	mpvClient := progress.NewMPVClient(ipcAddress)
 	tracker := progress.NewTracker(mediaItems, mpvClient, client)
 
 	// Prepare playback options
@@ -818,7 +817,7 @@ func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error
 		startPos = startPositions[0]
 	}
 	opts := player.PlaybackOptions{
-		SocketPath: socketPath,
+		IPCAddress: ipcAddress,
 		StartPos:   startPos,
 	}
 
@@ -833,7 +832,7 @@ func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error
 
 	// Connect to MPV IPC and start tracking
 	if err := mpvClient.Connect(); err != nil {
-		fmt.Println(warningStyle.Render("Note: Progress tracking unavailable (IPC connection failed)"))
+		fmt.Println(warningStyle.Render(fmt.Sprintf("Note: Progress tracking unavailable: %v", err)))
 	} else {
 		defer func() { _ = mpvClient.Close() }()
 		ctx, cancel := context.WithCancel(context.Background())
