@@ -398,6 +398,7 @@ func PromptActionWithQueue(fzfPath string, queueCount int) (string, error) {
 	actions := []string{
 		"Watch",
 		"Download",
+		"SenPlayer",
 		queueLabel,
 		"Stream",
 		"Cancel",
