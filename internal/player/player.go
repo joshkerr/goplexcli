@@ -9,6 +9,12 @@ import (
 	"runtime"
 )
 
+// PlaybackOptions configures MPV playback behavior.
+type PlaybackOptions struct {
+	IPCAddress string // IPC address for progress tracking (e.g., "127.0.0.1:19000", empty to disable)
+	StartPos   int    // Start position in seconds (0 to start from beginning)
+}
+
 // MPVPlayer implements the Player interface using mpv media player.
 // It provides high-quality media playback with seeking support.
 type MPVPlayer struct {
@@ -33,7 +39,7 @@ func (p *MPVPlayer) PlayMultiple(ctx context.Context, urls []string) error {
 	if len(urls) == 0 {
 		return fmt.Errorf("no stream URLs provided")
 	}
-	return playWithMPV(p.getPath(), urls)
+	return playWithMPV(p.getPath(), urls, PlaybackOptions{})
 }
 
 // IsAvailable checks if mpv is available on the system.
@@ -50,8 +56,32 @@ func (p *MPVPlayer) getPath() string {
 	return p.Path
 }
 
+// buildMPVArgs constructs the argument list for MPV.
+func buildMPVArgs(urls []string, ipcAddress string, startPos int) []string {
+	args := []string{
+		"--force-seekable=yes",
+		"--hr-seek=yes",
+	}
+
+	// Add IPC server if specified (using TCP for cross-platform compatibility)
+	if ipcAddress != "" {
+		args = append(args, fmt.Sprintf("--input-ipc-server=tcp://%s", ipcAddress))
+	} else {
+		// Only disable resume playback if we're not tracking
+		args = append(args, "--no-resume-playback")
+	}
+
+	// Add start position if specified
+	if startPos > 0 {
+		args = append(args, fmt.Sprintf("--start=%d", startPos))
+	}
+
+	args = append(args, urls...)
+	return args
+}
+
 // playWithMPV is a helper function that executes mpv with the given arguments
-func playWithMPV(mpvPath string, streamURLs []string) error {
+func playWithMPV(mpvPath string, streamURLs []string, opts PlaybackOptions) error {
 	if mpvPath == "" {
 		mpvPath = "mpv"
 	}
@@ -61,13 +91,8 @@ func playWithMPV(mpvPath string, streamURLs []string) error {
 		return fmt.Errorf("mpv not found in PATH. Please install mpv or specify the path in config")
 	}
 
-	// Build mpv command
-	args := []string{
-		"--force-seekable=yes",
-		"--hr-seek=yes",
-		"--no-resume-playback",
-	}
-	args = append(args, streamURLs...)
+	// Build mpv command using buildMPVArgs
+	args := buildMPVArgs(streamURLs, opts.IPCAddress, opts.StartPos)
 
 	cmd := exec.Command(mpvPath, args...)
 
@@ -94,7 +119,7 @@ func playWithMPV(mpvPath string, streamURLs []string) error {
 // Play launches MPV to play the given URL.
 // This is a convenience function that uses the default player.
 func Play(streamURL, mpvPath string) error {
-	return playWithMPV(mpvPath, []string{streamURL})
+	return playWithMPV(mpvPath, []string{streamURL}, PlaybackOptions{})
 }
 
 // PlayMultiple launches MPV to play multiple URLs sequentially.
@@ -104,7 +129,15 @@ func PlayMultiple(streamURLs []string, mpvPath string) error {
 		return fmt.Errorf("no stream URLs provided")
 	}
 
-	return playWithMPV(mpvPath, streamURLs)
+	return playWithMPV(mpvPath, streamURLs, PlaybackOptions{})
+}
+
+// PlayMultipleWithOptions launches MPV with custom options.
+func PlayMultipleWithOptions(streamURLs []string, mpvPath string, opts PlaybackOptions) error {
+	if len(streamURLs) == 0 {
+		return fmt.Errorf("no stream URLs provided")
+	}
+	return playWithMPV(mpvPath, streamURLs, opts)
 }
 
 // IsAvailable checks if MPV is available on the system.

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -14,8 +15,10 @@ import (
 	"github.com/joshkerr/goplexcli/internal/cache"
 	"github.com/joshkerr/goplexcli/internal/config"
 	"github.com/joshkerr/goplexcli/internal/download"
+	apperrors "github.com/joshkerr/goplexcli/internal/errors"
 	"github.com/joshkerr/goplexcli/internal/player"
 	"github.com/joshkerr/goplexcli/internal/plex"
+	"github.com/joshkerr/goplexcli/internal/progress"
 	"github.com/joshkerr/goplexcli/internal/queue"
 	"github.com/joshkerr/goplexcli/internal/stream"
 	"github.com/joshkerr/goplexcli/internal/ui"
@@ -440,7 +443,7 @@ func selectMediaFlat(media []plex.MediaItem, cfg *config.Config, prompt string) 
 	if ui.IsAvailable(cfg.FzfPath) {
 		selectedIndices, err := ui.SelectMediaWithPreview(media, prompt, cfg.FzfPath, cfg.PlexURL, cfg.PlexToken)
 		if err != nil {
-			if err.Error() == "cancelled by user" {
+			if errors.Is(err, apperrors.ErrCancelled) {
 				return nil, true, nil
 			}
 			return nil, false, fmt.Errorf("media selection failed: %w", err)
@@ -512,7 +515,7 @@ browseLoop:
 			var err error
 			mediaType, err = ui.SelectMediaTypeWithQueue(cfg.FzfPath, q.Len())
 			if err != nil {
-				if err.Error() == "cancelled by user" {
+				if errors.Is(err, apperrors.ErrCancelled) {
 					return nil
 				}
 				return fmt.Errorf("media type selection failed: %w", err)
@@ -578,7 +581,7 @@ browseLoop:
 
 			selectedShow, err := ui.SelectTVShow(shows, cfg.FzfPath)
 			if err != nil {
-				if err.Error() == "cancelled by user" {
+				if errors.Is(err, apperrors.ErrCancelled) {
 					continue browseLoop
 				}
 				return fmt.Errorf("show selection failed: %w", err)
@@ -595,7 +598,7 @@ browseLoop:
 
 			selectedSeason, err := ui.SelectSeason(seasons, selectedShow, cfg.FzfPath)
 			if err != nil {
-				if err.Error() == "cancelled by user" {
+				if errors.Is(err, apperrors.ErrCancelled) {
 					continue browseLoop
 				}
 				return fmt.Errorf("season selection failed: %w", err)
@@ -646,7 +649,7 @@ browseLoop:
 		if ui.IsAvailable(cfg.FzfPath) {
 			action, err = ui.PromptActionWithQueue(cfg.FzfPath, q.Len())
 			if err != nil {
-				if err.Error() == "cancelled by user" {
+				if errors.Is(err, apperrors.ErrCancelled) {
 					return nil
 				}
 				return err
@@ -706,6 +709,81 @@ func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error
 		return fmt.Errorf("failed to create plex client: %w", err)
 	}
 
+	// Check for items with progress
+	var itemsWithProgress []*plex.MediaItem
+	for _, media := range mediaItems {
+		if ui.HasResumableProgress(media) {
+			itemsWithProgress = append(itemsWithProgress, media)
+		}
+	}
+
+	// Determine start positions based on user choice
+	startPositions := make([]int, len(mediaItems))
+	if len(itemsWithProgress) > 0 {
+		if len(itemsWithProgress) == 1 && len(mediaItems) == 1 {
+			// Single item with progress - show simple resume prompt
+			choice, err := ui.PromptResume(ui.ResumePromptOptions{
+				Title:      mediaItems[0].FormatMediaTitle(),
+				ViewOffset: mediaItems[0].ViewOffset,
+				Duration:   mediaItems[0].Duration,
+				FzfPath:    cfg.FzfPath,
+			})
+			if err != nil {
+				if errors.Is(err, apperrors.ErrCancelled) {
+					return nil
+				}
+				// On error, default to start from beginning
+				fmt.Println(warningStyle.Render("Resume prompt failed, starting from beginning"))
+			} else if choice == ui.ResumeFromPosition {
+				// Convert milliseconds to seconds for MPV
+				startPositions[0] = mediaItems[0].ViewOffset / 1000
+			}
+		} else {
+			// Multiple items or multiple items with progress - show multi-resume prompt
+			choice, err := ui.PromptMultiResume(len(itemsWithProgress), len(mediaItems), cfg.FzfPath)
+			if err != nil {
+				if errors.Is(err, apperrors.ErrCancelled) {
+					return nil
+				}
+				// On error, default to start from beginning
+				fmt.Println(warningStyle.Render("Resume prompt failed, starting all from beginning"))
+			} else {
+				switch choice {
+				case ui.ResumeAll:
+					// Set start positions for all items with progress
+					for i, media := range mediaItems {
+						if ui.HasResumableProgress(media) {
+							startPositions[i] = media.ViewOffset / 1000
+						}
+					}
+				case ui.ChooseIndividually:
+					// Prompt for each item with progress
+					for i, media := range mediaItems {
+						if ui.HasResumableProgress(media) {
+							itemChoice, err := ui.PromptResume(ui.ResumePromptOptions{
+								Title:      media.FormatMediaTitle(),
+								ViewOffset: media.ViewOffset,
+								Duration:   media.Duration,
+								FzfPath:    cfg.FzfPath,
+							})
+							if err != nil {
+								if errors.Is(err, apperrors.ErrCancelled) {
+									return nil
+								}
+								// On error, start this item from beginning
+								continue
+							}
+							if itemChoice == ui.ResumeFromPosition {
+								startPositions[i] = media.ViewOffset / 1000
+							}
+						}
+					}
+					// case ui.StartAllFromBeginning: all positions remain 0
+				}
+			}
+		}
+	}
+
 	// Get stream URLs for all items
 	var streamURLs []string
 	for i, media := range mediaItems {
@@ -725,11 +803,67 @@ func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error
 	}
 	fmt.Println()
 
+	// Set up progress tracking using TCP for cross-platform compatibility
+	ipcAddress := progress.GenerateIPCAddress()
+	mpvClient := progress.NewMPVClient(ipcAddress)
+	tracker := progress.NewTracker(mediaItems, mpvClient, client)
+
+	// Prepare playback options
+	// Note: MPV's --start flag only applies to the first file in a playlist.
+	// For multi-item playlists, only the first item resumes from saved position;
+	// subsequent items start from the beginning.
+	startPos := 0
+	if len(mediaItems) == 1 && len(startPositions) > 0 {
+		startPos = startPositions[0]
+	}
+
+	// Warn user about playlist resume limitation if multiple items have progress
+	if len(mediaItems) > 1 && len(startPositions) > 0 {
+		progressCount := 0
+		for _, pos := range startPositions {
+			if pos > 0 {
+				progressCount++
+			}
+		}
+		if progressCount > 1 {
+			fmt.Println(warningStyle.Render("Note: Resume position only applies to first item in playlist"))
+		}
+	}
+
+	opts := player.PlaybackOptions{
+		IPCAddress: ipcAddress,
+		StartPos:   startPos,
+	}
+
 	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Starting playback of %d items...", len(mediaItems))))
 	fmt.Println(infoStyle.Render("Use 'n' in MPV to skip to next item"))
 
-	// Play with MPV (creates a playlist)
-	if err := player.PlayMultiple(streamURLs, cfg.MPVPath); err != nil {
+	// Create context that cancels when MPV exits
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start MPV in goroutine
+	errCh := make(chan error, 1)
+	go func() {
+		err := player.PlayMultipleWithOptions(streamURLs, cfg.MPVPath, opts)
+		cancel() // Cancel context when MPV exits (stops Connect retries)
+		errCh <- err
+	}()
+
+	// Connect to MPV IPC and start tracking (with context for early cancellation)
+	if err := mpvClient.ConnectWithContext(ctx); err != nil {
+		// Only show warning if it wasn't due to MPV exiting
+		if ctx.Err() == nil {
+			fmt.Println(warningStyle.Render(fmt.Sprintf("Note: Progress tracking unavailable: %v", err)))
+		}
+	} else {
+		defer func() { _ = mpvClient.Close() }()
+		tracker.Start(ctx, 10*time.Second)
+		defer tracker.Stop()
+	}
+
+	// Wait for playback to finish
+	if err := <-errCh; err != nil {
 		return fmt.Errorf("playback failed: %w", err)
 	}
 
@@ -911,7 +1045,7 @@ func handleQueueView(cfg *config.Config, q *queue.Queue) (string, error) {
 	if ui.IsAvailable(cfg.FzfPath) {
 		action, err = ui.PromptQueueAction(cfg.FzfPath, q.Len())
 		if err != nil {
-			if err.Error() == "cancelled by user" {
+			if errors.Is(err, apperrors.ErrCancelled) {
 				return "back", nil
 			}
 			return "", err
@@ -955,7 +1089,7 @@ func handleQueueView(cfg *config.Config, q *queue.Queue) (string, error) {
 		if ui.IsAvailable(cfg.FzfPath) {
 			indices, err := ui.SelectQueueItemsForRemoval(q.Items, cfg.FzfPath)
 			if err != nil {
-				if err.Error() == "cancelled by user" {
+				if errors.Is(err, apperrors.ErrCancelled) {
 					return "back", nil
 				}
 				return "", err
@@ -1335,7 +1469,12 @@ func runConfig(cmd *cobra.Command, args []string) error {
 	if cfg.PlexUsername != "" {
 		fmt.Println(infoStyle.Render("Username: " + cfg.PlexUsername))
 	}
-	fmt.Println(infoStyle.Render("Token: " + cfg.PlexToken[:10] + "..."))
+	// Safely truncate token display to avoid panic on short tokens
+	tokenDisplay := cfg.PlexToken
+	if len(tokenDisplay) > 10 {
+		tokenDisplay = tokenDisplay[:10] + "..."
+	}
+	fmt.Println(infoStyle.Render("Token: " + tokenDisplay))
 
 	configPath, _ := config.GetConfigPath()
 	fmt.Println(infoStyle.Render("\nConfig file: " + configPath))
@@ -1393,7 +1532,7 @@ func runStream(cmd *cobra.Command, args []string) error {
 		if ui.IsAvailable(cfg.FzfPath) {
 			_, idx, err := ui.SelectWithFzf(serverNames, "Select server:", cfg.FzfPath)
 			if err != nil {
-				if err.Error() == "cancelled by user" {
+				if errors.Is(err, apperrors.ErrCancelled) {
 					return nil
 				}
 				return fmt.Errorf("server selection failed: %w", err)
@@ -1445,7 +1584,7 @@ func runStream(cmd *cobra.Command, args []string) error {
 		if ui.IsAvailable(cfg.FzfPath) {
 			_, idx, err := ui.SelectWithFzf(streamTitles, "Select stream:", cfg.FzfPath)
 			if err != nil {
-				if err.Error() == "cancelled by user" {
+				if errors.Is(err, apperrors.ErrCancelled) {
 					return nil
 				}
 				return fmt.Errorf("stream selection failed: %w", err)

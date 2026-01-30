@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/LukeHagar/plexgo"
 	"github.com/LukeHagar/plexgo/models/operations"
@@ -514,6 +515,66 @@ func (c *Client) GetStreamURL(mediaKey string) (string, error) {
 	return streamURL, nil
 }
 
+// Plex client headers - consistent across all API calls
+const (
+	plexClientIdentifier = "goplexcli"
+	plexProduct          = "GoplexCLI"
+	plexVersion          = "1.0"
+)
+
+// timelineClient is used for timeline updates with a reasonable timeout
+// to prevent blocking if the Plex server is slow or unresponsive.
+var timelineClient = &http.Client{
+	Timeout: 5 * time.Second,
+}
+
+// UpdateTimeline reports playback progress to the Plex server.
+// This updates the resume position and shows "Now Playing" on the Plex dashboard.
+// state should be "playing", "paused", or "stopped".
+// timeMs is the current position in milliseconds.
+// durationMs is the total duration in milliseconds.
+func (c *Client) UpdateTimeline(ratingKey string, state string, timeMs int, durationMs int) error {
+	// Validate inputs
+	if ratingKey == "" {
+		return fmt.Errorf("ratingKey cannot be empty")
+	}
+	if state != "playing" && state != "paused" && state != "stopped" {
+		return fmt.Errorf("invalid state %q: must be playing, paused, or stopped", state)
+	}
+	if timeMs < 0 {
+		timeMs = 0
+	}
+	if durationMs < 0 {
+		durationMs = 0
+	}
+
+	url := fmt.Sprintf("%s/:/timeline?ratingKey=%s&key=/library/metadata/%s&state=%s&time=%d&duration=%d&X-Plex-Token=%s",
+		c.serverURL, ratingKey, ratingKey, state, timeMs, durationMs, c.token)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create timeline request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Plex-Client-Identifier", plexClientIdentifier)
+	req.Header.Set("X-Plex-Product", plexProduct)
+	req.Header.Set("X-Plex-Version", plexVersion)
+
+	// Use timelineClient with timeout to prevent blocking on slow servers
+	resp, err := timelineClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to update timeline: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("timeline update failed with status %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
 // convertToRclonePath converts a Plex file path to an rclone remote path
 // Input: /home/joshkerr/plexcloudservers2/Media/TV/...
 // Output: plexcloudservers2:/Media/TV/...
@@ -557,6 +618,24 @@ func (m *MediaItem) FormatMediaTitle() string {
 	// Add server name if present and multiple servers might be in use
 	if m.ServerName != "" && m.ServerName != "Default Server" {
 		title = fmt.Sprintf("[%s] %s", m.ServerName, title)
+	}
+
+	// Add progress indicator
+	if m.Duration > 0 {
+		if m.ViewCount > 0 {
+			// Watched
+			title = fmt.Sprintf("%s ✓", title)
+		} else if m.ViewOffset > 0 {
+			// Calculate percentage using float division for precision (consistent with HasResumableProgress)
+			pct := int(float64(m.ViewOffset) * 100 / float64(m.Duration))
+			if pct >= 95 {
+				// >=95% complete, show as watched (consistent with HasResumableProgress)
+				title = fmt.Sprintf("%s ✓", title)
+			} else {
+				// In progress
+				title = fmt.Sprintf("%s ▶ %d%%", title, pct)
+			}
+		}
 	}
 
 	return title

@@ -224,9 +224,11 @@ func (m *BrowserModel) View() string {
 		b.WriteString(searchLabelStyle.Render("  Search: "))
 		b.WriteString(m.searchInput.View())
 		b.WriteString("\n")
-		// Divider line
-		dividerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#374151"))
-		b.WriteString(dividerStyle.Render("  " + strings.Repeat("─", min(m.width-6, 60))))
+		// Divider line (guard against narrow terminals)
+		if m.width > 6 {
+			dividerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#374151"))
+			b.WriteString(dividerStyle.Render("  " + strings.Repeat("─", min(m.width-6, 60))))
+		}
 		b.WriteString("\n\n")
 	} else if m.searchInput.Value() != "" {
 		filterLabelStyle := lipgloss.NewStyle().
@@ -241,7 +243,13 @@ func (m *BrowserModel) View() string {
 			filterLabelStyle.Render("Filter:"),
 			filterValueStyle.Render(m.searchInput.Value()),
 			hintStyle.Render("(/ to edit, esc to clear)")))
-		b.WriteString("\n\n")
+		b.WriteString("\n")
+		// Divider line (guard against narrow terminals)
+		if m.width > 6 {
+			dividerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#374151"))
+			b.WriteString(dividerStyle.Render("  " + strings.Repeat("─", min(m.width-6, 60))))
+		}
+		b.WriteString("\n")
 	}
 
 	// Calculate layout
@@ -328,40 +336,50 @@ func (m *BrowserModel) View() string {
 }
 
 func (m *BrowserModel) formatListItem(item plex.MediaItem, cursor string, selected bool, alternate bool) string {
-	style := lipgloss.NewStyle()
+	// Build styles - avoid nested Render calls which inject ANSI resets
+	var mainFg, dimFg lipgloss.Color
+	var bg lipgloss.Color
+	bold := false
 
 	if selected {
 		// Selected item: accent color with subtle background highlight
-		style = style.
-			Foreground(lipgloss.Color("#C084FC")).
-			Background(lipgloss.Color("#2D2D35")).
-			Bold(true)
+		mainFg = lipgloss.Color("#C084FC")
+		dimFg = lipgloss.Color("#9CA3AF")
+		bg = lipgloss.Color("#2D2D35")
+		bold = true
 	} else if alternate {
 		// Alternating rows: slightly dimmer for visual rhythm
-		style = style.Foreground(lipgloss.Color("#9CA3AF"))
+		mainFg = lipgloss.Color("#9CA3AF")
+		dimFg = lipgloss.Color("#6B7280")
 	} else {
-		style = style.Foreground(lipgloss.Color("#D1D5DB"))
+		mainFg = lipgloss.Color("#D1D5DB")
+		dimFg = lipgloss.Color("#6B7280")
 	}
 
-	var line string
+	mainStyle := lipgloss.NewStyle().Foreground(mainFg).Bold(bold)
+	dimStyle := lipgloss.NewStyle().Foreground(dimFg).Bold(bold)
+	if selected {
+		mainStyle = mainStyle.Background(bg)
+		dimStyle = dimStyle.Background(bg)
+	}
+
+	// Build line from separately-rendered segments to avoid ANSI reset issues
+	var parts []string
+	parts = append(parts, mainStyle.Render("  "+cursor+" "))
+
 	switch item.Type {
 	case "movie":
-		yearStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280"))
-		if selected {
-			yearStyle = yearStyle.Foreground(lipgloss.Color("#9CA3AF"))
-		}
-		line = fmt.Sprintf("%s %s %s", cursor, item.Title, yearStyle.Render(fmt.Sprintf("(%d)", item.Year)))
+		parts = append(parts, mainStyle.Render(item.Title+" "))
+		parts = append(parts, dimStyle.Render(fmt.Sprintf("(%d)", item.Year)))
 	case "episode":
-		epStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7280"))
-		if selected {
-			epStyle = epStyle.Foreground(lipgloss.Color("#9CA3AF"))
-		}
-		line = fmt.Sprintf("%s %s %s %s", cursor, item.ParentTitle, epStyle.Render(fmt.Sprintf("S%02dE%02d", item.ParentIndex, item.Index)), item.Title)
+		parts = append(parts, mainStyle.Render(item.ParentTitle+" "))
+		parts = append(parts, dimStyle.Render(fmt.Sprintf("S%02dE%02d ", item.ParentIndex, item.Index)))
+		parts = append(parts, mainStyle.Render(item.Title))
 	default:
-		line = fmt.Sprintf("%s %s", cursor, item.Title)
+		parts = append(parts, mainStyle.Render(item.Title))
 	}
 
-	return style.Render("  " + line)
+	return strings.Join(parts, "")
 }
 
 func (m *BrowserModel) renderDetails(item plex.MediaItem, width, height int) string {
