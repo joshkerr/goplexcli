@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/LukeHagar/plexgo"
 	"github.com/LukeHagar/plexgo/models/operations"
@@ -521,6 +522,12 @@ const (
 	plexVersion          = "1.0"
 )
 
+// timelineClient is used for timeline updates with a reasonable timeout
+// to prevent blocking if the Plex server is slow or unresponsive.
+var timelineClient = &http.Client{
+	Timeout: 5 * time.Second,
+}
+
 // UpdateTimeline reports playback progress to the Plex server.
 // This updates the resume position and shows "Now Playing" on the Plex dashboard.
 // state should be "playing", "paused", or "stopped".
@@ -540,8 +547,8 @@ func (c *Client) UpdateTimeline(ratingKey string, state string, timeMs int, dura
 	req.Header.Set("X-Plex-Product", plexProduct)
 	req.Header.Set("X-Plex-Version", plexVersion)
 
-	// Use DefaultClient to reuse connections and avoid resource leaks
-	resp, err := http.DefaultClient.Do(req)
+	// Use timelineClient with timeout to prevent blocking on slow servers
+	resp, err := timelineClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to update timeline: %w", err)
 	}
