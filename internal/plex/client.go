@@ -514,6 +514,13 @@ func (c *Client) GetStreamURL(mediaKey string) (string, error) {
 	return streamURL, nil
 }
 
+// Plex client headers - consistent across all API calls
+const (
+	plexClientIdentifier = "goplexcli"
+	plexProduct          = "GoplexCLI"
+	plexVersion          = "1.0"
+)
+
 // UpdateTimeline reports playback progress to the Plex server.
 // This updates the resume position and shows "Now Playing" on the Plex dashboard.
 // state should be "playing", "paused", or "stopped".
@@ -528,12 +535,13 @@ func (c *Client) UpdateTimeline(ratingKey string, state string, timeMs int, dura
 		return fmt.Errorf("failed to create timeline request: %w", err)
 	}
 
-	req.Header.Set("X-Plex-Client-Identifier", "goplexcli")
-	req.Header.Set("X-Plex-Product", "GoplexCLI")
-	req.Header.Set("X-Plex-Version", "1.0")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Plex-Client-Identifier", plexClientIdentifier)
+	req.Header.Set("X-Plex-Product", plexProduct)
+	req.Header.Set("X-Plex-Version", plexVersion)
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	// Use DefaultClient to reuse connections and avoid resource leaks
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to update timeline: %w", err)
 	}
@@ -597,8 +605,8 @@ func (m *MediaItem) FormatMediaTitle() string {
 			// Watched
 			title = fmt.Sprintf("%s ✓", title)
 		} else if m.ViewOffset > 0 {
-			// Calculate percentage
-			pct := m.ViewOffset * 100 / m.Duration
+			// Calculate percentage using float division for precision (consistent with HasResumableProgress)
+			pct := int(float64(m.ViewOffset) * 100 / float64(m.Duration))
 			if pct >= 95 {
 				// >=95% complete, show as watched (consistent with HasResumableProgress)
 				title = fmt.Sprintf("%s ✓", title)

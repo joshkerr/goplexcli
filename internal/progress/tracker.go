@@ -4,12 +4,16 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/joshkerr/goplexcli/internal/plex"
 )
+
+// Position change threshold in seconds - only report if position changed by more than this
+const minPositionChangeSec = 5.0
 
 // Tracker monitors MPV playback and reports progress to Plex.
 type Tracker struct {
@@ -136,8 +140,8 @@ func (t *Tracker) tick(lastPos *float64, lastIndex *int) {
 		return
 	}
 
-	// Only report if position changed significantly (>5 seconds)
-	if pos-*lastPos > 5 || *lastPos-pos > 5 {
+	// Only report if position changed significantly
+	if math.Abs(pos-*lastPos) > minPositionChangeSec {
 		// Get pause state
 		paused, err := t.mpv.GetPaused()
 		if err != nil {

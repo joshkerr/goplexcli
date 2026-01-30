@@ -14,6 +14,12 @@ import (
 	"time"
 )
 
+// Connection retry settings for MPV IPC socket
+const (
+	maxConnectRetries  = 50                      // Maximum number of connection attempts
+	connectRetryDelay  = 100 * time.Millisecond  // Delay between connection attempts
+)
+
 // mpvCommand represents a command to send to MPV via JSON IPC.
 type mpvCommand struct {
 	Command []interface{} `json:"command"`
@@ -70,7 +76,7 @@ func (c *MPVClient) Connect() error {
 
 	// Retry connection with backoff since MPV may take time to create the socket
 	var lastErr error
-	for i := 0; i < 50; i++ { // Try for up to 5 seconds
+	for i := 0; i < maxConnectRetries; i++ {
 		conn, err := net.Dial("unix", c.socketPath)
 		if err == nil {
 			c.conn = conn
@@ -78,7 +84,7 @@ func (c *MPVClient) Connect() error {
 			return nil
 		}
 		lastErr = err
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(connectRetryDelay)
 	}
 
 	return fmt.Errorf("failed to connect to MPV socket after retries: %w", lastErr)

@@ -2,6 +2,7 @@ package progress
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -81,7 +82,7 @@ func TestGenerateSocketPath(t *testing.T) {
 	}
 
 	// Should contain mpv-ipc in the path
-	if !contains(path, "mpv-ipc") {
+	if !strings.Contains(path, "mpv-ipc") {
 		t.Errorf("expected path to contain 'mpv-ipc', got %s", path)
 	}
 }
@@ -97,18 +98,4 @@ func TestNewMPVClient(t *testing.T) {
 	if client.conn != nil {
 		t.Error("expected nil connection for new client")
 	}
-}
-
-// contains checks if a string contains a substring
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
-}
-
-func containsHelper(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/joshkerr/goplexcli/internal/plex"
@@ -37,7 +38,7 @@ func TestHasResumableProgress(t *testing.T) {
 	}{
 		{"no progress", 0, 7200000, false},
 		{"has progress", 3600000, 7200000, true},
-		{"almost complete (95%)", 6840000, 7200000, false}, // Treat as watched
+		{"complete (95% threshold)", 6840000, 7200000, false}, // >=95% treated as watched
 		{"90% progress", 6480000, 7200000, true},
 		{"negative view offset", -100, 7200000, false},
 		{"zero duration", 3600000, 0, false},
@@ -90,7 +91,7 @@ func TestFormatResumeHeader(t *testing.T) {
 			if tt.wantPct > 0 {
 				expectedPctStr = "(" // percentage is in parentheses
 			}
-			if expectedPctStr != "" && !contains(got, expectedPctStr) {
+			if expectedPctStr != "" && !strings.Contains(got, expectedPctStr) {
 				t.Errorf("header %q should contain percentage", got)
 			}
 		})
@@ -144,18 +145,4 @@ func TestCountItemsWithProgress(t *testing.T) {
 			}
 		})
 	}
-}
-
-// Helper function
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstr(s, substr))
-}
-
-func containsSubstr(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

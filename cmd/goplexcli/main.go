@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/joshkerr/goplexcli/internal/cache"
 	"github.com/joshkerr/goplexcli/internal/config"
 	"github.com/joshkerr/goplexcli/internal/download"
+	apperrors "github.com/joshkerr/goplexcli/internal/errors"
 	"github.com/joshkerr/goplexcli/internal/player"
 	"github.com/joshkerr/goplexcli/internal/plex"
 	"github.com/joshkerr/goplexcli/internal/progress"
@@ -441,7 +443,7 @@ func selectMediaFlat(media []plex.MediaItem, cfg *config.Config, prompt string) 
 	if ui.IsAvailable(cfg.FzfPath) {
 		selectedIndices, err := ui.SelectMediaWithPreview(media, prompt, cfg.FzfPath, cfg.PlexURL, cfg.PlexToken)
 		if err != nil {
-			if err.Error() == "cancelled by user" {
+			if errors.Is(err, apperrors.ErrCancelled) {
 				return nil, true, nil
 			}
 			return nil, false, fmt.Errorf("media selection failed: %w", err)
@@ -513,7 +515,7 @@ browseLoop:
 			var err error
 			mediaType, err = ui.SelectMediaTypeWithQueue(cfg.FzfPath, q.Len())
 			if err != nil {
-				if err.Error() == "cancelled by user" {
+				if errors.Is(err, apperrors.ErrCancelled) {
 					return nil
 				}
 				return fmt.Errorf("media type selection failed: %w", err)
@@ -579,7 +581,7 @@ browseLoop:
 
 			selectedShow, err := ui.SelectTVShow(shows, cfg.FzfPath)
 			if err != nil {
-				if err.Error() == "cancelled by user" {
+				if errors.Is(err, apperrors.ErrCancelled) {
 					continue browseLoop
 				}
 				return fmt.Errorf("show selection failed: %w", err)
@@ -596,7 +598,7 @@ browseLoop:
 
 			selectedSeason, err := ui.SelectSeason(seasons, selectedShow, cfg.FzfPath)
 			if err != nil {
-				if err.Error() == "cancelled by user" {
+				if errors.Is(err, apperrors.ErrCancelled) {
 					continue browseLoop
 				}
 				return fmt.Errorf("season selection failed: %w", err)
@@ -647,7 +649,7 @@ browseLoop:
 		if ui.IsAvailable(cfg.FzfPath) {
 			action, err = ui.PromptActionWithQueue(cfg.FzfPath, q.Len())
 			if err != nil {
-				if err.Error() == "cancelled by user" {
+				if errors.Is(err, apperrors.ErrCancelled) {
 					return nil
 				}
 				return err
@@ -727,7 +729,7 @@ func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error
 				FzfPath:    cfg.FzfPath,
 			})
 			if err != nil {
-				if err.Error() == "cancelled by user" {
+				if errors.Is(err, apperrors.ErrCancelled) {
 					return nil
 				}
 				// On error, default to start from beginning
@@ -740,7 +742,7 @@ func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error
 			// Multiple items or multiple items with progress - show multi-resume prompt
 			choice, err := ui.PromptMultiResume(len(itemsWithProgress), len(mediaItems), cfg.FzfPath)
 			if err != nil {
-				if err.Error() == "cancelled by user" {
+				if errors.Is(err, apperrors.ErrCancelled) {
 					return nil
 				}
 				// On error, default to start from beginning
@@ -765,7 +767,7 @@ func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error
 								FzfPath:    cfg.FzfPath,
 							})
 							if err != nil {
-								if err.Error() == "cancelled by user" {
+								if errors.Is(err, apperrors.ErrCancelled) {
 									return nil
 								}
 								// On error, start this item from beginning
@@ -803,13 +805,21 @@ func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error
 
 	// Set up progress tracking
 	socketPath := progress.GenerateSocketPath()
+	defer os.Remove(socketPath) // Clean up socket file after playback
 	mpvClient := progress.NewMPVClient(socketPath)
 	tracker := progress.NewTracker(mediaItems, mpvClient, client)
 
 	// Prepare playback options
+	// Note: MPV's --start flag only applies to the first file in a playlist.
+	// For multi-item playlists, only the first item resumes from saved position;
+	// subsequent items start from the beginning.
+	startPos := 0
+	if len(mediaItems) == 1 && len(startPositions) > 0 {
+		startPos = startPositions[0]
+	}
 	opts := player.PlaybackOptions{
 		SocketPath: socketPath,
-		StartPos:   startPositions[0], // First item's start position
+		StartPos:   startPos,
 	}
 
 	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Starting playback of %d items...", len(mediaItems))))
@@ -1015,7 +1025,7 @@ func handleQueueView(cfg *config.Config, q *queue.Queue) (string, error) {
 	if ui.IsAvailable(cfg.FzfPath) {
 		action, err = ui.PromptQueueAction(cfg.FzfPath, q.Len())
 		if err != nil {
-			if err.Error() == "cancelled by user" {
+			if errors.Is(err, apperrors.ErrCancelled) {
 				return "back", nil
 			}
 			return "", err
@@ -1059,7 +1069,7 @@ func handleQueueView(cfg *config.Config, q *queue.Queue) (string, error) {
 		if ui.IsAvailable(cfg.FzfPath) {
 			indices, err := ui.SelectQueueItemsForRemoval(q.Items, cfg.FzfPath)
 			if err != nil {
-				if err.Error() == "cancelled by user" {
+				if errors.Is(err, apperrors.ErrCancelled) {
 					return "back", nil
 				}
 				return "", err
@@ -1502,7 +1512,7 @@ func runStream(cmd *cobra.Command, args []string) error {
 		if ui.IsAvailable(cfg.FzfPath) {
 			_, idx, err := ui.SelectWithFzf(serverNames, "Select server:", cfg.FzfPath)
 			if err != nil {
-				if err.Error() == "cancelled by user" {
+				if errors.Is(err, apperrors.ErrCancelled) {
 					return nil
 				}
 				return fmt.Errorf("server selection failed: %w", err)
@@ -1554,7 +1564,7 @@ func runStream(cmd *cobra.Command, args []string) error {
 		if ui.IsAvailable(cfg.FzfPath) {
 			_, idx, err := ui.SelectWithFzf(streamTitles, "Select stream:", cfg.FzfPath)
 			if err != nil {
-				if err.Error() == "cancelled by user" {
+				if errors.Is(err, apperrors.ErrCancelled) {
 					return nil
 				}
 				return fmt.Errorf("stream selection failed: %w", err)

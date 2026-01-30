@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/joshkerr/goplexcli/internal/errors"
 	"github.com/joshkerr/goplexcli/internal/plex"
 )
 
@@ -57,7 +58,7 @@ func SelectWithFzf(items []string, prompt string, fzfPath string) (string, int, 
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			// Exit code 130 means user cancelled with Ctrl-C
 			if exitErr.ExitCode() == 130 {
-				return "", -1, fmt.Errorf("cancelled by user")
+				return "", -1, errors.ErrCancelled
 			}
 		}
 		return "", -1, fmt.Errorf("fzf failed: %w", err)
@@ -143,7 +144,7 @@ func SelectMediaWithPreview(media []plex.MediaItem, prompt string, fzfPath strin
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			// Exit code 130 means user cancelled with Ctrl-C
 			if exitErr.ExitCode() == 130 {
-				return nil, fmt.Errorf("cancelled by user")
+				return nil, errors.ErrCancelled
 			}
 		}
 		return nil, fmt.Errorf("fzf failed: %w", err)
@@ -511,7 +512,7 @@ func SelectQueueItemsForRemoval(queue []*plex.MediaItem, fzfPath string) ([]int,
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			if exitErr.ExitCode() == 130 {
-				return nil, fmt.Errorf("cancelled by user")
+				return nil, errors.ErrCancelled
 			}
 		}
 		return nil, fmt.Errorf("fzf failed: %w", err)

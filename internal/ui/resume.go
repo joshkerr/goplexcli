@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/joshkerr/goplexcli/internal/errors"
 	"github.com/joshkerr/goplexcli/internal/plex"
 	"github.com/joshkerr/goplexcli/internal/progress"
 )
@@ -178,7 +179,7 @@ func runFzfWithHeader(options []string, fzfPath string, header string) (string, 
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			// Exit code 130 means user cancelled with Ctrl-C
 			if exitErr.ExitCode() == 130 {
-				return "", fmt.Errorf("cancelled by user")
+				return "", errors.ErrCancelled
 			}
 		}
 		return "", fmt.Errorf("fzf failed: %w", err)
