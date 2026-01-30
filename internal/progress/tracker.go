@@ -96,8 +96,9 @@ func (t *Tracker) trackLoop(ctx context.Context, interval time.Duration) {
 	var lastPos float64
 	lastIndex := -1
 
-	// Report initial position immediately (don't wait for first tick)
-	t.tick(&lastPos, &lastIndex)
+	// Wait for MPV to be ready and report initial position
+	// MPV needs time to load the video before time-pos is available
+	t.waitForReadyAndReport(&lastPos, &lastIndex, ctx)
 
 	for {
 		select {
@@ -110,6 +111,38 @@ func (t *Tracker) trackLoop(ctx context.Context, interval time.Duration) {
 		case <-ticker.C:
 			t.tick(&lastPos, &lastIndex)
 		}
+	}
+}
+
+// waitForReadyAndReport waits for MPV to be ready and reports initial position.
+// MPV needs time to load the video before properties like time-pos are available.
+func (t *Tracker) waitForReadyAndReport(lastPos *float64, lastIndex *int, ctx context.Context) {
+	// Try every second for up to 30 seconds for MPV to be ready
+	for i := 0; i < 30; i++ {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(1 * time.Second):
+		}
+
+		// Try to get playlist position
+		playlistPos, err := t.mpv.GetPlaylistPos()
+		if err != nil {
+			continue
+		}
+
+		// Try to get time position
+		pos, err := t.mpv.GetTimePos()
+		if err != nil {
+			continue
+		}
+
+		// MPV is ready - report initial position
+		*lastIndex = playlistPos
+		*lastPos = pos
+		t.SetIndex(playlistPos)
+		t.reportPosition(playlistPos, pos, "playing")
+		return
 	}
 }
 
@@ -200,8 +233,8 @@ func (t *Tracker) reportFinalPosition(lastPos float64, lastIndex int) {
 		}
 	}
 
-	// Only report if we have a valid position
-	if index >= 0 && pos > 0 {
+	// Report final position if we have valid data
+	if index >= 0 && index < len(t.items) {
 		t.reportPosition(index, pos, "stopped")
 	}
 }
