@@ -816,6 +816,20 @@ func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error
 	if len(mediaItems) == 1 && len(startPositions) > 0 {
 		startPos = startPositions[0]
 	}
+
+	// Warn user about playlist resume limitation if multiple items have progress
+	if len(mediaItems) > 1 && len(startPositions) > 0 {
+		progressCount := 0
+		for _, pos := range startPositions {
+			if pos > 0 {
+				progressCount++
+			}
+		}
+		if progressCount > 1 {
+			fmt.Println(warningStyle.Render("Note: Resume position only applies to first item in playlist"))
+		}
+	}
+
 	opts := player.PlaybackOptions{
 		IPCAddress: ipcAddress,
 		StartPos:   startPos,
@@ -824,19 +838,26 @@ func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error
 	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Starting playback of %d items...", len(mediaItems))))
 	fmt.Println(infoStyle.Render("Use 'n' in MPV to skip to next item"))
 
+	// Create context that cancels when MPV exits
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	// Start MPV in goroutine
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- player.PlayMultipleWithOptions(streamURLs, cfg.MPVPath, opts)
+		err := player.PlayMultipleWithOptions(streamURLs, cfg.MPVPath, opts)
+		cancel() // Cancel context when MPV exits (stops Connect retries)
+		errCh <- err
 	}()
 
-	// Connect to MPV IPC and start tracking
-	if err := mpvClient.Connect(); err != nil {
-		fmt.Println(warningStyle.Render(fmt.Sprintf("Note: Progress tracking unavailable: %v", err)))
+	// Connect to MPV IPC and start tracking (with context for early cancellation)
+	if err := mpvClient.ConnectWithContext(ctx); err != nil {
+		// Only show warning if it wasn't due to MPV exiting
+		if ctx.Err() == nil {
+			fmt.Println(warningStyle.Render(fmt.Sprintf("Note: Progress tracking unavailable: %v", err)))
+		}
 	} else {
 		defer func() { _ = mpvClient.Close() }()
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
 		tracker.Start(ctx, 10*time.Second)
 		defer tracker.Stop()
 	}

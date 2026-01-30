@@ -1,6 +1,7 @@
 package player
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -46,10 +47,10 @@ func TestBuildMPVArgs(t *testing.T) {
 			hasIPC := false
 			hasStart := false
 			for _, arg := range args {
-				if len(arg) > 18 && arg[:18] == "--input-ipc-server" {
+				if strings.HasPrefix(arg, "--input-ipc-server") {
 					hasIPC = true
 				}
-				if len(arg) > 8 && arg[:8] == "--start=" {
+				if strings.HasPrefix(arg, "--start=") {
 					hasStart = true
 				}
 			}

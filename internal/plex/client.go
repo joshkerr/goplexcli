@@ -534,6 +534,20 @@ var timelineClient = &http.Client{
 // timeMs is the current position in milliseconds.
 // durationMs is the total duration in milliseconds.
 func (c *Client) UpdateTimeline(ratingKey string, state string, timeMs int, durationMs int) error {
+	// Validate inputs
+	if ratingKey == "" {
+		return fmt.Errorf("ratingKey cannot be empty")
+	}
+	if state != "playing" && state != "paused" && state != "stopped" {
+		return fmt.Errorf("invalid state %q: must be playing, paused, or stopped", state)
+	}
+	if timeMs < 0 {
+		timeMs = 0
+	}
+	if durationMs < 0 {
+		durationMs = 0
+	}
+
 	url := fmt.Sprintf("%s/:/timeline?ratingKey=%s&key=/library/metadata/%s&state=%s&time=%d&duration=%d&X-Plex-Token=%s",
 		c.serverURL, ratingKey, ratingKey, state, timeMs, durationMs, c.token)
 

@@ -8,8 +8,10 @@ package progress
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net"
 	"sync"
 	"time"
@@ -62,17 +64,37 @@ func NewMPVClient(address string) *MPVClient {
 }
 
 // GenerateIPCAddress creates a unique IPC address for MPV communication.
-// Returns a TCP address on localhost with a semi-random port based on PID.
+// Returns a TCP address on localhost with an available random port.
 // The port is in the range 19000-19999 to avoid conflicts with common services.
 func GenerateIPCAddress() string {
-	// Use PID to generate a semi-unique port in range 19000-19999
-	port := 19000 + (time.Now().UnixNano() % 1000)
-	return fmt.Sprintf("127.0.0.1:%d", port)
+	// Try up to 10 times to find an available port
+	for i := 0; i < 10; i++ {
+		port := 19000 + rand.Intn(1000)
+		addr := fmt.Sprintf("127.0.0.1:%d", port)
+
+		// Check if port is available by attempting to listen
+		listener, err := net.Listen("tcp", addr)
+		if err == nil {
+			listener.Close()
+			return addr
+		}
+	}
+
+	// Fallback: return a random port without checking (unlikely to reach here)
+	return fmt.Sprintf("127.0.0.1:%d", 19000+rand.Intn(1000))
 }
 
 // Connect establishes a connection to the MPV IPC server.
 // It retries with a short delay to allow MPV time to start the IPC server.
+// Use ConnectWithContext for cancellation support.
 func (c *MPVClient) Connect() error {
+	return c.ConnectWithContext(context.Background())
+}
+
+// ConnectWithContext establishes a connection to the MPV IPC server with context support.
+// It retries with a short delay to allow MPV time to start the IPC server.
+// The context can be used to cancel connection attempts (e.g., if MPV exits early).
+func (c *MPVClient) ConnectWithContext(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -83,6 +105,13 @@ func (c *MPVClient) Connect() error {
 	// Retry connection with backoff since MPV may take time to start IPC server
 	var lastErr error
 	for i := 0; i < maxConnectRetries; i++ {
+		// Check if context is cancelled (e.g., MPV exited)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		conn, err := net.Dial("tcp", c.address)
 		if err == nil {
 			c.conn = conn
@@ -90,7 +119,13 @@ func (c *MPVClient) Connect() error {
 			return nil
 		}
 		lastErr = err
-		time.Sleep(connectRetryDelay)
+
+		// Wait with context awareness
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(connectRetryDelay):
+		}
 	}
 
 	return fmt.Errorf("failed to connect to MPV IPC server after retries: %w", lastErr)
