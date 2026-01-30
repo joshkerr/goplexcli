@@ -26,13 +26,16 @@ const (
 
 // mpvCommand represents a command to send to MPV via JSON IPC.
 type mpvCommand struct {
-	Command []interface{} `json:"command"`
+	Command   []interface{} `json:"command"`
+	RequestID int           `json:"request_id,omitempty"`
 }
 
 // mpvResponse represents a response from MPV's JSON IPC.
 type mpvResponse struct {
-	Data  interface{} `json:"data"`
-	Error string      `json:"error"`
+	Data      interface{} `json:"data"`
+	Error     string      `json:"error"`
+	RequestID int         `json:"request_id,omitempty"`
+	Event     string      `json:"event,omitempty"` // For async events
 }
 
 // buildMPVCommand creates an mpvCommand with the given command and arguments.
@@ -52,6 +55,7 @@ type MPVClient struct {
 	conn       interface{ Read([]byte) (int, error); Write([]byte) (int, error); Close() error }
 	reader     *bufio.Reader
 	mu         sync.Mutex
+	requestID  int // Counter for request IDs to match responses
 }
 
 // NewMPVClient creates a new MPV IPC client for the given socket path.
@@ -148,6 +152,7 @@ func (c *MPVClient) IsConnected() bool {
 }
 
 // sendCommand sends a command to MPV and returns the response.
+// Uses request_id to match responses and ignore async events.
 func (c *MPVClient) sendCommand(cmd mpvCommand) (*mpvResponse, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -155,6 +160,10 @@ func (c *MPVClient) sendCommand(cmd mpvCommand) (*mpvResponse, error) {
 	if c.conn == nil {
 		return nil, fmt.Errorf("not connected to MPV")
 	}
+
+	// Assign a unique request ID
+	c.requestID++
+	cmd.RequestID = c.requestID
 
 	// Marshal the command to JSON
 	data, err := json.Marshal(cmd)
@@ -168,24 +177,39 @@ func (c *MPVClient) sendCommand(cmd mpvCommand) (*mpvResponse, error) {
 		return nil, fmt.Errorf("failed to send command: %w", err)
 	}
 
-	// Read the response
-	line, err := c.reader.ReadString('\n')
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+	// Read responses until we find one with our request_id
+	// This handles async events that MPV sends unsolicited
+	for i := 0; i < 10; i++ { // Max 10 attempts to find our response
+		line, err := c.reader.ReadString('\n')
+		if err != nil {
+			return nil, fmt.Errorf("failed to read response: %w", err)
+		}
+
+		// Parse the response
+		var resp mpvResponse
+		if err := json.Unmarshal([]byte(line), &resp); err != nil {
+			return nil, fmt.Errorf("failed to parse response: %w", err)
+		}
+
+		// Skip async events (they have "event" field but no matching request_id)
+		if resp.Event != "" {
+			continue
+		}
+
+		// Check if this is the response to our command
+		if resp.RequestID != cmd.RequestID {
+			continue // Not our response, keep reading
+		}
+
+		// Check for MPV errors
+		if resp.Error != "success" {
+			return &resp, fmt.Errorf("MPV error: %s", resp.Error)
+		}
+
+		return &resp, nil
 	}
 
-	// Parse the response
-	var resp mpvResponse
-	if err := json.Unmarshal([]byte(line), &resp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	// Check for MPV errors
-	if resp.Error != "success" {
-		return &resp, fmt.Errorf("MPV error: %s", resp.Error)
-	}
-
-	return &resp, nil
+	return nil, fmt.Errorf("no response received for request %d", cmd.RequestID)
 }
 
 // GetTimePos returns the current playback position in seconds.
