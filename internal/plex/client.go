@@ -41,24 +41,31 @@ type Client struct {
 }
 
 type MediaItem struct {
-	Key         string
-	Title       string
-	Year        int
-	Type        string // movie, show, season, episode
-	Summary     string
-	Rating      float64
-	Duration    int
-	FilePath    string
-	RclonePath  string
-	ParentTitle string // For episodes: show name
-	GrandTitle  string // For episodes: season name
-	Index       int64  // Episode or season number
-	ParentIndex int64  // Season number for episodes
-	Thumb       string // Poster/thumbnail URL path
-	ServerName  string // Name of the Plex server this item belongs to
-	ServerURL   string // URL of the Plex server this item belongs to
-	ViewOffset  int    // Playback position in milliseconds (0 if not started)
-	ViewCount   int    // Number of times fully watched
+	Key           string
+	Title         string
+	Year          int
+	Type          string // movie, show, season, episode
+	Summary       string
+	Rating        float64
+	Duration      int
+	FilePath      string
+	RclonePath    string
+	ParentTitle   string // For episodes: show name
+	GrandTitle    string // For episodes: season name
+	Index         int64  // Episode or season number
+	ParentIndex   int64  // Season number for episodes
+	Thumb         string // Poster/thumbnail URL path
+	ServerName    string // Name of the Plex server this item belongs to
+	ServerURL     string // URL of the Plex server this item belongs to
+	ViewOffset    int    // Playback position in milliseconds (0 if not started)
+	ViewCount     int    // Number of times fully watched
+	ContentRating string // e.g., "PG-13", "TV-MA"
+	Studio        string // Production studio
+	Director      string // Director name(s)
+	Genre         string // Genre(s), comma-separated
+	Cast          string // Cast members, comma-separated
+	AddedAt       int64  // Unix timestamp when added to library
+	OriginallyAired string // Original air date for episodes
 }
 
 // New creates a new Plex client
@@ -339,7 +346,20 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 				ParentIndex      *int     `json:"parentIndex"`
 				ViewOffset       *int     `json:"viewOffset"`
 				ViewCount        *int     `json:"viewCount"`
-				Media            []struct {
+				ContentRating    *string  `json:"contentRating"`
+				Studio           *string  `json:"studio"`
+				AddedAt          *int64   `json:"addedAt"`
+				OriginallyAvailableAt *string `json:"originallyAvailableAt"`
+				Director         []struct {
+					Tag string `json:"tag"`
+				} `json:"Director"`
+				Genre []struct {
+					Tag string `json:"tag"`
+				} `json:"Genre"`
+				Role []struct {
+					Tag string `json:"tag"`
+				} `json:"Role"`
+				Media []struct {
 					Part []struct {
 						File *string `json:"file"`
 					} `json:"Part"`
@@ -365,19 +385,47 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 				apiLogger.Printf("warning: movie item %s missing title field", metadata.Key)
 			}
 
+			// Extract director names
+			var directors []string
+			for _, d := range metadata.Director {
+				directors = append(directors, d.Tag)
+			}
+
+			// Extract genre names
+			var genres []string
+			for _, g := range metadata.Genre {
+				genres = append(genres, g.Tag)
+			}
+
+			// Extract cast names (limit to first 5)
+			var cast []string
+			for i, r := range metadata.Role {
+				if i >= 5 {
+					break
+				}
+				cast = append(cast, r.Tag)
+			}
+
 			item := MediaItem{
-				Key:        metadata.Key,
-				Title:      metadata.Title,
-				Year:       valueOrZeroInt(metadata.Year),
-				Type:       "movie",
-				Summary:    valueOrEmpty(metadata.Summary),
-				Rating:     float64(valueOrZeroFloat32(metadata.Rating)),
-				Duration:   valueOrZeroInt(metadata.Duration),
-				Thumb:      valueOrEmpty(metadata.Thumb),
-				ServerName: c.serverName,
-				ServerURL:  c.serverURL,
-				ViewOffset: valueOrZeroInt(metadata.ViewOffset),
-				ViewCount:  valueOrZeroInt(metadata.ViewCount),
+				Key:             metadata.Key,
+				Title:           metadata.Title,
+				Year:            valueOrZeroInt(metadata.Year),
+				Type:            "movie",
+				Summary:         valueOrEmpty(metadata.Summary),
+				Rating:          float64(valueOrZeroFloat32(metadata.Rating)),
+				Duration:        valueOrZeroInt(metadata.Duration),
+				Thumb:           valueOrEmpty(metadata.Thumb),
+				ServerName:      c.serverName,
+				ServerURL:       c.serverURL,
+				ViewOffset:      valueOrZeroInt(metadata.ViewOffset),
+				ViewCount:       valueOrZeroInt(metadata.ViewCount),
+				ContentRating:   valueOrEmpty(metadata.ContentRating),
+				Studio:          valueOrEmpty(metadata.Studio),
+				Director:        strings.Join(directors, ", "),
+				Genre:           strings.Join(genres, ", "),
+				Cast:            strings.Join(cast, ", "),
+				AddedAt:         valueOrZeroInt64(metadata.AddedAt),
+				OriginallyAired: valueOrEmpty(metadata.OriginallyAvailableAt),
 			}
 
 			// Get file path
@@ -402,23 +450,50 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 				apiLogger.Printf("warning: episode item %s missing title field", metadata.Key)
 			}
 
+			// Extract director names
+			var directors []string
+			for _, d := range metadata.Director {
+				directors = append(directors, d.Tag)
+			}
+
+			// Extract genre names
+			var genres []string
+			for _, g := range metadata.Genre {
+				genres = append(genres, g.Tag)
+			}
+
+			// Extract cast names (limit to first 5)
+			var cast []string
+			for i, r := range metadata.Role {
+				if i >= 5 {
+					break
+				}
+				cast = append(cast, r.Tag)
+			}
+
 			item := MediaItem{
-				Key:         metadata.Key,
-				Title:       metadata.Title,
-				Year:        valueOrZeroInt(metadata.Year),
-				Type:        "episode",
-				Summary:     valueOrEmpty(metadata.Summary),
-				Rating:      float64(valueOrZeroFloat32(metadata.Rating)),
-				Duration:    valueOrZeroInt(metadata.Duration),
-				Thumb:       valueOrEmpty(metadata.Thumb),
-				ParentTitle: valueOrEmpty(metadata.GrandparentTitle),
-				GrandTitle:  valueOrEmpty(metadata.ParentTitle),
-				Index:       int64(valueOrZeroInt(metadata.Index)),
-				ParentIndex: int64(valueOrZeroInt(metadata.ParentIndex)),
-				ServerName:  c.serverName,
-				ServerURL:   c.serverURL,
-				ViewOffset:  valueOrZeroInt(metadata.ViewOffset),
-				ViewCount:   valueOrZeroInt(metadata.ViewCount),
+				Key:             metadata.Key,
+				Title:           metadata.Title,
+				Year:            valueOrZeroInt(metadata.Year),
+				Type:            "episode",
+				Summary:         valueOrEmpty(metadata.Summary),
+				Rating:          float64(valueOrZeroFloat32(metadata.Rating)),
+				Duration:        valueOrZeroInt(metadata.Duration),
+				Thumb:           valueOrEmpty(metadata.Thumb),
+				ParentTitle:     valueOrEmpty(metadata.GrandparentTitle),
+				GrandTitle:      valueOrEmpty(metadata.ParentTitle),
+				Index:           int64(valueOrZeroInt(metadata.Index)),
+				ParentIndex:     int64(valueOrZeroInt(metadata.ParentIndex)),
+				ServerName:      c.serverName,
+				ServerURL:       c.serverURL,
+				ViewOffset:      valueOrZeroInt(metadata.ViewOffset),
+				ViewCount:       valueOrZeroInt(metadata.ViewCount),
+				ContentRating:   valueOrEmpty(metadata.ContentRating),
+				Director:        strings.Join(directors, ", "),
+				Genre:           strings.Join(genres, ", "),
+				Cast:            strings.Join(cast, ", "),
+				AddedAt:         valueOrZeroInt64(metadata.AddedAt),
+				OriginallyAired: valueOrEmpty(metadata.OriginallyAvailableAt),
 			}
 
 			// Get file path
@@ -751,6 +826,13 @@ func valueOrZeroInt(v *int) int {
 }
 
 func valueOrZeroFloat32(v *float32) float32 {
+	if v == nil {
+		return 0
+	}
+	return *v
+}
+
+func valueOrZeroInt64(v *int64) int64 {
 	if v == nil {
 		return 0
 	}
