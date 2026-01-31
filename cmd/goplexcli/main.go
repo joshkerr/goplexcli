@@ -2012,7 +2012,7 @@ func runSort(cmd *cobra.Command, args []string) error {
 				filteredMedia = append(filteredMedia, item)
 			}
 		}
-	case "shows", "tv", "episodes":
+	case "shows", "show", "tv", "episodes":
 		for _, item := range mediaCache.Media {
 			if item.Type == "episode" {
 				filteredMedia = append(filteredMedia, item)
