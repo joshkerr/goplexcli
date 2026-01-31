@@ -41,24 +41,31 @@ type Client struct {
 }
 
 type MediaItem struct {
-	Key         string
-	Title       string
-	Year        int
-	Type        string // movie, show, season, episode
-	Summary     string
-	Rating      float64
-	Duration    int
-	FilePath    string
-	RclonePath  string
-	ParentTitle string // For episodes: show name
-	GrandTitle  string // For episodes: season name
-	Index       int64  // Episode or season number
-	ParentIndex int64  // Season number for episodes
-	Thumb       string // Poster/thumbnail URL path
-	ServerName  string // Name of the Plex server this item belongs to
-	ServerURL   string // URL of the Plex server this item belongs to
-	ViewOffset  int    // Playback position in milliseconds (0 if not started)
-	ViewCount   int    // Number of times fully watched
+	Key           string
+	Title         string
+	Year          int
+	Type          string // movie, show, season, episode
+	Summary       string
+	Rating        float64
+	Duration      int
+	FilePath      string
+	RclonePath    string
+	ParentTitle   string // For episodes: show name
+	GrandTitle    string // For episodes: season name
+	Index         int64  // Episode or season number
+	ParentIndex   int64  // Season number for episodes
+	Thumb         string // Poster/thumbnail URL path
+	ServerName    string // Name of the Plex server this item belongs to
+	ServerURL     string // URL of the Plex server this item belongs to
+	ViewOffset    int    // Playback position in milliseconds (0 if not started)
+	ViewCount     int    // Number of times fully watched
+	ContentRating string // e.g., "PG-13", "TV-MA"
+	Studio        string // Production studio
+	Director      string // Director name(s)
+	Genre         string // Genre(s), comma-separated
+	Cast          string // Cast members, comma-separated
+	AddedAt       int64  // Unix timestamp when added to library
+	OriginallyAired string // Original air date for episodes
 }
 
 // New creates a new Plex client
@@ -339,7 +346,14 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 				ParentIndex      *int     `json:"parentIndex"`
 				ViewOffset       *int     `json:"viewOffset"`
 				ViewCount        *int     `json:"viewCount"`
-				Media            []struct {
+				ContentRating    *string  `json:"contentRating"`
+				Studio           *string  `json:"studio"`
+				AddedAt          *int64   `json:"addedAt"`
+				OriginallyAvailableAt *string `json:"originallyAvailableAt"`
+				Director []taggedItem `json:"Director"`
+				Genre    []taggedItem `json:"Genre"`
+				Role     []taggedItem `json:"Role"`
+				Media []struct {
 					Part []struct {
 						File *string `json:"file"`
 					} `json:"Part"`
@@ -366,18 +380,25 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 			}
 
 			item := MediaItem{
-				Key:        metadata.Key,
-				Title:      metadata.Title,
-				Year:       valueOrZeroInt(metadata.Year),
-				Type:       "movie",
-				Summary:    valueOrEmpty(metadata.Summary),
-				Rating:     float64(valueOrZeroFloat32(metadata.Rating)),
-				Duration:   valueOrZeroInt(metadata.Duration),
-				Thumb:      valueOrEmpty(metadata.Thumb),
-				ServerName: c.serverName,
-				ServerURL:  c.serverURL,
-				ViewOffset: valueOrZeroInt(metadata.ViewOffset),
-				ViewCount:  valueOrZeroInt(metadata.ViewCount),
+				Key:             metadata.Key,
+				Title:           metadata.Title,
+				Year:            valueOrZeroInt(metadata.Year),
+				Type:            "movie",
+				Summary:         valueOrEmpty(metadata.Summary),
+				Rating:          float64(valueOrZeroFloat32(metadata.Rating)),
+				Duration:        valueOrZeroInt(metadata.Duration),
+				Thumb:           valueOrEmpty(metadata.Thumb),
+				ServerName:      c.serverName,
+				ServerURL:       c.serverURL,
+				ViewOffset:      valueOrZeroInt(metadata.ViewOffset),
+				ViewCount:       valueOrZeroInt(metadata.ViewCount),
+				ContentRating:   valueOrEmpty(metadata.ContentRating),
+				Studio:          valueOrEmpty(metadata.Studio),
+				Director:        strings.Join(extractTags(metadata.Director, 0), ", "),
+				Genre:           strings.Join(extractTags(metadata.Genre, 0), ", "),
+				Cast:            strings.Join(extractTags(metadata.Role, 5), ", "),
+				AddedAt:         valueOrZeroInt64(metadata.AddedAt),
+				OriginallyAired: valueOrEmpty(metadata.OriginallyAvailableAt),
 			}
 
 			// Get file path
@@ -403,22 +424,29 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 			}
 
 			item := MediaItem{
-				Key:         metadata.Key,
-				Title:       metadata.Title,
-				Year:        valueOrZeroInt(metadata.Year),
-				Type:        "episode",
-				Summary:     valueOrEmpty(metadata.Summary),
-				Rating:      float64(valueOrZeroFloat32(metadata.Rating)),
-				Duration:    valueOrZeroInt(metadata.Duration),
-				Thumb:       valueOrEmpty(metadata.Thumb),
-				ParentTitle: valueOrEmpty(metadata.GrandparentTitle),
-				GrandTitle:  valueOrEmpty(metadata.ParentTitle),
-				Index:       int64(valueOrZeroInt(metadata.Index)),
-				ParentIndex: int64(valueOrZeroInt(metadata.ParentIndex)),
-				ServerName:  c.serverName,
-				ServerURL:   c.serverURL,
-				ViewOffset:  valueOrZeroInt(metadata.ViewOffset),
-				ViewCount:   valueOrZeroInt(metadata.ViewCount),
+				Key:             metadata.Key,
+				Title:           metadata.Title,
+				Year:            valueOrZeroInt(metadata.Year),
+				Type:            "episode",
+				Summary:         valueOrEmpty(metadata.Summary),
+				Rating:          float64(valueOrZeroFloat32(metadata.Rating)),
+				Duration:        valueOrZeroInt(metadata.Duration),
+				Thumb:           valueOrEmpty(metadata.Thumb),
+				ParentTitle:     valueOrEmpty(metadata.GrandparentTitle),
+				GrandTitle:      valueOrEmpty(metadata.ParentTitle),
+				Index:           int64(valueOrZeroInt(metadata.Index)),
+				ParentIndex:     int64(valueOrZeroInt(metadata.ParentIndex)),
+				ServerName:      c.serverName,
+				ServerURL:       c.serverURL,
+				ViewOffset:      valueOrZeroInt(metadata.ViewOffset),
+				ViewCount:       valueOrZeroInt(metadata.ViewCount),
+				ContentRating:   valueOrEmpty(metadata.ContentRating),
+				Studio:          valueOrEmpty(metadata.Studio),
+				Director:        strings.Join(extractTags(metadata.Director, 0), ", "),
+				Genre:           strings.Join(extractTags(metadata.Genre, 0), ", "),
+				Cast:            strings.Join(extractTags(metadata.Role, 5), ", "),
+				AddedAt:         valueOrZeroInt64(metadata.AddedAt),
+				OriginallyAired: valueOrEmpty(metadata.OriginallyAvailableAt),
 			}
 
 			// Get file path
@@ -735,6 +763,23 @@ func Authenticate(username, password string) (string, []Server, error) {
 	return token, servers, nil
 }
 
+// taggedItem represents an item with a Tag field (used for Director, Genre, Role)
+type taggedItem struct {
+	Tag string `json:"tag"`
+}
+
+// extractTags extracts tag values from a slice of tagged items
+func extractTags(items []taggedItem, limit int) []string {
+	var tags []string
+	for i, item := range items {
+		if limit > 0 && i >= limit {
+			break
+		}
+		tags = append(tags, item.Tag)
+	}
+	return tags
+}
+
 // Helper functions for handling pointer types
 func valueOrEmpty(s *string) string {
 	if s == nil {
@@ -751,6 +796,13 @@ func valueOrZeroInt(v *int) int {
 }
 
 func valueOrZeroFloat32(v *float32) float32 {
+	if v == nil {
+		return 0
+	}
+	return *v
+}
+
+func valueOrZeroInt64(v *int64) int64 {
 	if v == nil {
 		return 0
 	}
