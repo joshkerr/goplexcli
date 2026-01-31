@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -34,6 +35,15 @@ var version = "dev"
 
 // dryRun when true shows what would be downloaded without actually downloading
 var dryRun bool
+
+// sort command flags
+var (
+	sortDesc        bool
+	sortAsc         bool
+	sortLimit       int
+	sortType        string
+	sortInteractive bool
+)
 
 var (
 	// Refined color palette for cohesive UI
@@ -154,6 +164,33 @@ func main() {
 
 	serverCmd.AddCommand(serverListCmd, serverEnableCmd, serverDisableCmd)
 
+	// Sort command
+	sortCmd := &cobra.Command{
+		Use:   "sort [field]",
+		Short: "Sort and display media from cache",
+		Long: `Sort and display media from your cache by various fields.
+
+Available sort fields:
+  name      Sort alphabetically by title
+  added     Sort by date added to library
+  year      Sort by release year
+  rating    Sort by Plex rating
+  duration  Sort by media length
+
+Examples:
+  goplexcli sort added --desc --limit 20    # Last 20 added items
+  goplexcli sort name --asc                 # A-Z by title
+  goplexcli sort rating --desc --limit 10   # Top 10 rated
+  goplexcli sort year --desc                # Newest releases first`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: runSort,
+	}
+	sortCmd.Flags().BoolVar(&sortDesc, "desc", false, "Sort descending (default for numeric fields)")
+	sortCmd.Flags().BoolVar(&sortAsc, "asc", false, "Sort ascending (default for name)")
+	sortCmd.Flags().IntVar(&sortLimit, "limit", 20, "Maximum number of items to display")
+	sortCmd.Flags().StringVar(&sortType, "type", "all", "Filter by media type: movies, shows, all")
+	sortCmd.Flags().BoolVarP(&sortInteractive, "interactive", "i", false, "Open results in interactive browser")
+
 	// Version command
 	versionCmd := &cobra.Command{
 		Use:   "version",
@@ -163,7 +200,7 @@ func main() {
 		},
 	}
 
-	rootCmd.AddCommand(loginCmd, browseCmd, cacheCmd, configCmd, streamCmd, serverCmd, versionCmd)
+	rootCmd.AddCommand(loginCmd, browseCmd, cacheCmd, configCmd, streamCmd, serverCmd, sortCmd, versionCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(errorStyle.Render("Error: " + err.Error()))
@@ -1919,4 +1956,283 @@ func runServerDisable(cmd *cobra.Command, args []string) error {
 	fmt.Println(warningStyle.Render("Note: Cached items from this server will remain until next reindex"))
 
 	return nil
+}
+
+func runSort(cmd *cobra.Command, args []string) error {
+	// Default sort field is "added"
+	sortField := "added"
+	if len(args) > 0 {
+		sortField = strings.ToLower(args[0])
+	}
+
+	// Validate sort field
+	validFields := map[string]bool{
+		"name":     true,
+		"added":    true,
+		"year":     true,
+		"rating":   true,
+		"duration": true,
+	}
+	if !validFields[sortField] {
+		return fmt.Errorf("invalid sort field '%s'. Valid fields: name, added, year, rating, duration", sortField)
+	}
+
+	// Determine sort direction
+	// Default: ascending for name, descending for everything else
+	ascending := sortField == "name"
+	if sortAsc {
+		ascending = true
+	}
+	if sortDesc {
+		ascending = false
+	}
+
+	// Validate limit
+	if sortLimit < 1 {
+		sortLimit = 20
+	}
+
+	// Load cache
+	mediaCache, err := cache.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load cache: %w", err)
+	}
+
+	if len(mediaCache.Media) == 0 {
+		fmt.Println(warningStyle.Render("Cache is empty. Run 'goplexcli cache reindex' first."))
+		return nil
+	}
+
+	// Filter by type
+	var filteredMedia []plex.MediaItem
+	switch strings.ToLower(sortType) {
+	case "movies", "movie":
+		for _, item := range mediaCache.Media {
+			if item.Type == "movie" {
+				filteredMedia = append(filteredMedia, item)
+			}
+		}
+	case "shows", "tv", "episodes":
+		for _, item := range mediaCache.Media {
+			if item.Type == "episode" {
+				filteredMedia = append(filteredMedia, item)
+			}
+		}
+	default:
+		filteredMedia = mediaCache.Media
+	}
+
+	if len(filteredMedia) == 0 {
+		fmt.Println(warningStyle.Render("No media found matching the filter."))
+		return nil
+	}
+
+	// Sort the media
+	sort.Slice(filteredMedia, func(i, j int) bool {
+		var less bool
+		switch sortField {
+		case "name":
+			less = strings.ToLower(filteredMedia[i].Title) < strings.ToLower(filteredMedia[j].Title)
+		case "added":
+			less = filteredMedia[i].AddedAt < filteredMedia[j].AddedAt
+		case "year":
+			less = filteredMedia[i].Year < filteredMedia[j].Year
+		case "rating":
+			less = filteredMedia[i].Rating < filteredMedia[j].Rating
+		case "duration":
+			less = filteredMedia[i].Duration < filteredMedia[j].Duration
+		default:
+			less = filteredMedia[i].AddedAt < filteredMedia[j].AddedAt
+		}
+		if ascending {
+			return less
+		}
+		return !less
+	})
+
+	// Save total count before applying limit
+	totalFiltered := len(filteredMedia)
+
+	// Apply limit
+	if sortLimit > 0 && sortLimit < len(filteredMedia) {
+		filteredMedia = filteredMedia[:sortLimit]
+	}
+
+	// If interactive mode, feed into the browse flow
+	if sortInteractive {
+		cfg, err := config.Load()
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		selectedMediaItems, cancelled, err := selectMediaFlat(filteredMedia, cfg, "Select media (TAB for multi-select):")
+		if err != nil {
+			return err
+		}
+		if cancelled {
+			return nil
+		}
+
+		if len(selectedMediaItems) == 0 {
+			return nil
+		}
+
+		// Load queue for action prompt
+		q, err := queue.Load()
+		if err != nil {
+			return fmt.Errorf("failed to load queue: %w", err)
+		}
+
+		// Ask what to do
+		var action string
+		if ui.IsAvailable(cfg.FzfPath) {
+			action, err = ui.PromptActionWithQueue(cfg.FzfPath, q.Len())
+			if err != nil {
+				if errors.Is(err, apperrors.ErrCancelled) {
+					return nil
+				}
+				return err
+			}
+		} else {
+			action, err = promptActionManualWithQueue(q.Len())
+			if err != nil {
+				return err
+			}
+		}
+
+		switch action {
+		case "watch":
+			return handleWatchMultiple(cfg, selectedMediaItems)
+		case "download":
+			return handleDownloadMultiple(cfg, selectedMediaItems)
+		case "senplayer play":
+			return handleSenPlayer(cfg, selectedMediaItems, "play")
+		case "senplayer download":
+			return handleSenPlayer(cfg, selectedMediaItems, "download")
+		case "queue":
+			added := q.Add(selectedMediaItems)
+			if err := q.Save(); err != nil {
+				return fmt.Errorf("failed to save queue: %w", err)
+			}
+			skipped := len(selectedMediaItems) - added
+			if skipped > 0 {
+				fmt.Println(successStyle.Render(fmt.Sprintf("Added %d item(s) to queue (%d duplicate(s) skipped). Queue now has %s.", added, skipped, ui.PluralizeItems(q.Len()))))
+			} else {
+				fmt.Println(successStyle.Render(fmt.Sprintf("Added %d item(s) to queue. Queue now has %s.", added, ui.PluralizeItems(q.Len()))))
+			}
+			return nil
+		case "stream":
+			if len(selectedMediaItems) > 1 {
+				fmt.Println(warningStyle.Render("Note: Stream only supports single selection, using first item"))
+			}
+			return handleStream(cfg, selectedMediaItems[0])
+		default:
+			return nil
+		}
+	}
+
+	// Non-interactive: display the sorted list
+	directionLabel := "descending"
+	if ascending {
+		directionLabel = "ascending"
+	}
+
+	fmt.Println(titleStyle.Render(fmt.Sprintf("Sorted by %s (%s)", sortField, directionLabel)))
+	fmt.Println(infoStyle.Render(fmt.Sprintf("Showing %d of %d items\n", len(filteredMedia), totalFiltered)))
+
+	// Display results
+	for i, item := range filteredMedia {
+		// Format the sort field value for display
+		var fieldValue string
+		switch sortField {
+		case "name":
+			fieldValue = ""
+		case "added":
+			if item.AddedAt > 0 {
+				addedTime := time.Unix(item.AddedAt, 0)
+				fieldValue = formatTimeAgo(addedTime)
+			} else {
+				fieldValue = "Unknown"
+			}
+		case "year":
+			if item.Year > 0 {
+				fieldValue = fmt.Sprintf("%d", item.Year)
+			} else {
+				fieldValue = "N/A"
+			}
+		case "rating":
+			if item.Rating > 0 {
+				fieldValue = fmt.Sprintf("%.1f", item.Rating)
+			} else {
+				fieldValue = "N/A"
+			}
+		case "duration":
+			if item.Duration > 0 {
+				mins := item.Duration / 60000
+				fieldValue = fmt.Sprintf("%d min", mins)
+			} else {
+				fieldValue = "N/A"
+			}
+		}
+
+		// Build the output line
+		numStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")).Width(4)
+		titleStr := item.FormatMediaTitle()
+
+		if fieldValue != "" {
+			fieldStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#60A5FA"))
+			fmt.Printf("%s %s  %s\n", numStyle.Render(fmt.Sprintf("%d.", i+1)), titleStr, fieldStyle.Render(fieldValue))
+		} else {
+			fmt.Printf("%s %s\n", numStyle.Render(fmt.Sprintf("%d.", i+1)), titleStr)
+		}
+	}
+
+	return nil
+}
+
+// formatTimeAgo returns a human-readable relative time string
+func formatTimeAgo(t time.Time) string {
+	now := time.Now()
+	diff := now.Sub(t)
+
+	switch {
+	case diff < time.Minute:
+		return "Just now"
+	case diff < time.Hour:
+		mins := int(diff.Minutes())
+		if mins == 1 {
+			return "1 minute ago"
+		}
+		return fmt.Sprintf("%d minutes ago", mins)
+	case diff < 24*time.Hour:
+		hours := int(diff.Hours())
+		if hours == 1 {
+			return "1 hour ago"
+		}
+		return fmt.Sprintf("%d hours ago", hours)
+	case diff < 7*24*time.Hour:
+		days := int(diff.Hours() / 24)
+		if days == 1 {
+			return "1 day ago"
+		}
+		return fmt.Sprintf("%d days ago", days)
+	case diff < 30*24*time.Hour:
+		weeks := int(diff.Hours() / 24 / 7)
+		if weeks == 1 {
+			return "1 week ago"
+		}
+		return fmt.Sprintf("%d weeks ago", weeks)
+	case diff < 365*24*time.Hour:
+		months := int(diff.Hours() / 24 / 30)
+		if months == 1 {
+			return "1 month ago"
+		}
+		return fmt.Sprintf("%d months ago", months)
+	default:
+		years := int(diff.Hours() / 24 / 365)
+		if years == 1 {
+			return "1 year ago"
+		}
+		return fmt.Sprintf("%d years ago", years)
+	}
 }
