@@ -125,7 +125,7 @@ func SelectMediaWithPreview(media []plex.MediaItem, prompt string, fzfPath strin
 		"--with-nth=2..",
 		"--prompt=" + prompt + " ",
 		"--preview=" + previewScript + " {1}",
-		"--preview-window=right:50%:wrap:hidden",
+		"--preview-window=right:50%:wrap",
 		"--bind=ctrl-p:toggle-preview",
 		"--bind=ctrl-/:toggle-preview",
 	}

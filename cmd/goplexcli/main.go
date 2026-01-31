@@ -964,20 +964,22 @@ func handleSenPlayer(cfg *config.Config, mediaItems []*plex.MediaItem, mode stri
 		return fmt.Errorf("failed to get stream URL: %w", err)
 	}
 
+	// Build filename from media title
+	filename := media.Title
+	if media.Year > 0 {
+		filename = fmt.Sprintf("%s (%d)", media.Title, media.Year)
+	}
+	filename += ".mkv"
+
 	var senplayerURL string
 	if mode == "download" {
-		// Download format: SenPlayer://x-callback-url/download?url=<url>
-		senplayerURL = fmt.Sprintf("SenPlayer://x-callback-url/download?url=%s",
+		// Download format: SenPlayer://x-callback-url/download?url=<url>&name=<filename>
+		senplayerURL = fmt.Sprintf("SenPlayer://x-callback-url/download?url=%s&name=%s",
 			url.QueryEscape(streamURL),
+			url.QueryEscape(filename),
 		)
 	} else {
 		// Play format: SenPlayer://x-callback-url/play?url=<url>&name=<filename>&User-Agent=<ua>
-		filename := media.Title
-		if media.Year > 0 {
-			filename = fmt.Sprintf("%s (%d)", media.Title, media.Year)
-		}
-		filename += ".mkv"
-
 		senplayerURL = fmt.Sprintf("SenPlayer://x-callback-url/play?url=%s&name=%s&User-Agent=%s",
 			url.QueryEscape(streamURL),
 			url.QueryEscape(filename),
