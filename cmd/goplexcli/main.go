@@ -2019,7 +2019,7 @@ func runSort(cmd *cobra.Command, args []string) error {
 			}
 		}
 	default:
-		filteredMedia = mediaCache.Media
+		filteredMedia = append(filteredMedia, mediaCache.Media...)
 	}
 
 	if len(filteredMedia) == 0 {
@@ -2063,6 +2063,10 @@ func runSort(cmd *cobra.Command, args []string) error {
 		cfg, err := config.Load()
 		if err != nil {
 			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		if err := cfg.Validate(); err != nil {
+			return fmt.Errorf("invalid config: %w. Please run 'goplexcli login' first", err)
 		}
 
 		selectedMediaItems, cancelled, err := selectMediaFlat(filteredMedia, cfg, "Select media (TAB for multi-select):")
