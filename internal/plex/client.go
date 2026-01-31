@@ -350,15 +350,9 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 				Studio           *string  `json:"studio"`
 				AddedAt          *int64   `json:"addedAt"`
 				OriginallyAvailableAt *string `json:"originallyAvailableAt"`
-				Director         []struct {
-					Tag string `json:"tag"`
-				} `json:"Director"`
-				Genre []struct {
-					Tag string `json:"tag"`
-				} `json:"Genre"`
-				Role []struct {
-					Tag string `json:"tag"`
-				} `json:"Role"`
+				Director []taggedItem `json:"Director"`
+				Genre    []taggedItem `json:"Genre"`
+				Role     []taggedItem `json:"Role"`
 				Media []struct {
 					Part []struct {
 						File *string `json:"file"`
@@ -385,27 +379,6 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 				apiLogger.Printf("warning: movie item %s missing title field", metadata.Key)
 			}
 
-			// Extract director names
-			var directors []string
-			for _, d := range metadata.Director {
-				directors = append(directors, d.Tag)
-			}
-
-			// Extract genre names
-			var genres []string
-			for _, g := range metadata.Genre {
-				genres = append(genres, g.Tag)
-			}
-
-			// Extract cast names (limit to first 5)
-			var cast []string
-			for i, r := range metadata.Role {
-				if i >= 5 {
-					break
-				}
-				cast = append(cast, r.Tag)
-			}
-
 			item := MediaItem{
 				Key:             metadata.Key,
 				Title:           metadata.Title,
@@ -421,9 +394,9 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 				ViewCount:       valueOrZeroInt(metadata.ViewCount),
 				ContentRating:   valueOrEmpty(metadata.ContentRating),
 				Studio:          valueOrEmpty(metadata.Studio),
-				Director:        strings.Join(directors, ", "),
-				Genre:           strings.Join(genres, ", "),
-				Cast:            strings.Join(cast, ", "),
+				Director:        strings.Join(extractTags(metadata.Director, 0), ", "),
+				Genre:           strings.Join(extractTags(metadata.Genre, 0), ", "),
+				Cast:            strings.Join(extractTags(metadata.Role, 5), ", "),
 				AddedAt:         valueOrZeroInt64(metadata.AddedAt),
 				OriginallyAired: valueOrEmpty(metadata.OriginallyAvailableAt),
 			}
@@ -450,27 +423,6 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 				apiLogger.Printf("warning: episode item %s missing title field", metadata.Key)
 			}
 
-			// Extract director names
-			var directors []string
-			for _, d := range metadata.Director {
-				directors = append(directors, d.Tag)
-			}
-
-			// Extract genre names
-			var genres []string
-			for _, g := range metadata.Genre {
-				genres = append(genres, g.Tag)
-			}
-
-			// Extract cast names (limit to first 5)
-			var cast []string
-			for i, r := range metadata.Role {
-				if i >= 5 {
-					break
-				}
-				cast = append(cast, r.Tag)
-			}
-
 			item := MediaItem{
 				Key:             metadata.Key,
 				Title:           metadata.Title,
@@ -489,9 +441,10 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 				ViewOffset:      valueOrZeroInt(metadata.ViewOffset),
 				ViewCount:       valueOrZeroInt(metadata.ViewCount),
 				ContentRating:   valueOrEmpty(metadata.ContentRating),
-				Director:        strings.Join(directors, ", "),
-				Genre:           strings.Join(genres, ", "),
-				Cast:            strings.Join(cast, ", "),
+				Studio:          valueOrEmpty(metadata.Studio),
+				Director:        strings.Join(extractTags(metadata.Director, 0), ", "),
+				Genre:           strings.Join(extractTags(metadata.Genre, 0), ", "),
+				Cast:            strings.Join(extractTags(metadata.Role, 5), ", "),
 				AddedAt:         valueOrZeroInt64(metadata.AddedAt),
 				OriginallyAired: valueOrEmpty(metadata.OriginallyAvailableAt),
 			}
@@ -808,6 +761,23 @@ func Authenticate(username, password string) (string, []Server, error) {
 	}
 
 	return token, servers, nil
+}
+
+// taggedItem represents an item with a Tag field (used for Director, Genre, Role)
+type taggedItem struct {
+	Tag string `json:"tag"`
+}
+
+// extractTags extracts tag values from a slice of tagged items
+func extractTags(items []taggedItem, limit int) []string {
+	var tags []string
+	for i, item := range items {
+		if limit > 0 && i >= limit {
+			break
+		}
+		tags = append(tags, item.Tag)
+	}
+	return tags
 }
 
 // Helper functions for handling pointer types
