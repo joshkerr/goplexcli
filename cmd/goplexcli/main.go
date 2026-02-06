@@ -2029,25 +2029,50 @@ func runSort(cmd *cobra.Command, args []string) error {
 
 	// Sort the media
 	sort.Slice(filteredMedia, func(i, j int) bool {
-		var less bool
 		switch sortField {
 		case "name":
-			less = strings.ToLower(filteredMedia[i].Title) < strings.ToLower(filteredMedia[j].Title)
+			left := strings.ToLower(filteredMedia[i].Title)
+			right := strings.ToLower(filteredMedia[j].Title)
+			if ascending {
+				return left < right
+			}
+			return left > right
 		case "added":
-			less = filteredMedia[i].AddedAt < filteredMedia[j].AddedAt
+			left := filteredMedia[i].AddedAt
+			right := filteredMedia[j].AddedAt
+			if ascending {
+				return left < right
+			}
+			return left > right
 		case "year":
-			less = filteredMedia[i].Year < filteredMedia[j].Year
+			left := filteredMedia[i].Year
+			right := filteredMedia[j].Year
+			if ascending {
+				return left < right
+			}
+			return left > right
 		case "rating":
-			less = filteredMedia[i].Rating < filteredMedia[j].Rating
+			left := filteredMedia[i].Rating
+			right := filteredMedia[j].Rating
+			if ascending {
+				return left < right
+			}
+			return left > right
 		case "duration":
-			less = filteredMedia[i].Duration < filteredMedia[j].Duration
+			left := filteredMedia[i].Duration
+			right := filteredMedia[j].Duration
+			if ascending {
+				return left < right
+			}
+			return left > right
 		default:
-			less = filteredMedia[i].AddedAt < filteredMedia[j].AddedAt
+			left := filteredMedia[i].AddedAt
+			right := filteredMedia[j].AddedAt
+			if ascending {
+				return left < right
+			}
+			return left > right
 		}
-		if ascending {
-			return less
-		}
-		return !less
 	})
 
 	// Save total count before applying limit
