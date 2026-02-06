@@ -692,6 +692,8 @@ browseLoop:
 			}
 			return err
 		}
+		// Action completed successfully, exit browse loop
+		return nil
 	}
 }
 
