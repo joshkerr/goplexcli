@@ -1049,10 +1049,10 @@ func handleStream(cfg *config.Config, media *plex.MediaItem) error {
 	playerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#C084FC")).Bold(true).Width(12)
 	linkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#60A5FA")).Underline(true)
 
-	fmt.Printf("  %s %s\n", playerStyle.Render("Infuse"), linkStyle.Render(fmt.Sprintf("infuse://x-callback-url/play?url=%s", encodedURL)))
-	fmt.Printf("  %s %s\n", playerStyle.Render("OutPlayer"), linkStyle.Render(fmt.Sprintf("outplayer://x-callback-url/play?url=%s", encodedURL)))
-	fmt.Printf("  %s %s\n", playerStyle.Render("SenPlayer"), linkStyle.Render(fmt.Sprintf("senplayer://x-callback-url/play?url=%s", encodedURL)))
-	fmt.Printf("  %s %s\n", playerStyle.Render("VLC"), linkStyle.Render(fmt.Sprintf("vlc://%s", encodedURL)))
+	fmt.Printf("  %s %s\n\n", playerStyle.Render("Infuse"), linkStyle.Render(fmt.Sprintf("infuse://x-callback-url/play?url=%s", encodedURL)))
+	fmt.Printf("  %s %s\n\n", playerStyle.Render("OutPlayer"), linkStyle.Render(fmt.Sprintf("outplayer://x-callback-url/play?url=%s", encodedURL)))
+	fmt.Printf("  %s %s\n\n", playerStyle.Render("SenPlayer"), linkStyle.Render(fmt.Sprintf("senplayer://x-callback-url/play?url=%s", encodedURL)))
+	fmt.Printf("  %s %s\n\n", playerStyle.Render("VLC"), linkStyle.Render(fmt.Sprintf("vlc://%s", encodedURL)))
 	fmt.Printf("  %s %s\n", playerStyle.Render("VidHub"), linkStyle.Render(fmt.Sprintf("open-vidhub://x-callback-url/open?url=%s", encodedURL)))
 
 	fmt.Println()
