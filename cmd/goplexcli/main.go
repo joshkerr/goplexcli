@@ -683,54 +683,72 @@ browseLoop:
 			return fmt.Errorf("no media selected")
 		}
 
-		// Ask what to do
-		var action string
-		if ui.IsAvailable(cfg.FzfPath) {
-			action, err = ui.PromptActionWithQueue(cfg.FzfPath, q.Len())
-			if err != nil {
-				if errors.Is(err, apperrors.ErrCancelled) {
-					return nil
-				}
-				return err
+		// Handle user action
+		err = handleMediaAction(cfg, q, selectedMediaItems)
+		if err != nil {
+			if errors.Is(err, errAddedToQueue) {
+				// Items were added to queue, continue browsing
+				continue browseLoop
 			}
-		} else {
-			action, err = promptActionManualWithQueue(q.Len())
-			if err != nil {
-				return err
-			}
+			return err
 		}
+	}
+}
 
-		switch action {
-		case "watch":
-			return handleWatchMultiple(cfg, selectedMediaItems)
-		case "download":
-			return handleDownloadMultiple(cfg, selectedMediaItems)
-		case "senplayer play":
-			return handleSenPlayer(cfg, selectedMediaItems, "play")
-		case "senplayer download":
-			return handleSenPlayer(cfg, selectedMediaItems, "download")
-		case "queue":
-			added := q.Add(selectedMediaItems)
-			if err := q.Save(); err != nil {
-				return fmt.Errorf("failed to save queue: %w", err)
+// errAddedToQueue is a sentinel error to signal that items were added to the queue
+var errAddedToQueue = errors.New("items added to queue")
+
+// handleMediaAction prompts the user for an action and dispatches to the appropriate handler.
+// Returns errAddedToQueue if items were added to the queue (caller decides whether to continue or return).
+// Returns nil for actions that complete successfully.
+// Returns other errors for failures.
+func handleMediaAction(cfg *config.Config, q *queue.Queue, selectedMediaItems []*plex.MediaItem) error {
+	// Ask what to do
+	var action string
+	var err error
+	if ui.IsAvailable(cfg.FzfPath) {
+		action, err = ui.PromptActionWithQueue(cfg.FzfPath, q.Len())
+		if err != nil {
+			if errors.Is(err, apperrors.ErrCancelled) {
+				return nil
 			}
-			skipped := len(selectedMediaItems) - added
-			if skipped > 0 {
-				fmt.Println(successStyle.Render(fmt.Sprintf("Added %d item(s) to queue (%d duplicate(s) skipped). Queue now has %s.", added, skipped, ui.PluralizeItems(q.Len()))))
-			} else {
-				fmt.Println(successStyle.Render(fmt.Sprintf("Added %d item(s) to queue. Queue now has %s.", added, ui.PluralizeItems(q.Len()))))
-			}
-			continue browseLoop
-		case "stream":
-			if len(selectedMediaItems) > 1 {
-				fmt.Println(warningStyle.Render("Note: Stream only supports single selection, using first item"))
-			}
-			return handleStream(cfg, selectedMediaItems[0])
-		case "cancel":
-			return nil
-		default:
-			return nil
+			return err
 		}
+	} else {
+		action, err = promptActionManualWithQueue(q.Len())
+		if err != nil {
+			return err
+		}
+	}
+
+	switch action {
+	case "watch":
+		return handleWatchMultiple(cfg, selectedMediaItems)
+	case "download":
+		return handleDownloadMultiple(cfg, selectedMediaItems)
+	case "senplayer play":
+		return handleSenPlayer(cfg, selectedMediaItems, "play")
+	case "senplayer download":
+		return handleSenPlayer(cfg, selectedMediaItems, "download")
+	case "queue":
+		added := q.Add(selectedMediaItems)
+		if err := q.Save(); err != nil {
+			return fmt.Errorf("failed to save queue: %w", err)
+		}
+		skipped := len(selectedMediaItems) - added
+		if skipped > 0 {
+			fmt.Println(successStyle.Render(fmt.Sprintf("Added %d item(s) to queue (%d duplicate(s) skipped). Queue now has %s.", added, skipped, ui.PluralizeItems(q.Len()))))
+		} else {
+			fmt.Println(successStyle.Render(fmt.Sprintf("Added %d item(s) to queue. Queue now has %s.", added, ui.PluralizeItems(q.Len()))))
+		}
+		return errAddedToQueue
+	case "stream":
+		if len(selectedMediaItems) > 1 {
+			fmt.Println(warningStyle.Render("Note: Stream only supports single selection, using first item"))
+		}
+		return handleStream(cfg, selectedMediaItems[0])
+	default:
+		return nil
 	}
 }
 
@@ -1977,6 +1995,21 @@ func runSort(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid sort field '%s'. Valid fields: name, added, year, rating, duration", sortField)
 	}
 
+	// Validate type filter
+	normalizedType := strings.ToLower(sortType)
+	validTypes := map[string]bool{
+		"all":      true,
+		"movies":   true,
+		"movie":    true,
+		"shows":    true,
+		"show":     true,
+		"tv":       true,
+		"episodes": true,
+	}
+	if !validTypes[normalizedType] {
+		return fmt.Errorf("invalid type '%s'. Valid types: movies, shows, all", sortType)
+	}
+
 	// Determine sort direction
 	// Default: ascending for name, descending for everything else
 	ascending := sortField == "name"
@@ -2003,9 +2036,9 @@ func runSort(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Filter by type
+	// Filter by type (using already normalized type)
 	var filteredMedia []plex.MediaItem
-	switch strings.ToLower(sortType) {
+	switch normalizedType {
 	case "movies", "movie":
 		for _, item := range mediaCache.Media {
 			if item.Type == "movie" {
@@ -2018,7 +2051,7 @@ func runSort(cmd *cobra.Command, args []string) error {
 				filteredMedia = append(filteredMedia, item)
 			}
 		}
-	default:
+	default: // "all"
 		filteredMedia = append(filteredMedia, mediaCache.Media...)
 	}
 
@@ -2112,52 +2145,16 @@ func runSort(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("failed to load queue: %w", err)
 		}
 
-		// Ask what to do
-		var action string
-		if ui.IsAvailable(cfg.FzfPath) {
-			action, err = ui.PromptActionWithQueue(cfg.FzfPath, q.Len())
-			if err != nil {
-				if errors.Is(err, apperrors.ErrCancelled) {
-					return nil
-				}
-				return err
+		// Handle user action
+		err = handleMediaAction(cfg, q, selectedMediaItems)
+		if err != nil {
+			if errors.Is(err, errAddedToQueue) {
+				// Items were added to queue, return successfully
+				return nil
 			}
-		} else {
-			action, err = promptActionManualWithQueue(q.Len())
-			if err != nil {
-				return err
-			}
+			return err
 		}
-
-		switch action {
-		case "watch":
-			return handleWatchMultiple(cfg, selectedMediaItems)
-		case "download":
-			return handleDownloadMultiple(cfg, selectedMediaItems)
-		case "senplayer play":
-			return handleSenPlayer(cfg, selectedMediaItems, "play")
-		case "senplayer download":
-			return handleSenPlayer(cfg, selectedMediaItems, "download")
-		case "queue":
-			added := q.Add(selectedMediaItems)
-			if err := q.Save(); err != nil {
-				return fmt.Errorf("failed to save queue: %w", err)
-			}
-			skipped := len(selectedMediaItems) - added
-			if skipped > 0 {
-				fmt.Println(successStyle.Render(fmt.Sprintf("Added %d item(s) to queue (%d duplicate(s) skipped). Queue now has %s.", added, skipped, ui.PluralizeItems(q.Len()))))
-			} else {
-				fmt.Println(successStyle.Render(fmt.Sprintf("Added %d item(s) to queue. Queue now has %s.", added, ui.PluralizeItems(q.Len()))))
-			}
-			return nil
-		case "stream":
-			if len(selectedMediaItems) > 1 {
-				fmt.Println(warningStyle.Render("Note: Stream only supports single selection, using first item"))
-			}
-			return handleStream(cfg, selectedMediaItems[0])
-		default:
-			return nil
-		}
+		return nil
 	}
 
 	// Non-interactive: display the sorted list
