@@ -68,10 +68,16 @@ var (
 
 func main() {
 	rootCmd := &cobra.Command{
-		Use:   "goplexcli",
+		Use:   "goplexcli [search term]",
 		Short: "A CLI tool for browsing and streaming from your Plex server",
-		Long:  "A powerful command-line interface for interacting with your Plex media server.\nBrowse, stream, and download your media with ease.",
-		RunE:  runBrowse, // Default to browse when no subcommand is specified
+		Long:  "A powerful command-line interface for interacting with your Plex media server.\nBrowse, stream, and download your media with ease.\n\nPass a search term to find matching media:\n  goplexcli \"The Lincoln Lawyer\"",
+		Args:  cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				return runSearch(cmd, args)
+			}
+			return runBrowse(cmd, args)
+		},
 	}
 
 	// Login command
@@ -508,6 +514,192 @@ func selectMediaFlat(media []plex.MediaItem, cfg *config.Config, prompt string) 
 	return selectedMediaItems, false, nil
 }
 
+func runSearch(cmd *cobra.Command, args []string) error {
+	searchTerm := strings.ToLower(strings.Join(args, " "))
+
+	// Load config
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("invalid config: %w. Please run 'goplexcli login' first", err)
+	}
+
+	// Load cache
+	mediaCache, err := cache.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load cache: %w", err)
+	}
+	if len(mediaCache.Media) == 0 {
+		fmt.Println(warningStyle.Render("Cache is empty. Run 'goplexcli cache reindex' first."))
+		return nil
+	}
+
+	// Search across all cached media
+	type searchResult struct {
+		label    string
+		isMovie  bool
+		item     *plex.MediaItem // set for movies
+		showName string          // set for TV shows
+	}
+
+	var results []searchResult
+
+	// Find matching movies
+	for i := range mediaCache.Media {
+		item := &mediaCache.Media[i]
+		if item.Type == "movie" && strings.Contains(strings.ToLower(item.Title), searchTerm) {
+			yearStr := ""
+			if item.Year > 0 {
+				yearStr = fmt.Sprintf(" (%d)", item.Year)
+			}
+			results = append(results, searchResult{
+				label:   fmt.Sprintf("%s%s  ·  Movie", item.Title, yearStr),
+				isMovie: true,
+				item:    item,
+			})
+		}
+	}
+
+	// Find matching TV shows (deduplicated by show name)
+	showEpisodes := make(map[string]int)
+	for _, item := range mediaCache.Media {
+		if item.Type == "episode" && item.ParentTitle != "" {
+			if strings.Contains(strings.ToLower(item.ParentTitle), searchTerm) {
+				showEpisodes[item.ParentTitle]++
+			}
+		}
+	}
+	// Sort show names for deterministic ordering
+	var showNames []string
+	for showName := range showEpisodes {
+		showNames = append(showNames, showName)
+	}
+	sort.Strings(showNames)
+	for _, showName := range showNames {
+		count := showEpisodes[showName]
+		results = append(results, searchResult{
+			label:    fmt.Sprintf("%s  ·  TV Show  ·  %d episodes", showName, count),
+			isMovie:  false,
+			showName: showName,
+		})
+	}
+
+	if len(results) == 0 {
+		fmt.Println(warningStyle.Render(fmt.Sprintf("No results found for \"%s\".", strings.Join(args, " "))))
+		fmt.Println(infoStyle.Render("Try 'goplexcli cache reindex' if your library has been updated recently."))
+		return nil
+	}
+
+	fmt.Println(infoStyle.Render(fmt.Sprintf("Found %d result(s) for \"%s\"\n", len(results), strings.Join(args, " "))))
+
+	// Build labels for fzf selection
+	labels := make([]string, len(results))
+	for i, r := range results {
+		labels[i] = r.label
+	}
+
+	// Load queue for action handling
+	q, err := queue.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load queue: %w", err)
+	}
+
+	// Select a result
+	var selectedIdx int
+	if ui.IsAvailable(cfg.FzfPath) {
+		_, idx, err := ui.SelectWithFzf(labels, "Select:", cfg.FzfPath)
+		if err != nil {
+			if errors.Is(err, apperrors.ErrCancelled) {
+				return nil
+			}
+			return fmt.Errorf("selection failed: %w", err)
+		}
+		selectedIdx = idx
+	} else {
+		fmt.Println(infoStyle.Render("Results:"))
+		for i, label := range labels {
+			fmt.Printf("  %d. %s\n", i+1, label)
+		}
+		fmt.Printf("\nSelect (1-%d): ", len(labels))
+		var choice int
+		if _, err := fmt.Scanln(&choice); err != nil {
+			return fmt.Errorf("failed to read selection: %w", err)
+		}
+		if choice < 1 || choice > len(labels) {
+			return fmt.Errorf("invalid selection")
+		}
+		selectedIdx = choice - 1
+	}
+
+	selected := results[selectedIdx]
+
+	if selected.isMovie {
+		// Movie: go straight to action
+		selectedMediaItems := []*plex.MediaItem{selected.item}
+		err = handleMediaAction(cfg, q, selectedMediaItems)
+		if err != nil && !errors.Is(err, errAddedToQueue) {
+			return err
+		}
+		return nil
+	}
+
+	// TV Show: drill into season/episode selection using full cache
+	var allEpisodes []plex.MediaItem
+	for _, item := range mediaCache.Media {
+		if item.Type == "episode" {
+			allEpisodes = append(allEpisodes, item)
+		}
+	}
+
+	seasons := ui.GetSeasonsForShow(allEpisodes, selected.showName)
+	if len(seasons) == 0 {
+		fmt.Println(warningStyle.Render("No seasons found for this show."))
+		return nil
+	}
+
+	fmt.Println(infoStyle.Render(fmt.Sprintf("\n%s has %d seasons...\n", selected.showName, len(seasons))))
+
+	selectedSeason, err := ui.SelectSeason(seasons, selected.showName, cfg.FzfPath)
+	if err != nil {
+		if errors.Is(err, apperrors.ErrCancelled) {
+			return nil
+		}
+		return fmt.Errorf("season selection failed: %w", err)
+	}
+
+	episodesInSeason := ui.GetEpisodesForSeason(allEpisodes, selected.showName, selectedSeason)
+	if len(episodesInSeason) == 0 {
+		fmt.Println(warningStyle.Render("No episodes found for this season."))
+		return nil
+	}
+
+	seasonLabel := fmt.Sprintf("Season %d", selectedSeason)
+	if selectedSeason == 0 {
+		seasonLabel = "Specials"
+	}
+	fmt.Println(infoStyle.Render(fmt.Sprintf("\n%s has %d episodes...\n", seasonLabel, len(episodesInSeason))))
+
+	selectedMediaItems, cancelled, err := selectMediaFlat(episodesInSeason, cfg, "Select episode(s) (TAB for multi-select):")
+	if err != nil {
+		return err
+	}
+	if cancelled {
+		return nil
+	}
+
+	if len(selectedMediaItems) == 0 {
+		return nil
+	}
+
+	err = handleMediaAction(cfg, q, selectedMediaItems)
+	if err != nil && !errors.Is(err, errAddedToQueue) {
+		return err
+	}
+	return nil
+}
+
 func runBrowse(cmd *cobra.Command, args []string) error {
 	// Show logo for interactive browse command
 	ui.Logo(version)
@@ -683,15 +875,17 @@ browseLoop:
 			return fmt.Errorf("no media selected")
 		}
 
-		// Handle user action
-		err = handleMediaAction(cfg, q, selectedMediaItems)
-		if err != nil {
-			if errors.Is(err, errAddedToQueue) {
-				// Items were added to queue, continue browsing
-				continue browseLoop
-			}
-			return err
+	// Handle user action
+	err = handleMediaAction(cfg, q, selectedMediaItems)
+	if err != nil {
+		if errors.Is(err, errAddedToQueue) {
+			// Items were added to queue, continue browsing
+			continue browseLoop
 		}
+		return err
+	}
+	// Action completed successfully, continue browsing
+	continue browseLoop
 	}
 }
 
