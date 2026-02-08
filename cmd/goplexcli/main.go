@@ -542,7 +542,6 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		isMovie  bool
 		item     *plex.MediaItem // set for movies
 		showName string          // set for TV shows
-		episodes int             // episode count for TV shows
 	}
 
 	var results []searchResult
@@ -572,12 +571,18 @@ func runSearch(cmd *cobra.Command, args []string) error {
 			}
 		}
 	}
-	for showName, count := range showEpisodes {
+	// Sort show names for deterministic ordering
+	var showNames []string
+	for showName := range showEpisodes {
+		showNames = append(showNames, showName)
+	}
+	sort.Strings(showNames)
+	for _, showName := range showNames {
+		count := showEpisodes[showName]
 		results = append(results, searchResult{
 			label:    fmt.Sprintf("%s  ·  TV Show  ·  %d episodes", showName, count),
 			isMovie:  false,
 			showName: showName,
-			episodes: count,
 		})
 	}
 
@@ -870,17 +875,17 @@ browseLoop:
 			return fmt.Errorf("no media selected")
 		}
 
-		// Handle user action
-		err = handleMediaAction(cfg, q, selectedMediaItems)
-		if err != nil {
-			if errors.Is(err, errAddedToQueue) {
-				// Items were added to queue, continue browsing
-				continue browseLoop
-			}
-			return err
+	// Handle user action
+	err = handleMediaAction(cfg, q, selectedMediaItems)
+	if err != nil {
+		if errors.Is(err, errAddedToQueue) {
+			// Items were added to queue, continue browsing
+			continue browseLoop
 		}
-		// Action completed successfully, exit browse loop
-		return nil
+		return err
+	}
+	// Action completed successfully, continue browsing
+	continue browseLoop
 	}
 }
 
