@@ -154,6 +154,7 @@ func Download(ctx context.Context, rclonePath, destinationDir, rcloneBinary stri
 		Source:        rclonePath,
 		Destination:   destinationPath,
 		StatsInterval: "500ms",
+		Flags:         []string{"--ignore-checksum"},
 		Context:       ctx,
 	}
 	
@@ -257,6 +258,7 @@ func DownloadMultiple(ctx context.Context, rclonePaths []string, destinationDir,
 			Source:        rclonePaths[i],
 			Destination:   filepath.Join(destinationDir, filepath.Base(rclonePaths[i])),
 			StatsInterval: "500ms",
+			Flags:         []string{"--ignore-checksum"},
 			Context:       ctx,
 		}
 		
