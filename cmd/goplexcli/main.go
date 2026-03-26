@@ -925,6 +925,16 @@ func handleMediaAction(cfg *config.Config, q *queue.Queue, selectedMediaItems []
 	case "senplayer download":
 		return handleSenPlayer(cfg, selectedMediaItems, "download")
 	case "queue":
+		// Safety check: confirm if adding many items (likely accidental multi-select)
+		if len(selectedMediaItems) > 3 {
+			fmt.Printf("You selected %d items. Add all to queue? [y/N]: ", len(selectedMediaItems))
+			var confirm string
+			fmt.Scanln(&confirm)
+			if confirm != "y" && confirm != "Y" {
+				fmt.Println(warningStyle.Render("Queue add cancelled."))
+				return nil
+			}
+		}
 		added := q.Add(selectedMediaItems)
 		if err := q.Save(); err != nil {
 			return fmt.Errorf("failed to save queue: %w", err)
