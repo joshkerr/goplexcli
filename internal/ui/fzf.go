@@ -390,10 +390,10 @@ func PluralizeItems(count int) string {
 }
 
 // PromptActionWithQueue asks the user what action to take, showing queue count
-func PromptActionWithQueue(fzfPath string, queueCount int) (string, error) {
-	queueLabel := "Add to Queue"
+func PromptActionWithQueue(fzfPath string, selectionCount, queueCount int) (string, error) {
+	queueLabel := fmt.Sprintf("Add (%d) to Queue", selectionCount)
 	if queueCount > 0 {
-		queueLabel = fmt.Sprintf("Add to Queue (%s)", PluralizeItems(queueCount))
+		queueLabel = fmt.Sprintf("Add (%d) to Queue (%d)", selectionCount, queueCount)
 	}
 
 	actions := []string{

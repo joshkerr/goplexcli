@@ -901,7 +901,7 @@ func handleMediaAction(cfg *config.Config, q *queue.Queue, selectedMediaItems []
 	var action string
 	var err error
 	if ui.IsAvailable(cfg.FzfPath) {
-		action, err = ui.PromptActionWithQueue(cfg.FzfPath, q.Len())
+		action, err = ui.PromptActionWithQueue(cfg.FzfPath, len(selectedMediaItems), q.Len())
 		if err != nil {
 			if errors.Is(err, apperrors.ErrCancelled) {
 				return nil
@@ -909,7 +909,7 @@ func handleMediaAction(cfg *config.Config, q *queue.Queue, selectedMediaItems []
 			return err
 		}
 	} else {
-		action, err = promptActionManualWithQueue(q.Len())
+		action, err = promptActionManualWithQueue(len(selectedMediaItems), q.Len())
 		if err != nil {
 			return err
 		}
@@ -1570,10 +1570,10 @@ func selectMediaTypeManualWithQueue(queueCount int) (string, error) {
 }
 
 // promptActionManualWithQueue - fallback for no-fzf action selection with queue
-func promptActionManualWithQueue(queueCount int) (string, error) {
-	queueLabel := "Add to Queue"
+func promptActionManualWithQueue(selectionCount, queueCount int) (string, error) {
+	queueLabel := fmt.Sprintf("Add (%d) to Queue", selectionCount)
 	if queueCount > 0 {
-		queueLabel = fmt.Sprintf("Add to Queue (%s)", ui.PluralizeItems(queueCount))
+		queueLabel = fmt.Sprintf("Add (%d) to Queue (%d)", selectionCount, queueCount)
 	}
 
 	fmt.Println(infoStyle.Render("\nSelect action:"))
