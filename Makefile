@@ -1,6 +1,10 @@
 # Makefile for GoplexCLI
 
-VERSION ?= $(shell cat VERSION 2>/dev/null || echo "0.1.0")
+ifeq ($(OS),Windows_NT)
+VERSION ?= $(shell type VERSION 2>nul || echo 0.1.0)
+else
+VERSION ?= $(shell cat VERSION 2>/dev/null || echo 0.1.0)
+endif
 LDFLAGS = -ldflags "-s -w -X main.version=$(VERSION)"
 
 .PHONY: build install clean test run help lint vet
