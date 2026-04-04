@@ -411,8 +411,8 @@ func PromptActionWithQueue(fzfPath string, selectionCount, queueCount int) (stri
 		return "", err
 	}
 
-	// Normalize "Add to Queue" selection
-	if strings.HasPrefix(selected, "Add to Queue") {
+	// Normalize "Add (N) to Queue" selection
+	if strings.HasPrefix(selected, "Add (") && strings.Contains(selected, "Queue") {
 		return "queue", nil
 	}
 
