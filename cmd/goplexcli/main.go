@@ -1,5 +1,10 @@
 package main
 
+// Must be first: its init fixes os.Args on Termux/Android before pflag's
+// package-level CommandLine initializer reads os.Args[0].
+// See github.com/termux/termux-packages#29385.
+import _ "github.com/joshkerr/goplexcli/internal/termuxfix"
+
 import (
 	"context"
 	"errors"
