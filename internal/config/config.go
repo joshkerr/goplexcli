@@ -59,7 +59,7 @@ func GetConfigDir() (string, error) {
 		if baseDir == "" {
 			return "", fmt.Errorf("APPDATA environment variable not set")
 		}
-	case "linux":
+	case "linux", "android":
 		xdgConfig := os.Getenv("XDG_CONFIG_HOME")
 		if xdgConfig != "" {
 			baseDir = xdgConfig
