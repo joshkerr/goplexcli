@@ -322,12 +322,22 @@ func createPreviewScript(media []plex.MediaItem, plexURL string, plexToken strin
 	if pathBinary, err := exec.LookPath(previewBinaryName); err == nil {
 		previewBinary = pathBinary
 	} else {
-		// Look for the preview binary in common locations
-		// Get current working directory
-		cwd, _ := os.Getwd()
+		var possiblePaths []string
 
-		possiblePaths := []string{
-			filepath.Join(cwd, previewBinaryName), // Current directory
+		// Alongside the running goplexcli binary — `make build` produces
+		// both binaries side by side, and users typically copy them as a
+		// pair, so this is the most reliable fallback when launched from
+		// outside the build directory.
+		if exe, err := os.Executable(); err == nil {
+			if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+				exe = resolved
+			}
+			possiblePaths = append(possiblePaths, filepath.Join(filepath.Dir(exe), previewBinaryName))
+		}
+
+		// Current working directory (covers `go run` / running from source).
+		if cwd, err := os.Getwd(); err == nil {
+			possiblePaths = append(possiblePaths, filepath.Join(cwd, previewBinaryName))
 		}
 
 		// Add Unix-specific paths on non-Windows systems
@@ -361,6 +371,7 @@ echo Or install it to a location in your PATH
 echo.
 echo Searched locations:
 echo   - PATH (goplexcli-preview.exe)
+echo   - alongside goplexcli.exe
 echo   - .\goplexcli-preview.exe
 `
 		} else {
@@ -373,6 +384,7 @@ echo "Or install it to a location in your PATH"
 echo ""
 echo "Searched locations:"
 echo "  - PATH (goplexcli-preview)"
+echo "  - alongside goplexcli"
 echo "  - ./goplexcli-preview"
 echo "  - /usr/local/bin/goplexcli-preview"
 echo "  - ~/bin/goplexcli-preview"
