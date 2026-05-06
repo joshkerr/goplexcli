@@ -40,7 +40,7 @@ This document provides comprehensive guidance for AI agents working in the Gople
 ### Building
 
 ```bash
-# Build both binaries (main + preview helper)
+# Build the binary
 make build
 
 # Build for all platforms (creates ./build/ directory)
@@ -48,12 +48,14 @@ make build-all
 
 # Manual build
 go build -o goplexcli ./cmd/goplexcli
-go build -o goplexcli-preview ./cmd/preview
 ```
 
 **Output:**
-- macOS/Linux: `goplexcli` and `goplexcli-preview`
-- Windows: `goplexcli.exe` and `goplexcli-preview.exe`
+- macOS/Linux: `goplexcli`
+- Windows: `goplexcli.exe`
+
+The fzf preview pane is rendered by the hidden `__preview` subcommand of the
+same binary, so there is no separate helper to install or distribute.
 
 ### Testing
 
@@ -80,7 +82,7 @@ go test -v -coverprofile=coverage.txt -covermode=atomic ./...
 make install
 
 # Manual installation
-sudo cp goplexcli goplexcli-preview /usr/local/bin/
+sudo cp goplexcli /usr/local/bin/
 ```
 
 ### Cleanup
@@ -125,10 +127,8 @@ make run
 ```
 goplexcli/
 ├── cmd/
-│   ├── goplexcli/           # Main CLI application
-│   │   └── main.go          # Cobra commands, CLI logic, styling
-│   └── preview/             # Preview helper for fzf
-│       └── main.go          # Standalone binary for preview window
+│   └── goplexcli/           # Main CLI application
+│       └── main.go          # Cobra commands, CLI logic, styling
 ├── internal/
 │   ├── cache/               # Media caching system
 │   │   └── cache.go         # JSON-based cache management
@@ -140,6 +140,8 @@ goplexcli/
 │   │   └── player.go        # MPV player wrapper
 │   ├── plex/                # Plex API client
 │   │   └── client.go        # PlexGo SDK wrapper + custom HTTP
+│   ├── preview/             # fzf preview-pane renderer
+│   │   └── preview.go       # Invoked by the __preview subcommand
 │   └── ui/                  # User interface
 │       └── fzf.go           # fzf integration + Bubble Tea browser
 ├── .github/workflows/
@@ -156,14 +158,13 @@ goplexcli/
 └── .gitignore               # Git ignore rules
 ```
 
-### Two-Binary Architecture
+### Single-Binary Architecture
 
-GoplexCLI uses **two separate binaries**:
-
-1. **`goplexcli`** - Main CLI application
-2. **`goplexcli-preview`** - Standalone preview helper for fzf
-
-**Why?** fzf's `--preview` flag executes a command for each line. The preview binary must be fast and lightweight. It communicates via a temporary JSON file (for passing auth tokens securely).
+GoplexCLI ships as a **single binary**. fzf's `--preview` flag executes a
+command for each line; goplexcli satisfies it by re-invoking itself with the
+hidden `__preview <data-file> <index>` subcommand (see `internal/preview`).
+The data file is a temporary JSON document containing the media list plus the
+Plex token, written with mode 0600 to keep the token off-disk for other users.
 
 ---
 
@@ -453,24 +454,27 @@ func (c *Client) GetLibraries(ctx context.Context) ([]Library, error) {
 
 **Pattern:** When SDK fails, fall back to direct HTTP with custom structs.
 
-### 3. Preview Binary Communication
+### 3. Preview Subcommand Communication
 
-**Location:** `cmd/preview/main.go` and `internal/ui/fzf.go`
+**Location:** `internal/preview/preview.go` and `internal/ui/fzf.go`
 
-The preview binary and main binary communicate via a **temporary JSON file**:
+The fzf preview pane is rendered by re-invoking the same goplexcli binary
+through its hidden `__preview` subcommand. Data is passed via a **temporary
+JSON file**:
 
 ```go
-// Main binary writes:
+// Main process writes:
 tempFile := filepath.Join(os.TempDir(), "goplexcli-preview-data.json")
 os.WriteFile(tempFile, jsonData, 0600)  // 0600 for token security
 
-// Preview binary reads:
+// Preview subcommand reads:
 data, err := os.ReadFile(tempFile)
 ```
 
 **Security:** File permissions are `0600` because the JSON contains the Plex auth token.
 
-**Platform-specific wrapper scripts:**
+**Platform-specific wrapper scripts** (just thin shims that call back into
+goplexcli):
 - Unix: Shell script (`.sh`)
 - Windows: Batch script (`.bat`)
 
@@ -590,13 +594,13 @@ endif
 ```go
 // Unix shell script
 script := fmt.Sprintf(`#!/bin/bash
-goplexcli-preview "$@"
-`)
+'%s' __preview '%s' "$1"
+`, exe, dataPath)
 
 // Windows batch script
 script := fmt.Sprintf(`@echo off
-goplexcli-preview.exe %%*
-`)
+"%s" __preview "%s" %%1
+`, exe, dataPath)
 ```
 
 ---
@@ -686,7 +690,7 @@ func (c *Config) Validate() error {
   - `.tar.gz` archives (macOS, Linux)
   - `.zip` archives (Windows)
   - GitHub Release with auto-generated notes
-- **Note:** Only builds main binary (`cmd/goplexcli`), not preview binary
+- **Note:** Builds the single `cmd/goplexcli` binary (preview rendering is built in)
 
 ### Release Process
 
@@ -817,9 +821,8 @@ Add feature for sorting media by rating
 - 214: Orange (warnings)
 
 ### Build Targets
-- Main binary: `./cmd/goplexcli`
-- Preview binary: `./cmd/preview`
-- Both must be distributed together
+- Single binary: `./cmd/goplexcli` (the fzf preview renderer ships as the
+  hidden `__preview` subcommand inside it)
 
 ### Go Version
 - Minimum: 1.24.0 (specified in `go.mod`)

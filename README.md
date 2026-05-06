@@ -45,16 +45,17 @@ cd goplexcli
 make build
 ```
 
-This builds both `goplexcli` (main application) and `goplexcli-preview` (preview helper).
+This builds the `goplexcli` binary (the fzf preview pane is rendered by a hidden
+`__preview` subcommand of the same binary, so there's nothing else to install).
 
 Then install to your PATH:
 
 ```bash
-# Using make (installs to /usr/local/bin)
+# Using make (installs to GOPATH/bin)
 make install
 
 # Or manually
-sudo cp goplexcli goplexcli-preview /usr/local/bin/
+sudo cp goplexcli /usr/local/bin/
 
 # Or add project directory to PATH
 export PATH="$PATH:/path/to/goplexcli"
@@ -417,10 +418,8 @@ If you're having trouble logging in:
 ```
 goplexcli/
 ├── cmd/
-│   ├── goplexcli/
-│   │   └── main.go          # Main CLI application
-│   └── preview/
-│       └── main.go          # Preview helper for fzf
+│   └── goplexcli/
+│       └── main.go          # Main CLI application
 ├── internal/
 │   ├── cache/
 │   │   └── cache.go         # Media caching logic

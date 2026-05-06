@@ -279,11 +279,14 @@ func SelectMediaWithCustomLabels(media []plex.MediaItem, labels []string, prompt
 	return index, nil
 }
 
-// createPreviewScript creates a preview binary and returns its path
+// createPreviewScript writes the JSON data file consumed by the preview
+// subcommand and emits a wrapper script that fzf invokes for each row.
+// The wrapper just calls back into the running goplexcli binary's hidden
+// `__preview` subcommand, so there is no separate helper executable to
+// install or discover.
 func createPreviewScript(media []plex.MediaItem, plexURL string, plexToken string) (string, error) {
 	tmpDir := os.TempDir()
 
-	// Create JSON data file for the preview to read
 	dataPath := filepath.Join(tmpDir, "goplexcli-preview-data.json")
 
 	type PreviewData struct {
@@ -303,120 +306,36 @@ func createPreviewScript(media []plex.MediaItem, plexURL string, plexToken strin
 		return "", err
 	}
 
-	// Use restrictive permissions (0600) to protect the Plex token
+	// Restrictive permissions protect the embedded Plex token.
 	if err := os.WriteFile(dataPath, jsonData, 0600); err != nil {
 		return "", err
 	}
 
-	// First, try to find in PATH
-	var previewBinary string
-	var previewBinaryName string
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("failed to locate goplexcli binary: %w", err)
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
 
-	// On Windows, look for .exe extension
+	var scriptPath, script string
 	if runtime.GOOS == "windows" {
-		previewBinaryName = "goplexcli-preview.exe"
-	} else {
-		previewBinaryName = "goplexcli-preview"
-	}
-
-	if pathBinary, err := exec.LookPath(previewBinaryName); err == nil {
-		previewBinary = pathBinary
-	} else {
-		var possiblePaths []string
-
-		// Alongside the running goplexcli binary — `make build` produces
-		// both binaries side by side, and users typically copy them as a
-		// pair, so this is the most reliable fallback when launched from
-		// outside the build directory.
-		if exe, err := os.Executable(); err == nil {
-			if resolved, err := filepath.EvalSymlinks(exe); err == nil {
-				exe = resolved
-			}
-			possiblePaths = append(possiblePaths, filepath.Join(filepath.Dir(exe), previewBinaryName))
-		}
-
-		// Current working directory (covers `go run` / running from source).
-		if cwd, err := os.Getwd(); err == nil {
-			possiblePaths = append(possiblePaths, filepath.Join(cwd, previewBinaryName))
-		}
-
-		// Add Unix-specific paths on non-Windows systems
-		if runtime.GOOS != "windows" {
-			possiblePaths = append(possiblePaths,
-				"/usr/local/bin/goplexcli-preview",
-				filepath.Join(os.Getenv("HOME"), "bin", "goplexcli-preview"),
-			)
-		}
-
-		for _, path := range possiblePaths {
-			if stat, err := os.Stat(path); err == nil && !stat.IsDir() {
-				previewBinary, _ = filepath.Abs(path)
-				break
-			}
-		}
-	}
-
-	// If not found, return error with helpful message
-	if previewBinary == "" {
-		var scriptPath string
-		var script string
-
-		if runtime.GOOS == "windows" {
-			scriptPath = filepath.Join(tmpDir, "goplexcli-preview.bat")
-			script = `@echo off
-echo Preview binary not found!
-echo.
-echo Please run 'make build' or 'go build -o goplexcli-preview.exe ./cmd/preview'
-echo Or install it to a location in your PATH
-echo.
-echo Searched locations:
-echo   - PATH (goplexcli-preview.exe)
-echo   - alongside goplexcli.exe
-echo   - .\goplexcli-preview.exe
-`
-		} else {
-			scriptPath = filepath.Join(tmpDir, "goplexcli-preview.sh")
-			script = `#!/bin/bash
-echo "Preview binary not found!"
-echo ""
-echo "Please run 'make build' or 'go build -o goplexcli-preview ./cmd/preview'"
-echo "Or install it to a location in your PATH"
-echo ""
-echo "Searched locations:"
-echo "  - PATH (goplexcli-preview)"
-echo "  - alongside goplexcli"
-echo "  - ./goplexcli-preview"
-echo "  - /usr/local/bin/goplexcli-preview"
-echo "  - ~/bin/goplexcli-preview"
-`
-		}
-		_ = os.WriteFile(scriptPath, []byte(script), 0755) // Ignore error - will fail in wrapper script anyway
-		return scriptPath, nil
-	}
-
-	// Create wrapper script that calls the binary
-	var scriptPath string
-	var script string
-
-	if runtime.GOOS == "windows" {
-		// Windows batch file
 		scriptPath = filepath.Join(tmpDir, "goplexcli-preview.bat")
-		// Escape special characters for batch files
-		// In batch files, % needs to be escaped as %%, and quotes are handled by outer quotes
-		escapedBinary := strings.ReplaceAll(previewBinary, "%", "%%")
+		// In batch files % must be doubled; quoting handles spaces.
+		escapedExe := strings.ReplaceAll(exe, "%", "%%")
 		escapedDataPath := strings.ReplaceAll(dataPath, "%", "%%")
 		script = fmt.Sprintf(`@echo off
-"%s" "%s" %%1
-`, escapedBinary, escapedDataPath)
+"%s" __preview "%s" %%1
+`, escapedExe, escapedDataPath)
 	} else {
-		// Unix shell script
 		scriptPath = filepath.Join(tmpDir, "goplexcli-preview.sh")
-		// Use single quotes and escape any single quotes in the paths for shell safety
-		escapedBinary := strings.ReplaceAll(previewBinary, "'", "'\"'\"'")
+		// Single-quote everything so shell metacharacters in paths are inert.
+		escapedExe := strings.ReplaceAll(exe, "'", "'\"'\"'")
 		escapedDataPath := strings.ReplaceAll(dataPath, "'", "'\"'\"'")
 		script = fmt.Sprintf(`#!/bin/bash
-'%s' '%s' "$1"
-`, escapedBinary, escapedDataPath)
+'%s' __preview '%s' "$1"
+`, escapedExe, escapedDataPath)
 	}
 
 	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {

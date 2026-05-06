@@ -32,14 +32,10 @@ build:
 	@echo "Building goplexcli v$(VERSION)..."
 ifeq ($(OS),Windows_NT)
 	@$(GO) build $(LDFLAGS) -o goplexcli.exe ./cmd/goplexcli
-	@echo "Building preview helper..."
-	@$(GO) build -o goplexcli-preview.exe ./cmd/preview
-	@echo "Build complete: ./goplexcli.exe and ./goplexcli-preview.exe"
+	@echo "Build complete: ./goplexcli.exe"
 else
 	@$(GO) build $(LDFLAGS) -o goplexcli ./cmd/goplexcli
-	@echo "Building preview helper..."
-	@$(GO) build -o goplexcli-preview ./cmd/preview
-	@echo "Build complete: ./goplexcli and ./goplexcli-preview"
+	@echo "Build complete: ./goplexcli"
 endif
 
 # Build for all platforms
@@ -47,24 +43,17 @@ build-all:
 	@echo "Building for all platforms..."
 	@mkdir -p build
 	@GOOS=darwin GOARCH=amd64 $(GO) build $(LDFLAGS) -o build/goplexcli-darwin-amd64 ./cmd/goplexcli
-	@GOOS=darwin GOARCH=amd64 $(GO) build -o build/goplexcli-preview-darwin-amd64 ./cmd/preview
 	@GOOS=darwin GOARCH=arm64 $(GO) build $(LDFLAGS) -o build/goplexcli-darwin-arm64 ./cmd/goplexcli
-	@GOOS=darwin GOARCH=arm64 $(GO) build -o build/goplexcli-preview-darwin-arm64 ./cmd/preview
 	@GOOS=linux GOARCH=amd64 $(GO) build $(LDFLAGS) -o build/goplexcli-linux-amd64 ./cmd/goplexcli
-	@GOOS=linux GOARCH=amd64 $(GO) build -o build/goplexcli-preview-linux-amd64 ./cmd/preview
 	@GOOS=linux GOARCH=arm64 $(GO) build $(LDFLAGS) -o build/goplexcli-linux-arm64 ./cmd/goplexcli
-	@GOOS=linux GOARCH=arm64 $(GO) build -o build/goplexcli-preview-linux-arm64 ./cmd/preview
 	@GOOS=windows GOARCH=amd64 $(GO) build $(LDFLAGS) -o build/goplexcli-windows-amd64.exe ./cmd/goplexcli
-	@GOOS=windows GOARCH=amd64 $(GO) build -o build/goplexcli-preview-windows-amd64.exe ./cmd/preview
 	@GOOS=android GOARCH=arm64 $(GO) build $(LDFLAGS) -o build/goplexcli-android-arm64 ./cmd/goplexcli
-	@GOOS=android GOARCH=arm64 $(GO) build -o build/goplexcli-preview-android-arm64 ./cmd/preview
 	@echo "Build complete: ./build/"
 
 # Install to GOPATH/bin (cross-platform)
 install:
 	@echo "Installing goplexcli v$(VERSION) to GOPATH/bin..."
 	@$(GO) install $(LDFLAGS) ./cmd/goplexcli/
-	@$(GO) install ./cmd/preview/
 	@echo "Installation complete"
 
 # Clean build artifacts
@@ -72,10 +61,9 @@ clean:
 	@echo "Cleaning build artifacts..."
 ifeq ($(OS),Windows_NT)
 	@cmd /c "if exist goplexcli.exe del /q goplexcli.exe"
-	@cmd /c "if exist goplexcli-preview.exe del /q goplexcli-preview.exe"
 	@cmd /c "if exist build rmdir /s /q build"
 else
-	@rm -f goplexcli goplexcli-preview
+	@rm -f goplexcli
 	@rm -rf build/
 endif
 	@echo "Clean complete"
@@ -115,7 +103,7 @@ help:
 	@echo "GoplexCLI Makefile"
 	@echo ""
 	@echo "Usage:"
-	@echo "  make build       - Build the application and preview helper"
+	@echo "  make build       - Build the application"
 	@echo "  make build-all   - Build for all platforms"
 	@echo "  make install     - Install to GOPATH/bin"
 	@echo "  make clean       - Remove build artifacts"

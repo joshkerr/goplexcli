@@ -26,6 +26,7 @@ import (
 	apperrors "github.com/joshkerr/goplexcli/internal/errors"
 	"github.com/joshkerr/goplexcli/internal/player"
 	"github.com/joshkerr/goplexcli/internal/plex"
+	"github.com/joshkerr/goplexcli/internal/preview"
 	"github.com/joshkerr/goplexcli/internal/progress"
 	"github.com/joshkerr/goplexcli/internal/queue"
 	"github.com/joshkerr/goplexcli/internal/stream"
@@ -215,7 +216,18 @@ Examples:
 		},
 	}
 
-	rootCmd.AddCommand(loginCmd, browseCmd, cacheCmd, configCmd, streamCmd, serverCmd, sortCmd, versionCmd)
+	// Hidden subcommand invoked by the fzf preview window. Renders one
+	// media item's metadata to stdout. Not intended for direct use.
+	previewCmd := &cobra.Command{
+		Use:    "__preview <data-file> <index>",
+		Hidden: true,
+		Args:   cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return preview.Run(os.Stdout, args[0], args[1])
+		},
+	}
+
+	rootCmd.AddCommand(loginCmd, browseCmd, cacheCmd, configCmd, streamCmd, serverCmd, sortCmd, versionCmd, previewCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(errorStyle.Render("Error: " + err.Error()))

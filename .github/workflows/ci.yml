@@ -52,9 +52,6 @@ jobs:
       - name: Build main binary
         run: go build -v ./cmd/goplexcli
 
-      - name: Build preview helper
-        run: go build -v ./cmd/preview
-
   lint:
     name: Lint
     runs-on: ubuntu-latest
