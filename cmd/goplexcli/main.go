@@ -41,6 +41,9 @@ var version = "dev"
 // dryRun when true shows what would be downloaded without actually downloading
 var dryRun bool
 
+// searchDescriptions when true also matches against item summaries
+var searchDescriptions bool
+
 // sort command flags
 var (
 	sortDesc        bool
@@ -84,6 +87,7 @@ func main() {
 			return runBrowse(cmd, args)
 		},
 	}
+	rootCmd.Flags().BoolVarP(&searchDescriptions, "descriptions", "d", false, "Also search item descriptions/summaries (default: title only)")
 
 	// Login command
 	loginCmd := &cobra.Command{
@@ -543,10 +547,11 @@ func runSearch(cmd *cobra.Command, args []string) error {
 
 	// Search across all cached media
 	type searchResult struct {
-		label    string
-		isMovie  bool
-		item     *plex.MediaItem // set for movies
-		showName string          // set for TV shows
+		label       string
+		isMovie     bool
+		item        *plex.MediaItem // set for movies
+		showName    string          // set for TV shows
+		previewItem plex.MediaItem  // what to render in the preview pane
 	}
 
 	var results []searchResult
@@ -554,40 +559,95 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	// Find matching movies
 	for i := range mediaCache.Media {
 		item := &mediaCache.Media[i]
-		if item.Type == "movie" && strings.Contains(strings.ToLower(item.Title), searchTerm) {
-			yearStr := ""
-			if item.Year > 0 {
-				yearStr = fmt.Sprintf(" (%d)", item.Year)
-			}
-			results = append(results, searchResult{
-				label:   fmt.Sprintf("%s%s  ·  Movie", item.Title, yearStr),
-				isMovie: true,
-				item:    item,
-			})
+		if item.Type != "movie" {
+			continue
 		}
+		titleMatch := strings.Contains(strings.ToLower(item.Title), searchTerm)
+		descMatch := searchDescriptions && !titleMatch && strings.Contains(strings.ToLower(item.Summary), searchTerm)
+		if !titleMatch && !descMatch {
+			continue
+		}
+		yearStr := ""
+		if item.Year > 0 {
+			yearStr = fmt.Sprintf(" (%d)", item.Year)
+		}
+		label := fmt.Sprintf("%s%s  ·  Movie", item.Title, yearStr)
+		if descMatch {
+			label += "  ·  matched description"
+		}
+		results = append(results, searchResult{
+			label:       label,
+			isMovie:     true,
+			item:        item,
+			previewItem: *item,
+		})
 	}
 
-	// Find matching TV shows (deduplicated by show name)
-	showEpisodes := make(map[string]int)
+	// Find matching TV shows (deduplicated by show name). titleEpisodeCount
+	// is total episodes for a name-matched show; descEpisodeCount is the
+	// number of episodes whose summary matched, used only for shows whose
+	// name did NOT match. previewEp is a representative episode used to
+	// populate the preview pane (Summary, etc.) for the show.
+	titleEpisodeCount := make(map[string]int)
+	descEpisodeCount := make(map[string]int)
+	titlePreviewEp := make(map[string]plex.MediaItem)
+	descPreviewEp := make(map[string]plex.MediaItem)
 	for _, item := range mediaCache.Media {
-		if item.Type == "episode" && item.ParentTitle != "" {
-			if strings.Contains(strings.ToLower(item.ParentTitle), searchTerm) {
-				showEpisodes[item.ParentTitle]++
+		if item.Type != "episode" || item.ParentTitle == "" {
+			continue
+		}
+		if strings.Contains(strings.ToLower(item.ParentTitle), searchTerm) {
+			titleEpisodeCount[item.ParentTitle]++
+			if _, ok := titlePreviewEp[item.ParentTitle]; !ok {
+				titlePreviewEp[item.ParentTitle] = item
+			}
+			continue
+		}
+		if searchDescriptions && strings.Contains(strings.ToLower(item.Summary), searchTerm) {
+			descEpisodeCount[item.ParentTitle]++
+			if _, ok := descPreviewEp[item.ParentTitle]; !ok {
+				descPreviewEp[item.ParentTitle] = item
 			}
 		}
 	}
-	// Sort show names for deterministic ordering
-	var showNames []string
-	for showName := range showEpisodes {
-		showNames = append(showNames, showName)
+	// Collect & sort show names for deterministic ordering
+	showNameSet := make(map[string]struct{}, len(titleEpisodeCount)+len(descEpisodeCount))
+	for s := range titleEpisodeCount {
+		showNameSet[s] = struct{}{}
+	}
+	for s := range descEpisodeCount {
+		showNameSet[s] = struct{}{}
+	}
+	showNames := make([]string, 0, len(showNameSet))
+	for s := range showNameSet {
+		showNames = append(showNames, s)
 	}
 	sort.Strings(showNames)
 	for _, showName := range showNames {
-		count := showEpisodes[showName]
+		var label string
+		var ep plex.MediaItem
+		if count, ok := titleEpisodeCount[showName]; ok {
+			label = fmt.Sprintf("%s  ·  TV Show  ·  %d episodes", showName, count)
+			ep = titlePreviewEp[showName]
+		} else {
+			count := descEpisodeCount[showName]
+			label = fmt.Sprintf("%s  ·  TV Show  ·  %d episode(s) matched description", showName, count)
+			ep = descPreviewEp[showName]
+		}
+		// Synthesize a show-level preview item: keep show-relevant fields,
+		// drop episode-specific ones (Duration, Rating, etc.) so the preview
+		// doesn't misrepresent a single episode as the whole show.
+		previewItem := plex.MediaItem{
+			Title:      showName,
+			Type:       "show",
+			Summary:    ep.Summary,
+			ServerName: ep.ServerName,
+		}
 		results = append(results, searchResult{
-			label:    fmt.Sprintf("%s  ·  TV Show  ·  %d episodes", showName, count),
-			isMovie:  false,
-			showName: showName,
+			label:       label,
+			isMovie:     false,
+			showName:    showName,
+			previewItem: previewItem,
 		})
 	}
 
@@ -614,7 +674,17 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	// Select a result
 	var selectedIdx int
 	if ui.IsAvailable(cfg.FzfPath) {
-		_, idx, err := ui.SelectWithFzf(labels, "Select:", cfg.FzfPath)
+		var idx int
+		var err error
+		if searchDescriptions {
+			previewItems := make([]plex.MediaItem, len(results))
+			for i, r := range results {
+				previewItems[i] = r.previewItem
+			}
+			idx, err = ui.SelectMediaWithCustomLabels(previewItems, labels, "Select:", cfg.FzfPath, cfg.PlexURL, cfg.PlexToken)
+		} else {
+			_, idx, err = ui.SelectWithFzf(labels, "Select:", cfg.FzfPath)
+		}
 		if err != nil {
 			if errors.Is(err, apperrors.ErrCancelled) {
 				return nil

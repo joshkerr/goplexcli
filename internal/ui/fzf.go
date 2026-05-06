@@ -203,6 +203,82 @@ func SelectMediaWithPreview(media []plex.MediaItem, prompt string, fzfPath strin
 	return indices, nil
 }
 
+// SelectMediaWithCustomLabels is like SelectMediaWithPreview but uses caller-supplied
+// labels (one per media item) and single-select. Used by search where labels carry
+// extra context (e.g. "matched description") that FormatMediaTitle wouldn't produce.
+// Returns the selected index, or -1 with errors.ErrCancelled if the user cancels.
+func SelectMediaWithCustomLabels(media []plex.MediaItem, labels []string, prompt string, fzfPath string, plexURL string, plexToken string) (int, error) {
+	if len(media) == 0 {
+		return -1, fmt.Errorf("no items to select from")
+	}
+	if len(labels) != len(media) {
+		return -1, fmt.Errorf("labels length (%d) does not match media length (%d)", len(labels), len(media))
+	}
+
+	if fzfPath == "" {
+		fzfPath = "fzf"
+	}
+	if _, err := exec.LookPath(fzfPath); err != nil {
+		return -1, fmt.Errorf("fzf not found in PATH. Please install fzf or specify the path in config")
+	}
+
+	items := make([]string, len(media))
+	for i, label := range labels {
+		items[i] = fmt.Sprintf("%d\t%s", i, label)
+	}
+	input := strings.Join(items, "\n")
+
+	previewScript, err := createPreviewScript(media, plexURL, plexToken)
+	if err != nil {
+		return -1, fmt.Errorf("failed to create preview script: %w", err)
+	}
+	defer os.Remove(previewScript)
+	defer os.Remove(filepath.Join(os.TempDir(), "goplexcli-preview-data.json"))
+
+	args := []string{
+		"--height=90%",
+		"--reverse",
+		"--border",
+		"--delimiter=\t",
+		"--with-nth=2..",
+		"--prompt=" + prompt + " ",
+		"--preview=" + previewScript + " {1}",
+		"--preview-window=right:50%:wrap",
+		"--bind=ctrl-p:toggle-preview",
+		"--no-mouse",
+		"--bind=ctrl-/:toggle-preview",
+	}
+
+	cmd := exec.Command(fzfPath, args...)
+	cmd.Stdin = strings.NewReader(input)
+	cmd.Stderr = os.Stderr
+
+	var outBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 130 {
+			return -1, errors.ErrCancelled
+		}
+		return -1, fmt.Errorf("fzf failed: %w", err)
+	}
+
+	output := strings.TrimSpace(outBuf.String())
+	if output == "" {
+		return -1, fmt.Errorf("no selection made")
+	}
+
+	parts := strings.SplitN(output, "\t", 2)
+	var index int
+	if _, err := fmt.Sscanf(parts[0], "%d", &index); err != nil {
+		return -1, fmt.Errorf("failed to parse selection: %w", err)
+	}
+	if index < 0 || index >= len(media) {
+		return -1, fmt.Errorf("selection index %d out of range", index)
+	}
+	return index, nil
+}
+
 // createPreviewScript creates a preview binary and returns its path
 func createPreviewScript(media []plex.MediaItem, plexURL string, plexToken string) (string, error) {
 	tmpDir := os.TempDir()
