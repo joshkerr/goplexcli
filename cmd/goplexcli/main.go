@@ -79,7 +79,15 @@ func main() {
 	rootCmd := &cobra.Command{
 		Use:   "goplexcli [search term]",
 		Short: "A CLI tool for browsing and streaming from your Plex server",
-		Long:  "A powerful command-line interface for interacting with your Plex media server.\nBrowse, stream, and download your media with ease.\n\nPass a search term to find matching media:\n  goplexcli \"The Lincoln Lawyer\"",
+		Long: `A powerful command-line interface for interacting with your Plex media server.
+Browse, stream, and download your media with ease.
+
+Pass a search term to find matching media:
+  goplexcli "The Lincoln Lawyer"
+
+Download a batch of items: queue them up while browsing, then run
+'goplexcli browse' again — when the queue is non-empty the top of the
+media-type picker offers "View Queue (N items)" → "Download All".`,
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
@@ -101,7 +109,19 @@ func main() {
 	browseCmd := &cobra.Command{
 		Use:   "browse",
 		Short: "Browse and play media from your Plex server",
-		RunE:  runBrowse,
+		Long: `Browse and play media from your Plex server.
+
+Pick "Movies", "TV Shows", or "All", then drill in to choose what to
+watch, download, or queue. Adding items to the queue ("Add to Queue"
+in the action menu) lets you batch downloads.
+
+Downloading queued items:
+  When the queue is non-empty, 'browse' shows "View Queue (N items)"
+  at the top of the media-type picker. Select it, then choose
+  "Download All (N items)" to download every queued item back to back.
+  The same menu also lets you remove individual items or clear the
+  queue.`,
+		RunE: runBrowse,
 	}
 	browseCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be downloaded without actually downloading")
 
