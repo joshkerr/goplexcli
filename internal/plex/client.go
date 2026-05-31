@@ -190,14 +190,32 @@ func (c *Client) GetLibraries(ctx context.Context) ([]Library, error) {
 	return libraries, nil
 }
 
-// ProgressCallback is called during media fetching to report progress
-type ProgressCallback func(libraryName string, itemCount int, totalLibraries int, currentLibrary int)
+// ProgressCallback is called during media fetching to report progress. It may
+// be called multiple times per library as pages are fetched: itemCount is the
+// number of items retrieved so far in the current library, and totalItems is
+// the library's total (0 if unknown).
+type ProgressCallback func(libraryName string, itemCount int, totalItems int, totalLibraries int, currentLibrary int)
 
-// ServerProgressCallback is called during multi-server media fetching
-type ServerProgressCallback func(serverName, libraryName string, itemCount int, totalLibraries int, currentLibrary int, serverNum int, totalServers int)
+// ServerProgressCallback is called during multi-server media fetching. As with
+// ProgressCallback, it may fire repeatedly per library with the running
+// itemCount and the library's totalItems.
+type ServerProgressCallback func(serverName, libraryName string, itemCount int, totalItems int, totalLibraries int, currentLibrary int, serverNum int, totalServers int)
 
-// GetAllMedia returns all media items from all libraries
+// GetAllMedia returns all media items from all libraries.
 func (c *Client) GetAllMedia(ctx context.Context, progressCallback ProgressCallback) ([]MediaItem, error) {
+	return c.getMedia(ctx, nil, progressCallback)
+}
+
+// GetMediaSince returns only items added since a per-library-type threshold,
+// for incremental cache updates. sinceFor receives the library type
+// ("movie" or "show") and returns the newest addedAt already known for that
+// type (return 0 to fetch the whole library).
+func (c *Client) GetMediaSince(ctx context.Context, sinceFor func(libType string) int64, progressCallback ProgressCallback) ([]MediaItem, error) {
+	return c.getMedia(ctx, sinceFor, progressCallback)
+}
+
+// getMedia is the shared implementation for GetAllMedia and GetMediaSince.
+func (c *Client) getMedia(ctx context.Context, sinceFor func(libType string) int64, progressCallback ProgressCallback) ([]MediaItem, error) {
 	libraries, err := c.GetLibraries(ctx)
 	if err != nil {
 		return nil, err
@@ -217,24 +235,45 @@ func (c *Client) GetAllMedia(ctx context.Context, progressCallback ProgressCallb
 	for _, lib := range libraries {
 		if lib.Type == "movie" || lib.Type == "show" {
 			currentLib++
-			media, err := c.GetMediaFromSection(ctx, lib.Key, lib.Type)
+			libTitle := lib.Title
+			libNum := currentLib
+			onPage := func(fetched, total int) {
+				if progressCallback != nil {
+					progressCallback(libTitle, fetched, total, totalLibs, libNum)
+				}
+			}
+			var since int64
+			if sinceFor != nil {
+				since = sinceFor(lib.Type)
+			}
+			media, err := c.getMediaFromSection(ctx, lib.Key, lib.Type, since, onPage)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get media from section %s: %w", lib.Title, err)
 			}
 			allMedia = append(allMedia, media...)
-
-			// Report progress
-			if progressCallback != nil {
-				progressCallback(lib.Title, len(media), totalLibs, currentLib)
-			}
 		}
 	}
 
 	return allMedia, nil
 }
 
-// GetAllMediaFromServers returns all media items from multiple Plex servers
+// GetAllMediaFromServers returns all media items from multiple Plex servers.
 func GetAllMediaFromServers(ctx context.Context, serverConfigs []struct{ Name, URL, Token string }, progressCallback ServerProgressCallback) ([]MediaItem, error) {
+	return getMediaFromServers(ctx, serverConfigs, nil, progressCallback)
+}
+
+// GetNewMediaFromServers returns only items added since a per-server,
+// per-library-type threshold across multiple Plex servers, for incremental
+// cache updates. sinceFor receives the server name and library type
+// ("movie"/"show") and returns the newest addedAt already known (0 to fetch
+// the whole library).
+func GetNewMediaFromServers(ctx context.Context, serverConfigs []struct{ Name, URL, Token string }, sinceFor func(serverName, libType string) int64, progressCallback ServerProgressCallback) ([]MediaItem, error) {
+	return getMediaFromServers(ctx, serverConfigs, sinceFor, progressCallback)
+}
+
+// getMediaFromServers is the shared implementation for GetAllMediaFromServers
+// and GetNewMediaFromServers.
+func getMediaFromServers(ctx context.Context, serverConfigs []struct{ Name, URL, Token string }, sinceFor func(serverName, libType string) int64, progressCallback ServerProgressCallback) ([]MediaItem, error) {
 	var allMedia []MediaItem
 	totalServers := len(serverConfigs)
 
@@ -265,15 +304,24 @@ func GetAllMediaFromServers(ctx context.Context, serverConfigs []struct{ Name, U
 		for _, lib := range libraries {
 			if lib.Type == "movie" || lib.Type == "show" {
 				currentLib++
-				media, err := client.GetMediaFromSection(ctx, lib.Key, lib.Type)
+				libTitle := lib.Title
+				libNum := currentLib
+				srvName := serverConfig.Name
+				srvNum := serverNum + 1
+				onPage := func(fetched, total int) {
+					if progressCallback != nil {
+						progressCallback(srvName, libTitle, fetched, total, totalLibs, libNum, srvNum, totalServers)
+					}
+				}
+				var since int64
+				if sinceFor != nil {
+					since = sinceFor(serverConfig.Name, lib.Type)
+				}
+				media, err := client.getMediaFromSection(ctx, lib.Key, lib.Type, since, onPage)
 				if err != nil {
 					return nil, fmt.Errorf("failed to get media from section %s on server %s: %w", lib.Title, serverConfig.Name, err)
 				}
 				allMedia = append(allMedia, media...)
-
-				if progressCallback != nil {
-					progressCallback(serverConfig.Name, lib.Title, len(media), totalLibs, currentLib, serverNum+1, totalServers)
-				}
 			}
 		}
 	}
@@ -281,95 +329,127 @@ func GetAllMediaFromServers(ctx context.Context, serverConfigs []struct{ Name, U
 	return allMedia, nil
 }
 
-// GetMediaFromSection returns media items from a specific library section
+// sectionPageSize is how many items to request per page when enumerating a
+// library section. Large libraries (tens of thousands of items) cause the Plex
+// server to return HTTP 500 if the entire section is requested in one
+// unpaginated call, so we always page through using the
+// X-Plex-Container-Start / X-Plex-Container-Size protocol. The size is kept
+// conservative because servers also return 500 once a single response grows
+// past a few hundred items.
+const sectionPageSize = 200
+
+// sectionMetadata mirrors a single item in a library section's Metadata array.
+type sectionMetadata struct {
+	Key                   string   `json:"key"`
+	Title                 string   `json:"title"`
+	Year                  *int     `json:"year"`
+	Summary               *string  `json:"summary"`
+	Rating                *float32 `json:"rating"`
+	Duration              *int     `json:"duration"`
+	Thumb                 *string  `json:"thumb"`
+	GrandparentTitle      *string  `json:"grandparentTitle"`
+	ParentTitle           *string  `json:"parentTitle"`
+	Index                 *int     `json:"index"`
+	ParentIndex           *int     `json:"parentIndex"`
+	ViewOffset            *int     `json:"viewOffset"`
+	ViewCount             *int     `json:"viewCount"`
+	ContentRating         *string  `json:"contentRating"`
+	Studio                *string  `json:"studio"`
+	AddedAt               *int64   `json:"addedAt"`
+	OriginallyAvailableAt *string  `json:"originallyAvailableAt"`
+	Director              []taggedItem `json:"Director"`
+	Genre                 []taggedItem `json:"Genre"`
+	Role                  []taggedItem `json:"Role"`
+	Media                 []struct {
+		Part []struct {
+			File *string `json:"file"`
+		} `json:"Part"`
+	} `json:"Media"`
+}
+
+// GetMediaFromSection returns media items from a specific library section.
+// It pages through the section rather than requesting everything at once,
+// because large libraries make the Plex server return HTTP 500 for a single
+// unpaginated /all request.
 func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionType string) ([]MediaItem, error) {
+	return c.getMediaFromSection(ctx, sectionKey, sectionType, 0, nil)
+}
+
+// getMediaFromSection is the paginating implementation behind
+// GetMediaFromSection. If onPage is non-nil it is called after each page is
+// fetched with the number of items retrieved so far and the section's total,
+// allowing callers to report incremental progress during long fetches.
+//
+// If since > 0 the section is fetched newest-first (sort=addedAt:desc) and only
+// items with addedAt >= since are returned, stopping as soon as an older item
+// is seen. This powers incremental cache updates. Boundary items (addedAt ==
+// since) are included and rely on the caller deduplicating by key.
+func (c *Client) getMediaFromSection(ctx context.Context, sectionKey, sectionType string, since int64, onPage func(fetched, total int)) ([]MediaItem, error) {
 	var items []MediaItem
 
-	// Build the URL based on section type
-	var url string
+	// Build the base URL based on section type. Pagination params are added
+	// per request below.
+	var baseURL string
 	if sectionType == "show" {
 		// For TV shows, specifically request type=4 (episodes)
-		url = fmt.Sprintf("%s/library/sections/%s/all?type=4&X-Plex-Token=%s", c.serverURL, sectionKey, c.token)
+		baseURL = fmt.Sprintf("%s/library/sections/%s/all?type=4&X-Plex-Token=%s", c.serverURL, sectionKey, c.token)
 	} else {
 		// For movies, use the default all endpoint
-		url = fmt.Sprintf("%s/library/sections/%s/all?X-Plex-Token=%s", c.serverURL, sectionKey, c.token)
+		baseURL = fmt.Sprintf("%s/library/sections/%s/all?X-Plex-Token=%s", c.serverURL, sectionKey, c.token)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+	// For incremental fetches, ask the server for newest items first so we can
+	// stop early once we reach items we already have.
+	if since > 0 {
+		baseURL += "&sort=addedAt:desc"
 	}
 
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("X-Plex-Client-Identifier", "goplexcli")
-	req.Header.Set("X-Plex-Product", "GoplexCLI")
-	req.Header.Set("X-Plex-Version", "1.0")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get library items: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// Check HTTP status code
-	if resp.StatusCode != http.StatusOK {
-		if resp.StatusCode == http.StatusUnauthorized {
-			return nil, fmt.Errorf("authentication failed: invalid or expired token (status %d)", resp.StatusCode)
+	// Page through the section, accumulating raw metadata across requests.
+	var allMetadata []sectionMetadata
+	fetched := 0
+	for start := 0; ; start += sectionPageSize {
+		page, total, err := c.fetchSectionPage(ctx, baseURL, sectionKey, start, sectionPageSize)
+		if err != nil {
+			return nil, err
 		}
-		if resp.StatusCode == http.StatusNotFound {
-			apiLogger.Printf("warning: section %s not found - it may have been removed", sectionKey)
-			return nil, fmt.Errorf("library section %s not found (status %d)", sectionKey, resp.StatusCode)
+		fetched += len(page)
+
+		// In incremental mode the page is newest-first; keep items until we
+		// hit one older than the threshold, then stop.
+		reachedKnown := false
+		if since > 0 {
+			for i := range page {
+				if valueOrZeroInt64(page[i].AddedAt) < since {
+					reachedKnown = true
+					break
+				}
+				allMetadata = append(allMetadata, page[i])
+			}
+		} else {
+			allMetadata = append(allMetadata, page...)
 		}
-		return nil, fmt.Errorf("unexpected status code %d from Plex server", resp.StatusCode)
-	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
+		// Report incremental progress so long fetches don't look frozen. The
+		// section total is meaningless in incremental mode (we fetch a small
+		// slice), so report it as unknown.
+		if onPage != nil {
+			progressTotal := total
+			if since > 0 {
+				progressTotal = 0
+			}
+			onPage(len(allMetadata), progressTotal)
+		}
 
-	// Parse the response
-	var mediaResp struct {
-		MediaContainer struct {
-			Metadata []struct {
-				Key              string   `json:"key"`
-				Title            string   `json:"title"`
-				Year             *int     `json:"year"`
-				Summary          *string  `json:"summary"`
-				Rating           *float32 `json:"rating"`
-				Duration         *int     `json:"duration"`
-				Thumb            *string  `json:"thumb"`
-				GrandparentTitle *string  `json:"grandparentTitle"`
-				ParentTitle      *string  `json:"parentTitle"`
-				Index            *int     `json:"index"`
-				ParentIndex      *int     `json:"parentIndex"`
-				ViewOffset       *int     `json:"viewOffset"`
-				ViewCount        *int     `json:"viewCount"`
-				ContentRating    *string  `json:"contentRating"`
-				Studio           *string  `json:"studio"`
-				AddedAt          *int64   `json:"addedAt"`
-				OriginallyAvailableAt *string `json:"originallyAvailableAt"`
-				Director []taggedItem `json:"Director"`
-				Genre    []taggedItem `json:"Genre"`
-				Role     []taggedItem `json:"Role"`
-				Media []struct {
-					Part []struct {
-						File *string `json:"file"`
-					} `json:"Part"`
-				} `json:"Media"`
-			} `json:"Metadata"`
-		} `json:"MediaContainer"`
-	}
-
-	if err := json.Unmarshal(body, &mediaResp); err != nil {
-		apiLogger.Printf("warning: failed to parse media response for section %s, API format may have changed: %v", sectionKey, err)
-		return nil, fmt.Errorf("failed to parse media response: %w", err)
+		// Stop when we've reached known items, exhausted the section, or the
+		// server reported fewer than a full page.
+		if reachedKnown || len(page) < sectionPageSize || (total > 0 && fetched >= total) {
+			break
+		}
 	}
 
 	if sectionType == "movie" {
 		// Process movies
-		for _, metadata := range mediaResp.MediaContainer.Metadata {
+		for _, metadata := range allMetadata {
 			// Validate required fields
 			if metadata.Key == "" {
 				apiLogger.Printf("warning: movie item missing key field, skipping")
@@ -413,7 +493,7 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 		}
 	} else if sectionType == "show" {
 		// For TV shows, we explicitly requested type=4 (episodes)
-		for _, metadata := range mediaResp.MediaContainer.Metadata {
+		for _, metadata := range allMetadata {
 			// Validate required fields
 			if metadata.Key == "" {
 				apiLogger.Printf("warning: episode item missing key field, skipping")
@@ -462,6 +542,62 @@ func (c *Client) GetMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 	}
 
 	return items, nil
+}
+
+// fetchSectionPage requests a single page of a library section and returns the
+// parsed metadata along with the section's reported total size. The container
+// pagination parameters are appended to baseURL.
+func (c *Client) fetchSectionPage(ctx context.Context, baseURL, sectionKey string, start, size int) ([]sectionMetadata, int, error) {
+	url := fmt.Sprintf("%s&X-Plex-Container-Start=%d&X-Plex-Container-Size=%d", baseURL, start, size)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Plex-Client-Identifier", "goplexcli")
+	req.Header.Set("X-Plex-Product", "GoplexCLI")
+	req.Header.Set("X-Plex-Version", "1.0")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to get library items: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Check HTTP status code
+	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusUnauthorized {
+			return nil, 0, fmt.Errorf("authentication failed: invalid or expired token (status %d)", resp.StatusCode)
+		}
+		if resp.StatusCode == http.StatusNotFound {
+			apiLogger.Printf("warning: section %s not found - it may have been removed", sectionKey)
+			return nil, 0, fmt.Errorf("library section %s not found (status %d)", sectionKey, resp.StatusCode)
+		}
+		return nil, 0, fmt.Errorf("unexpected status code %d from Plex server", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var mediaResp struct {
+		MediaContainer struct {
+			TotalSize int               `json:"totalSize"`
+			Size      int               `json:"size"`
+			Metadata  []sectionMetadata `json:"Metadata"`
+		} `json:"MediaContainer"`
+	}
+
+	if err := json.Unmarshal(body, &mediaResp); err != nil {
+		apiLogger.Printf("warning: failed to parse media response for section %s, API format may have changed: %v", sectionKey, err)
+		return nil, 0, fmt.Errorf("failed to parse media response: %w", err)
+	}
+
+	return mediaResp.MediaContainer.Metadata, mediaResp.MediaContainer.TotalSize, nil
 }
 
 // GetStreamURL returns the direct stream URL for a media item

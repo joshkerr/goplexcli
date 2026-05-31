@@ -198,7 +198,14 @@ Downloading queued items:
 		RunE:  runServerDisable,
 	}
 
-	serverCmd.AddCommand(serverListCmd, serverEnableCmd, serverDisableCmd)
+	serverRemoveCmd := &cobra.Command{
+		Use:   "remove [server-name]",
+		Short: "Remove a server from the configuration",
+		Args:  cobra.MinimumNArgs(1),
+		RunE:  runServerRemove,
+	}
+
+	serverCmd.AddCommand(serverListCmd, serverEnableCmd, serverDisableCmd, serverRemoveCmd)
 
 	// Sort command
 	sortCmd := &cobra.Command{
@@ -1737,12 +1744,54 @@ func updateCache(fullReindex bool) error {
 		return fmt.Errorf("invalid config: %w. Please run 'goplexcli login' first", err)
 	}
 
-	action := "Updating"
-	if fullReindex {
-		action = "Reindexing"
+	// An incremental update fetches only items added since the last cache and
+	// merges them in. A full reindex (or an empty/missing cache) fetches
+	// everything and replaces the cache.
+	var existing *cache.Cache
+	incremental := false
+	if !fullReindex {
+		existing, err = cache.Load()
+		if err != nil {
+			return fmt.Errorf("failed to load existing cache: %w", err)
+		}
+		incremental = len(existing.Media) > 0
+	}
+
+	action := "Reindexing"
+	if !fullReindex {
+		action = "Updating"
 	}
 
 	fmt.Println(titleStyle.Render(action + " Media Cache"))
+
+	// Newest addedAt already cached, keyed by server name then item type
+	// ("movie"/"episode"). Used to fetch only newer items during incremental
+	// updates.
+	maxAdded := map[string]map[string]int64{}
+	if incremental {
+		for _, item := range existing.Media {
+			byType := maxAdded[item.ServerName]
+			if byType == nil {
+				byType = map[string]int64{}
+				maxAdded[item.ServerName] = byType
+			}
+			if item.AddedAt > byType[item.Type] {
+				byType[item.Type] = item.AddedAt
+			}
+		}
+	}
+	// sinceFor maps a library type ("movie"/"show") to the newest addedAt known
+	// for the matching item type on the given server.
+	sinceFor := func(serverName, libType string) int64 {
+		itemType := "movie"
+		if libType == "show" {
+			itemType = "episode"
+		}
+		if byType, ok := maxAdded[serverName]; ok {
+			return byType[itemType]
+		}
+		return 0
+	}
 
 	// Check if we have multiple servers
 	enabledServers := cfg.GetEnabledServers()
@@ -1764,10 +1813,12 @@ func updateCache(fullReindex bool) error {
 			})
 		}
 
-		totalItems := 0
-		media, err = plex.GetAllMediaFromServers(ctx, serverConfigs, func(serverName, libraryName string, itemCount, totalLibs, currentLib, serverNum, totalServers int) {
-			totalItems += itemCount
-			fmt.Printf("\r\x1b[K%s [Server %d/%d: %s] [%d/%d] %s: %d items (Total: %d)",
+		serverProgress := func(serverName, libraryName string, itemCount, totalItems, totalLibs, currentLib, serverNum, totalServers int) {
+			progress := fmt.Sprintf("%d items", itemCount)
+			if totalItems > 0 {
+				progress = fmt.Sprintf("%d/%d items", itemCount, totalItems)
+			}
+			fmt.Printf("\r\x1b[K%s [Server %d/%d: %s] [%d/%d] %s: %s",
 				infoStyle.Render("Processing"),
 				serverNum,
 				totalServers,
@@ -1775,10 +1826,14 @@ func updateCache(fullReindex bool) error {
 				currentLib,
 				totalLibs,
 				libraryName,
-				itemCount,
-				totalItems,
+				progress,
 			)
-		})
+		}
+		if incremental {
+			media, err = plex.GetNewMediaFromServers(ctx, serverConfigs, sinceFor, serverProgress)
+		} else {
+			media, err = plex.GetAllMediaFromServers(ctx, serverConfigs, serverProgress)
+		}
 		if err != nil {
 			return fmt.Errorf("failed to get media: %w", err)
 		}
@@ -1807,20 +1862,29 @@ func updateCache(fullReindex bool) error {
 		fmt.Println(successStyle.Render("✓ Connected to Plex server"))
 		fmt.Println(infoStyle.Render("Fetching media library..."))
 
-		// Get all media with progress
-		totalItems := 0
-
-		media, err = client.GetAllMedia(ctx, func(libraryName string, itemCount, totalLibs, currentLib int) {
-			totalItems += itemCount
-			fmt.Printf("\r\x1b[K%s [%d/%d] %s: %d items (Total: %d)",
+		// Get media with progress
+		libraryProgress := func(libraryName string, itemCount, totalItems, totalLibs, currentLib int) {
+			progress := fmt.Sprintf("%d items", itemCount)
+			if totalItems > 0 {
+				progress = fmt.Sprintf("%d/%d items", itemCount, totalItems)
+			}
+			fmt.Printf("\r\x1b[K%s [%d/%d] %s: %s",
 				infoStyle.Render("Processing libraries"),
 				currentLib,
 				totalLibs,
 				libraryName,
-				itemCount,
-				totalItems,
+				progress,
 			)
-		})
+		}
+		if incremental {
+			// The client uses serverURL as its server name when none is set,
+			// matching how items were tagged when first cached.
+			media, err = client.GetMediaSince(ctx, func(libType string) int64 {
+				return sinceFor(serverURL, libType)
+			}, libraryProgress)
+		} else {
+			media, err = client.GetAllMedia(ctx, libraryProgress)
+		}
 		if err != nil {
 			return fmt.Errorf("failed to get media: %w", err)
 		}
@@ -1828,11 +1892,24 @@ func updateCache(fullReindex bool) error {
 
 	fmt.Println() // New line after progress
 
-	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Retrieved %d media items", len(media))))
+	// For incremental updates, merge the newly fetched items into the existing
+	// cache (deduping by server + key); a full reindex replaces it outright.
+	finalMedia := media
+	if incremental {
+		merged, added := mergeMedia(existing.Media, media)
+		finalMedia = merged
+		if added == 0 {
+			fmt.Println(successStyle.Render("✓ Cache is already up to date — no new items"))
+		} else {
+			fmt.Println(successStyle.Render(fmt.Sprintf("✓ Added %d new item(s)", added)))
+		}
+	} else {
+		fmt.Println(successStyle.Render(fmt.Sprintf("✓ Retrieved %d media items", len(finalMedia))))
+	}
 
 	// Save to cache
 	mediaCache := &cache.Cache{
-		Media: media,
+		Media: finalMedia,
 	}
 
 	if err := mediaCache.Save(); err != nil {
@@ -1846,7 +1923,7 @@ func updateCache(fullReindex bool) error {
 	episodeCount := 0
 	serverCounts := make(map[string]int)
 
-	for _, item := range media {
+	for _, item := range finalMedia {
 		switch item.Type {
 		case "movie":
 			movieCount++
@@ -1858,7 +1935,7 @@ func updateCache(fullReindex bool) error {
 		}
 	}
 
-	fmt.Println(infoStyle.Render(fmt.Sprintf("\nTotal items: %d", len(media))))
+	fmt.Println(infoStyle.Render(fmt.Sprintf("\nTotal items: %d", len(finalMedia))))
 	fmt.Println(infoStyle.Render(fmt.Sprintf("  Movies: %d", movieCount)))
 	fmt.Println(infoStyle.Render(fmt.Sprintf("  Episodes: %d", episodeCount)))
 
@@ -1870,6 +1947,36 @@ func updateCache(fullReindex bool) error {
 	}
 
 	return nil
+}
+
+// mergeMedia combines newly fetched items into the existing cached items,
+// deduplicating by server name and key. Items present in both are replaced
+// with the freshly fetched version (picking up metadata changes). It returns
+// the merged slice and the number of items that were newly added.
+func mergeMedia(existing, fetched []plex.MediaItem) ([]plex.MediaItem, int) {
+	keyOf := func(m plex.MediaItem) string { return m.ServerName + "\x00" + m.Key }
+
+	merged := make([]plex.MediaItem, len(existing))
+	copy(merged, existing)
+
+	index := make(map[string]int, len(merged))
+	for i := range merged {
+		index[keyOf(merged[i])] = i
+	}
+
+	added := 0
+	for _, item := range fetched {
+		k := keyOf(item)
+		if i, ok := index[k]; ok {
+			merged[i] = item
+			continue
+		}
+		index[k] = len(merged)
+		merged = append(merged, item)
+		added++
+	}
+
+	return merged, added
 }
 
 func runCacheInfo(cmd *cobra.Command, args []string) error {
@@ -2282,6 +2389,45 @@ func runServerDisable(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
 
+	fmt.Println(warningStyle.Render("Note: Cached items from this server will remain until next reindex"))
+
+	return nil
+}
+
+func runServerRemove(cmd *cobra.Command, args []string) error {
+	serverName := strings.Join(args, " ")
+
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	found := false
+	remaining := make([]config.PlexServer, 0, len(cfg.Servers))
+	for _, server := range cfg.Servers {
+		if !found && strings.EqualFold(server.Name, serverName) {
+			found = true
+			// Clear the legacy single-server field if it pointed at this
+			// server, otherwise MigrateLegacy would re-add it on next load.
+			if cfg.PlexURL == server.URL {
+				cfg.PlexURL = ""
+			}
+			continue
+		}
+		remaining = append(remaining, server)
+	}
+
+	if !found {
+		return fmt.Errorf("server '%s' not found", serverName)
+	}
+
+	cfg.Servers = remaining
+
+	if err := cfg.Save(); err != nil {
+		return fmt.Errorf("failed to save config: %w", err)
+	}
+
+	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Removed server '%s'", serverName)))
 	fmt.Println(warningStyle.Render("Note: Cached items from this server will remain until next reindex"))
 
 	return nil
