@@ -31,6 +31,7 @@ import (
 	"github.com/joshkerr/goplexcli/internal/queue"
 	"github.com/joshkerr/goplexcli/internal/stream"
 	"github.com/joshkerr/goplexcli/internal/ui"
+	"github.com/joshkerr/goplexcli/internal/update"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -41,6 +42,12 @@ var version = "dev"
 
 // dryRun when true shows what would be downloaded without actually downloading
 var dryRun bool
+
+// downloadDest overrides the configured download directory for this run.
+var downloadDest string
+
+// updateCheckOnly, when true, makes `update` report availability without installing.
+var updateCheckOnly bool
 
 // searchDescriptions when true also matches against item summaries
 var searchDescriptions bool
@@ -97,6 +104,7 @@ media-type picker offers "View Queue (N items)" → "Download All".`,
 		},
 	}
 	rootCmd.Flags().BoolVarP(&searchDescriptions, "descriptions", "d", false, "Also search item descriptions/summaries (default: title only)")
+	rootCmd.Flags().StringVar(&downloadDest, "dest", "", "Directory to download into (overrides download_dir in config; default: current directory)")
 
 	// Login command
 	loginCmd := &cobra.Command{
@@ -124,6 +132,7 @@ Downloading queued items:
 		RunE: runBrowse,
 	}
 	browseCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be downloaded without actually downloading")
+	browseCmd.Flags().StringVar(&downloadDest, "dest", "", "Directory to download into (overrides download_dir in config; default: current directory)")
 
 	// Cache command
 	cacheCmd := &cobra.Command{
@@ -185,24 +194,27 @@ Downloading queued items:
 	}
 
 	serverEnableCmd := &cobra.Command{
-		Use:   "enable [server-name]",
-		Short: "Enable a server for indexing",
-		Args:  cobra.MinimumNArgs(1),
-		RunE:  runServerEnable,
+		Use:               "enable [server-name]",
+		Short:             "Enable a server for indexing",
+		Args:              cobra.MinimumNArgs(1),
+		ValidArgsFunction: completeServerNames,
+		RunE:              runServerEnable,
 	}
 
 	serverDisableCmd := &cobra.Command{
-		Use:   "disable [server-name]",
-		Short: "Disable a server from indexing",
-		Args:  cobra.MinimumNArgs(1),
-		RunE:  runServerDisable,
+		Use:               "disable [server-name]",
+		Short:             "Disable a server from indexing",
+		Args:              cobra.MinimumNArgs(1),
+		ValidArgsFunction: completeServerNames,
+		RunE:              runServerDisable,
 	}
 
 	serverRemoveCmd := &cobra.Command{
-		Use:   "remove [server-name]",
-		Short: "Remove a server from the configuration",
-		Args:  cobra.MinimumNArgs(1),
-		RunE:  runServerRemove,
+		Use:               "remove [server-name]",
+		Short:             "Remove a server from the configuration",
+		Args:              cobra.MinimumNArgs(1),
+		ValidArgsFunction: completeServerNames,
+		RunE:              runServerRemove,
 	}
 
 	serverCmd.AddCommand(serverListCmd, serverEnableCmd, serverDisableCmd, serverRemoveCmd)
@@ -225,8 +237,9 @@ Examples:
   goplexcli sort name --asc                 # A-Z by title
   goplexcli sort rating --desc --limit 10   # Top 10 rated
   goplexcli sort year --desc                # Newest releases first`,
-		Args: cobra.MaximumNArgs(1),
-		RunE: runSort,
+		Args:      cobra.MaximumNArgs(1),
+		ValidArgs: []string{"name", "added", "year", "rating", "duration"},
+		RunE:      runSort,
 	}
 	sortCmd.Flags().BoolVar(&sortDesc, "desc", false, "Sort descending (default for numeric fields)")
 	sortCmd.Flags().BoolVar(&sortAsc, "asc", false, "Sort ascending (default for name)")
@@ -243,6 +256,19 @@ Examples:
 		},
 	}
 
+	// Update command
+	updateCmd := &cobra.Command{
+		Use:   "update",
+		Short: "Update goplexcli to the latest release",
+		Long: `Update goplexcli to the latest release published on GitHub.
+
+Downloads the release asset matching your platform and replaces the running
+binary in place. Use --check to see whether an update is available without
+installing it.`,
+		RunE: runUpdate,
+	}
+	updateCmd.Flags().BoolVar(&updateCheckOnly, "check", false, "Only check whether an update is available; don't install")
+
 	// Hidden subcommand invoked by the fzf preview window. Renders one
 	// media item's metadata to stdout. Not intended for direct use.
 	previewCmd := &cobra.Command{
@@ -254,12 +280,82 @@ Examples:
 		},
 	}
 
-	rootCmd.AddCommand(loginCmd, browseCmd, cacheCmd, configCmd, streamCmd, serverCmd, sortCmd, versionCmd, previewCmd)
+	rootCmd.AddCommand(loginCmd, browseCmd, cacheCmd, configCmd, streamCmd, serverCmd, sortCmd, versionCmd, updateCmd, previewCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(errorStyle.Render("Error: " + err.Error()))
 		os.Exit(1)
 	}
+}
+
+// recentlyAddedLimit caps how many items the "Recently Added" hub shows.
+const recentlyAddedLimit = 50
+
+// buildContinueWatching returns items with resumable playback progress, most
+// recently watched first. Progress reflects cache freshness ('cache reindex'
+// refreshes it for older items).
+func buildContinueWatching(media []plex.MediaItem) []plex.MediaItem {
+	var out []plex.MediaItem
+	for i := range media {
+		if ui.HasResumableProgress(&media[i]) {
+			out = append(out, media[i])
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].LastViewedAt > out[j].LastViewedAt
+	})
+	return out
+}
+
+// buildRecentlyAdded returns the most recently added items, newest first,
+// capped at limit.
+func buildRecentlyAdded(media []plex.MediaItem, limit int) []plex.MediaItem {
+	out := make([]plex.MediaItem, len(media))
+	copy(out, media)
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].AddedAt > out[j].AddedAt
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
+// toPlexPathMappings converts configured path mappings into the plex package's
+// representation used during cache indexing.
+func toPlexPathMappings(mappings []config.PathMapping) []plex.PathMapping {
+	if len(mappings) == 0 {
+		return nil
+	}
+	out := make([]plex.PathMapping, len(mappings))
+	for i, m := range mappings {
+		out[i] = plex.PathMapping{Prefix: m.Prefix, Remote: m.Remote}
+	}
+	return out
+}
+
+// completeServerNames provides shell completion for commands that take a
+// [server-name] argument. It returns the names of configured servers that
+// have not already been given on the command line.
+func completeServerNames(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+
+	already := make(map[string]struct{}, len(args))
+	for _, a := range args {
+		already[a] = struct{}{}
+	}
+
+	var names []string
+	for _, s := range cfg.Servers {
+		if _, dup := already[s.Name]; dup {
+			continue
+		}
+		names = append(names, s.Name)
+	}
+	return names, cobra.ShellCompDirectiveNoFileComp
 }
 
 func runLogin(cmd *cobra.Command, args []string) error {
@@ -852,13 +948,23 @@ func runBrowse(cmd *cobra.Command, args []string) error {
 		fmt.Println(infoStyle.Render(fmt.Sprintf("Queue has %s from previous session", ui.PluralizeItems(q.Len()))))
 	}
 
+	// Count items with resumable progress to decide whether to offer the
+	// "Continue Watching" hub. This reflects the cache's freshness; run
+	// 'cache reindex' to refresh progress on older items.
+	continueCount := 0
+	for i := range mediaCache.Media {
+		if ui.HasResumableProgress(&mediaCache.Media[i]) {
+			continueCount++
+		}
+	}
+
 browseLoop:
 	for {
 		// Ask user to select media type using fzf if available
 		var mediaType string
 		if ui.IsAvailable(cfg.FzfPath) {
 			var err error
-			mediaType, err = ui.SelectMediaTypeWithQueue(cfg.FzfPath, q.Len())
+			mediaType, err = ui.SelectMediaTypeWithQueue(cfg.FzfPath, q.Len(), continueCount)
 			if err != nil {
 				if errors.Is(err, apperrors.ErrCancelled) {
 					return nil
@@ -868,7 +974,7 @@ browseLoop:
 		} else {
 			// Fallback to manual selection
 			var err error
-			mediaType, err = selectMediaTypeManualWithQueue(q.Len())
+			mediaType, err = selectMediaTypeManualWithQueue(q.Len(), continueCount)
 			if err != nil {
 				return err
 			}
@@ -903,6 +1009,10 @@ browseLoop:
 			}
 		case "all":
 			filteredMedia = mediaCache.Media
+		case "continue watching":
+			filteredMedia = buildContinueWatching(mediaCache.Media)
+		case "recently added":
+			filteredMedia = buildRecentlyAdded(mediaCache.Media, recentlyAddedLimit)
 		default:
 			filteredMedia = mediaCache.Media
 		}
@@ -1280,27 +1390,32 @@ func handleDownloadMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) er
 		return fmt.Errorf("no valid rclone paths available")
 	}
 
+	// Resolve destination directory (--dest flag > config download_dir > cwd)
+	destDir, err := cfg.ResolveDownloadDir(downloadDest)
+	if err != nil {
+		return fmt.Errorf("failed to resolve download directory: %w", err)
+	}
+
 	// Handle dry-run mode
 	if dryRun {
 		fmt.Println(warningStyle.Render("\n[DRY RUN] Would download the following files:"))
 		for _, path := range rclonePaths {
 			fmt.Println(infoStyle.Render(fmt.Sprintf("  - %s", path)))
 		}
-		fmt.Println(warningStyle.Render(fmt.Sprintf("\n[DRY RUN] Total: %d files to current directory", len(rclonePaths))))
+		fmt.Println(warningStyle.Render(fmt.Sprintf("\n[DRY RUN] Total: %d files to %s", len(rclonePaths), destDir)))
 		return nil
 	}
 
-	fmt.Println(successStyle.Render(fmt.Sprintf("\n✓ Starting download of %d items...", len(rclonePaths))))
-
-	// Get current directory
-	cwd, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("failed to get current directory: %w", err)
+	// Ensure the destination directory exists
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return fmt.Errorf("failed to create download directory %q: %w", destDir, err)
 	}
+
+	fmt.Println(successStyle.Render(fmt.Sprintf("\n✓ Starting download of %d items to %s...", len(rclonePaths), destDir)))
 
 	// Download with rclone
 	ctx := context.Background()
-	if err := download.DownloadMultiple(ctx, rclonePaths, cwd, cfg.RclonePath); err != nil {
+	if err := download.DownloadMultiple(ctx, rclonePaths, destDir, cfg.RclonePath); err != nil {
 		return fmt.Errorf("download failed: %w", err)
 	}
 
@@ -1636,51 +1751,40 @@ func removeFromQueueManual(q *queue.Queue) error {
 }
 
 // selectMediaTypeManualWithQueue - fallback for no-fzf with queue option
-func selectMediaTypeManualWithQueue(queueCount int) (string, error) {
+func selectMediaTypeManualWithQueue(queueCount, continueCount int) (string, error) {
 	fmt.Println(infoStyle.Render("\nSelect media type:"))
 
-	optionNum := 1
-	if queueCount > 0 {
-		fmt.Printf("  %d. View Queue (%s)\n", optionNum, ui.PluralizeItems(queueCount))
-		optionNum++
+	type option struct {
+		label string
+		token string
 	}
-	fmt.Printf("  %d. Movies\n", optionNum)
-	fmt.Printf("  %d. TV Shows\n", optionNum+1)
-	fmt.Printf("  %d. All\n", optionNum+2)
+	var options []option
+	if queueCount > 0 {
+		options = append(options, option{fmt.Sprintf("View Queue (%s)", ui.PluralizeItems(queueCount)), "queue"})
+	}
+	if continueCount > 0 {
+		options = append(options, option{fmt.Sprintf("Continue Watching (%s)", ui.PluralizeItems(continueCount)), "continue watching"})
+	}
+	options = append(options,
+		option{"Recently Added", "recently added"},
+		option{"Movies", "movies"},
+		option{"TV Shows", "tv shows"},
+		option{"All", "all"},
+	)
 
-	maxChoice := optionNum + 2
-	fmt.Printf("\nChoice (1-%d): ", maxChoice)
+	for i, opt := range options {
+		fmt.Printf("  %d. %s\n", i+1, opt.label)
+	}
+	fmt.Printf("\nChoice (1-%d): ", len(options))
 
 	var choice int
 	if _, err := fmt.Scanln(&choice); err != nil {
 		return "", fmt.Errorf("failed to read selection: %w", err)
 	}
-
-	if queueCount > 0 {
-		switch choice {
-		case 1:
-			return "queue", nil
-		case 2:
-			return "movies", nil
-		case 3:
-			return "tv shows", nil
-		case 4:
-			return "all", nil
-		default:
-			return "", fmt.Errorf("invalid selection")
-		}
-	} else {
-		switch choice {
-		case 1:
-			return "movies", nil
-		case 2:
-			return "tv shows", nil
-		case 3:
-			return "all", nil
-		default:
-			return "", fmt.Errorf("invalid selection")
-		}
+	if choice < 1 || choice > len(options) {
+		return "", fmt.Errorf("invalid selection")
 	}
+	return options[choice-1].token, nil
 }
 
 // promptActionManualWithQueue - fallback for no-fzf action selection with queue
@@ -1829,10 +1933,11 @@ func updateCache(fullReindex bool) error {
 				progress,
 			)
 		}
+		mappings := toPlexPathMappings(cfg.PathMappings)
 		if incremental {
-			media, err = plex.GetNewMediaFromServers(ctx, serverConfigs, sinceFor, serverProgress)
+			media, err = plex.GetNewMediaFromServers(ctx, serverConfigs, mappings, sinceFor, serverProgress)
 		} else {
-			media, err = plex.GetAllMediaFromServers(ctx, serverConfigs, serverProgress)
+			media, err = plex.GetAllMediaFromServers(ctx, serverConfigs, mappings, serverProgress)
 		}
 		if err != nil {
 			return fmt.Errorf("failed to get media: %w", err)
@@ -1853,6 +1958,7 @@ func updateCache(fullReindex bool) error {
 		if err != nil {
 			return fmt.Errorf("failed to create plex client: %w", err)
 		}
+		client.SetPathMappings(toPlexPathMappings(cfg.PathMappings))
 
 		// Test connection
 		if err := client.Test(); err != nil {
@@ -2037,6 +2143,12 @@ func runConfig(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Println(infoStyle.Render("Token: " + tokenDisplay))
 
+	downloadDir := "(current directory)"
+	if cfg.DownloadDir != "" {
+		downloadDir = cfg.DownloadDir
+	}
+	fmt.Println(infoStyle.Render("Download dir: " + downloadDir))
+
 	configPath, _ := config.GetConfigPath()
 	fmt.Println(infoStyle.Render("\nConfig file: " + configPath))
 
@@ -2044,6 +2156,12 @@ func runConfig(cmd *cobra.Command, args []string) error {
 	fmt.Println(infoStyle.Render("Cache file: " + cachePath))
 
 	return nil
+}
+
+func runUpdate(cmd *cobra.Command, args []string) error {
+	fmt.Println(titleStyle.Render("Update"))
+	ctx := context.Background()
+	return update.Run(ctx, update.DefaultRepo, version, updateCheckOnly, os.Stdout)
 }
 
 func runStream(cmd *cobra.Command, args []string) error {

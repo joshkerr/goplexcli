@@ -119,6 +119,9 @@ goplexcli browse
 
 **Features:**
 - Select media type (Movies, TV Shows, or All)
+- **Continue Watching** - jump straight to partially-watched items (shown when
+  any exist), most recently watched first
+- **Recently Added** - browse the newest items in your library first
 - Fuzzy search across your entire library
 - **Multi-select with TAB** - Select multiple items for batch operations
 - Press **Ctrl+P** to toggle preview window with:
@@ -270,6 +273,45 @@ Display current configuration:
 goplexcli config
 ```
 
+### `goplexcli update`
+
+Update goplexcli to the latest release published on GitHub. Downloads the
+binary matching your platform and swaps it in place.
+
+```bash
+# Check whether an update is available (no install)
+goplexcli update --check
+
+# Download and install the latest release
+goplexcli update
+```
+
+Development builds (installed via `go build`/`make run` without a version)
+report that self-update is disabled — install a released binary or use
+`make install` to enable updates.
+
+### `goplexcli completion`
+
+Generate shell completion scripts. Completions include dynamic suggestions for
+configured server names (`server enable/disable/remove`) and sort fields.
+
+```bash
+# Bash (current shell)
+source <(goplexcli completion bash)
+
+# Zsh (add to a directory on $fpath)
+goplexcli completion zsh > "${fpath[1]}/_goplexcli"
+
+# Fish
+goplexcli completion fish | source
+
+# PowerShell (add to your profile)
+goplexcli completion powershell | Out-String | Invoke-Expression
+```
+
+Run `goplexcli completion <shell> --help` for instructions on installing the
+script permanently.
+
 ## Configuration
 
 Configuration files are stored in platform-specific directories:
@@ -295,11 +337,14 @@ The `config.json` file contains:
   "plex_username": "your-username",
   "mpv_path": "mpv",
   "rclone_path": "rclone",
-  "fzf_path": "fzf"
+  "fzf_path": "fzf",
+  "download_dir": "~/Downloads/Plex"
 }
 ```
 
 The config supports multiple servers. You can manually edit this file to set custom paths for mpv, rclone, or fzf if they're not in your PATH.
+
+`download_dir` sets where downloads are saved (a leading `~` is expanded to your home directory). If omitted, downloads go to the current working directory. Override per-run with the `--dest` flag, e.g. `goplexcli browse --dest ~/Movies`.
 
 ## How It Works
 
@@ -311,6 +356,11 @@ GoplexCLI caches your media library locally to enable fast, offline browsing wit
 - TV show names, season and episode numbers
 - File paths for streaming and downloading
 - Rclone remote paths (automatically converted from Plex paths)
+- Playback progress (used by the **Continue Watching** hub)
+
+> **Note:** `cache update` only fetches newly-added items, so playback progress
+> on older titles can lag behind your server. Run `goplexcli cache reindex` to
+> fully refresh **Continue Watching**.
 
 **Cache Location:**
 - macOS/Linux: `~/.config/goplexcli/cache/media.json`
@@ -330,9 +380,27 @@ GoplexCLI automatically converts Plex file paths to rclone remote paths. For exa
 plexcloudservers2:/Media/TV/ShowName/Season 01/Episode.mkv
 ```
 
-The conversion:
+**Configurable mappings (recommended):** add `path_mappings` to your config to
+control this translation explicitly. Each rule replaces a matching path prefix
+with an rclone remote; the longest matching prefix wins:
+
+```json
+{
+  "path_mappings": [
+    { "prefix": "/mnt/media/tv/", "remote": "gdrive:Media/TV/" },
+    { "prefix": "/mnt/media/", "remote": "gdrive:Media/" }
+  ]
+}
+```
+
+**Legacy fallback:** if no `path_mappings` are configured (or none match a given
+file), the original heuristic is used:
 1. Removes the `/home/joshkerr/` prefix
-2. Adds a `:` after the remote name (e.g., `plexcloudservers2`)
+2. Treats the first path component as the remote name (e.g., `plexcloudservers2`)
+   and adds a `:` after it
+
+Run `goplexcli cache reindex` after changing `path_mappings` to re-translate
+existing items.
 
 ### Streaming
 

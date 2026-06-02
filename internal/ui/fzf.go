@@ -426,24 +426,32 @@ func PromptActionWithQueue(fzfPath string, selectionCount, queueCount int) (stri
 	return strings.ToLower(selected), nil
 }
 
-// SelectMediaTypeWithQueue adds "View Queue" option when queue has items
-func SelectMediaTypeWithQueue(fzfPath string, queueCount int) (string, error) {
+// SelectMediaTypeWithQueue presents the top-level browse menu. It adds a
+// "View Queue" option when the queue has items and a "Continue Watching" hub
+// when continueCount items have resumable progress. Returns a normalized
+// selection token: "queue", "continue watching", "recently added", "movies",
+// "tv shows", or "all".
+func SelectMediaTypeWithQueue(fzfPath string, queueCount, continueCount int) (string, error) {
 	var types []string
 
 	if queueCount > 0 {
 		types = append(types, fmt.Sprintf("View Queue (%s)", PluralizeItems(queueCount)))
 	}
-
-	types = append(types, "Movies", "TV Shows", "All")
+	if continueCount > 0 {
+		types = append(types, fmt.Sprintf("Continue Watching (%s)", PluralizeItems(continueCount)))
+	}
+	types = append(types, "Recently Added", "Movies", "TV Shows", "All")
 
 	selected, _, err := SelectWithFzf(types, "Select media type:", fzfPath)
 	if err != nil {
 		return "", err
 	}
 
-	// Check if user selected queue
-	if strings.HasPrefix(selected, "View Queue") {
+	switch {
+	case strings.HasPrefix(selected, "View Queue"):
 		return "queue", nil
+	case strings.HasPrefix(selected, "Continue Watching"):
+		return "continue watching", nil
 	}
 
 	return strings.ToLower(selected), nil

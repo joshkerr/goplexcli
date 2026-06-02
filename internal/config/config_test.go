@@ -251,6 +251,58 @@ func TestSaveLoad(t *testing.T) {
 	}
 }
 
+func TestResolveDownloadDir(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		cfg      Config
+		override string
+		want     string
+	}{
+		{
+			name: "empty falls back to cwd",
+			cfg:  Config{},
+			want: cwd,
+		},
+		{
+			name: "config download dir is used",
+			cfg:  Config{DownloadDir: filepath.Join(home, "Movies")},
+			want: filepath.Join(home, "Movies"),
+		},
+		{
+			name:     "override beats config",
+			cfg:      Config{DownloadDir: filepath.Join(home, "Movies")},
+			override: filepath.Join(home, "Downloads"),
+			want:     filepath.Join(home, "Downloads"),
+		},
+		{
+			name: "tilde is expanded",
+			cfg:  Config{DownloadDir: filepath.Join("~", "PlexDownloads")},
+			want: filepath.Join(home, "PlexDownloads"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.cfg.ResolveDownloadDir(tt.override)
+			if err != nil {
+				t.Fatalf("ResolveDownloadDir() error = %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("ResolveDownloadDir() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // contains checks if s contains substr
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||

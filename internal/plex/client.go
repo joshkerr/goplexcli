@@ -34,10 +34,28 @@ func SilenceAPIWarnings() {
 }
 
 type Client struct {
-	sdk        *plexgo.PlexAPI
-	serverURL  string
-	serverName string
-	token      string
+	sdk          *plexgo.PlexAPI
+	serverURL    string
+	serverName   string
+	token        string
+	pathMappings []PathMapping
+}
+
+// PathMapping describes how to translate a Plex on-disk file path into an
+// rclone remote path. A file path beginning with Prefix has that prefix
+// replaced by Remote. For example {Prefix: "/home/joshkerr/plexcloudservers2/",
+// Remote: "plexcloudservers2:"} turns
+// "/home/joshkerr/plexcloudservers2/Media/TV/x.mkv" into
+// "plexcloudservers2:Media/TV/x.mkv".
+type PathMapping struct {
+	Prefix string
+	Remote string
+}
+
+// SetPathMappings configures the rclone path-translation rules used when
+// building media items. Mappings are tried longest-prefix-first.
+func (c *Client) SetPathMappings(mappings []PathMapping) {
+	c.pathMappings = mappings
 }
 
 type MediaItem struct {
@@ -59,6 +77,7 @@ type MediaItem struct {
 	ServerURL     string // URL of the Plex server this item belongs to
 	ViewOffset    int    // Playback position in milliseconds (0 if not started)
 	ViewCount     int    // Number of times fully watched
+	LastViewedAt  int64  // Unix timestamp of last playback (0 if never viewed)
 	ContentRating string // e.g., "PG-13", "TV-MA"
 	Studio        string // Production studio
 	Director      string // Director name(s)
@@ -258,8 +277,10 @@ func (c *Client) getMedia(ctx context.Context, sinceFor func(libType string) int
 }
 
 // GetAllMediaFromServers returns all media items from multiple Plex servers.
-func GetAllMediaFromServers(ctx context.Context, serverConfigs []struct{ Name, URL, Token string }, progressCallback ServerProgressCallback) ([]MediaItem, error) {
-	return getMediaFromServers(ctx, serverConfigs, nil, progressCallback)
+// mappings configures rclone path translation (see PathMapping); pass nil to
+// use the legacy fallback.
+func GetAllMediaFromServers(ctx context.Context, serverConfigs []struct{ Name, URL, Token string }, mappings []PathMapping, progressCallback ServerProgressCallback) ([]MediaItem, error) {
+	return getMediaFromServers(ctx, serverConfigs, mappings, nil, progressCallback)
 }
 
 // GetNewMediaFromServers returns only items added since a per-server,
@@ -267,13 +288,13 @@ func GetAllMediaFromServers(ctx context.Context, serverConfigs []struct{ Name, U
 // cache updates. sinceFor receives the server name and library type
 // ("movie"/"show") and returns the newest addedAt already known (0 to fetch
 // the whole library).
-func GetNewMediaFromServers(ctx context.Context, serverConfigs []struct{ Name, URL, Token string }, sinceFor func(serverName, libType string) int64, progressCallback ServerProgressCallback) ([]MediaItem, error) {
-	return getMediaFromServers(ctx, serverConfigs, sinceFor, progressCallback)
+func GetNewMediaFromServers(ctx context.Context, serverConfigs []struct{ Name, URL, Token string }, mappings []PathMapping, sinceFor func(serverName, libType string) int64, progressCallback ServerProgressCallback) ([]MediaItem, error) {
+	return getMediaFromServers(ctx, serverConfigs, mappings, sinceFor, progressCallback)
 }
 
 // getMediaFromServers is the shared implementation for GetAllMediaFromServers
 // and GetNewMediaFromServers.
-func getMediaFromServers(ctx context.Context, serverConfigs []struct{ Name, URL, Token string }, sinceFor func(serverName, libType string) int64, progressCallback ServerProgressCallback) ([]MediaItem, error) {
+func getMediaFromServers(ctx context.Context, serverConfigs []struct{ Name, URL, Token string }, mappings []PathMapping, sinceFor func(serverName, libType string) int64, progressCallback ServerProgressCallback) ([]MediaItem, error) {
 	var allMedia []MediaItem
 	totalServers := len(serverConfigs)
 
@@ -282,6 +303,7 @@ func getMediaFromServers(ctx context.Context, serverConfigs []struct{ Name, URL,
 		if err != nil {
 			return nil, fmt.Errorf("failed to create client for server %s: %w", serverConfig.Name, err)
 		}
+		client.SetPathMappings(mappings)
 
 		// Test connection
 		if err := client.Test(); err != nil {
@@ -353,6 +375,7 @@ type sectionMetadata struct {
 	ParentIndex           *int     `json:"parentIndex"`
 	ViewOffset            *int     `json:"viewOffset"`
 	ViewCount             *int     `json:"viewCount"`
+	LastViewedAt          *int64   `json:"lastViewedAt"`
 	ContentRating         *string  `json:"contentRating"`
 	Studio                *string  `json:"studio"`
 	AddedAt               *int64   `json:"addedAt"`
@@ -472,6 +495,7 @@ func (c *Client) getMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 				ServerURL:       c.serverURL,
 				ViewOffset:      valueOrZeroInt(metadata.ViewOffset),
 				ViewCount:       valueOrZeroInt(metadata.ViewCount),
+				LastViewedAt:    valueOrZeroInt64(metadata.LastViewedAt),
 				ContentRating:   valueOrEmpty(metadata.ContentRating),
 				Studio:          valueOrEmpty(metadata.Studio),
 				Director:        strings.Join(extractTags(metadata.Director, 0), ", "),
@@ -484,7 +508,7 @@ func (c *Client) getMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 			// Get file path
 			if len(metadata.Media) > 0 && len(metadata.Media[0].Part) > 0 {
 				item.FilePath = valueOrEmpty(metadata.Media[0].Part[0].File)
-				item.RclonePath = convertToRclonePath(item.FilePath)
+				item.RclonePath = c.convertToRclonePath(item.FilePath)
 			} else {
 				apiLogger.Printf("warning: movie %q has no media parts", metadata.Title)
 			}
@@ -520,6 +544,7 @@ func (c *Client) getMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 				ServerURL:       c.serverURL,
 				ViewOffset:      valueOrZeroInt(metadata.ViewOffset),
 				ViewCount:       valueOrZeroInt(metadata.ViewCount),
+				LastViewedAt:    valueOrZeroInt64(metadata.LastViewedAt),
 				ContentRating:   valueOrEmpty(metadata.ContentRating),
 				Studio:          valueOrEmpty(metadata.Studio),
 				Director:        strings.Join(extractTags(metadata.Director, 0), ", "),
@@ -532,7 +557,7 @@ func (c *Client) getMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 			// Get file path
 			if len(metadata.Media) > 0 && len(metadata.Media[0].Part) > 0 {
 				item.FilePath = valueOrEmpty(metadata.Media[0].Part[0].File)
-				item.RclonePath = convertToRclonePath(item.FilePath)
+				item.RclonePath = c.convertToRclonePath(item.FilePath)
 			} else {
 				apiLogger.Printf("warning: episode %q has no media parts", metadata.Title)
 			}
@@ -739,18 +764,49 @@ func (c *Client) UpdateTimeline(ratingKey string, state string, timeMs int, dura
 	return nil
 }
 
-// convertToRclonePath converts a Plex file path to an rclone remote path
-// Input: /home/joshkerr/plexcloudservers2/Media/TV/...
-// Output: plexcloudservers2:/Media/TV/...
-func convertToRclonePath(filePath string) string {
+// convertToRclonePath converts a Plex on-disk file path to an rclone remote
+// path. If the client has configured PathMappings, the first matching mapping
+// (longest prefix wins) is applied. When no mapping matches — including the
+// case of no configured mappings at all — it falls back to the legacy
+// heuristic that strips a "/home/joshkerr/" prefix and treats the first path
+// component as the remote name, preserving behavior for existing installs.
+func (c *Client) convertToRclonePath(filePath string) string {
 	if filePath == "" {
 		return ""
 	}
 
-	// Remove /home/joshkerr/ prefix
+	// Try configured mappings, longest prefix first so more specific rules win.
+	if best, ok := longestMatchingMapping(c.pathMappings, filePath); ok {
+		return best.Remote + filePath[len(best.Prefix):]
+	}
+
+	return legacyRclonePath(filePath)
+}
+
+// longestMatchingMapping returns the mapping whose Prefix is the longest prefix
+// of filePath, if any.
+func longestMatchingMapping(mappings []PathMapping, filePath string) (PathMapping, bool) {
+	var best PathMapping
+	found := false
+	for _, m := range mappings {
+		if m.Prefix == "" {
+			continue
+		}
+		if strings.HasPrefix(filePath, m.Prefix) && len(m.Prefix) > len(best.Prefix) {
+			best = m
+			found = true
+		}
+	}
+	return best, found
+}
+
+// legacyRclonePath is the original hardcoded conversion, kept as a fallback for
+// installs that have not configured path_mappings.
+// Input:  /home/joshkerr/plexcloudservers2/Media/TV/...
+// Output: plexcloudservers2:Media/TV/...
+func legacyRclonePath(filePath string) string {
 	path := strings.TrimPrefix(filePath, "/home/joshkerr/")
 
-	// Find the first directory component (plexcloudservers or plexcloudservers2)
 	parts := strings.SplitN(path, "/", 2)
 	if len(parts) < 2 {
 		return ""
@@ -759,7 +815,6 @@ func convertToRclonePath(filePath string) string {
 	remoteName := parts[0]
 	remotePath := parts[1]
 
-	// Format as rclone remote path
 	return fmt.Sprintf("%s:%s", remoteName, remotePath)
 }
 

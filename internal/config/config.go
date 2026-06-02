@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // PlexServer represents a configured Plex server.
@@ -41,6 +42,26 @@ type Config struct {
 	MPVPath    string `json:"mpv_path,omitempty"`
 	RclonePath string `json:"rclone_path,omitempty"`
 	FzfPath    string `json:"fzf_path,omitempty"`
+
+	// DownloadDir is the destination directory for downloads. A leading "~"
+	// is expanded to the user's home directory. If empty, downloads go to the
+	// current working directory. Can be overridden per-run with --dest.
+	DownloadDir string `json:"download_dir,omitempty"`
+
+	// PathMappings translate Plex on-disk file paths into rclone remote paths
+	// during cache indexing. If empty, a legacy heuristic is used.
+	PathMappings []PathMapping `json:"path_mappings,omitempty"`
+}
+
+// PathMapping translates a Plex on-disk file path prefix into an rclone remote.
+// A file path beginning with Prefix has that prefix replaced by Remote. For
+// example {Prefix: "/home/joshkerr/plexcloudservers2/", Remote:
+// "plexcloudservers2:"} turns
+// "/home/joshkerr/plexcloudservers2/Media/TV/x.mkv" into
+// "plexcloudservers2:Media/TV/x.mkv".
+type PathMapping struct {
+	Prefix string `json:"prefix"`
+	Remote string `json:"remote"`
 }
 
 // GetConfigDir returns the platform-specific config directory
@@ -164,6 +185,34 @@ func (c *Config) MigrateLegacy() error {
 		// c.PlexURL = "" // Don't clear it yet
 	}
 	return nil
+}
+
+// ResolveDownloadDir returns the directory downloads should be written to.
+// Precedence: the override argument (e.g. from a --dest flag), then the
+// configured DownloadDir, then the current working directory. A leading "~"
+// in either configured path is expanded to the user's home directory.
+func (c *Config) ResolveDownloadDir(override string) (string, error) {
+	dir := override
+	if dir == "" {
+		dir = c.DownloadDir
+	}
+	if dir == "" {
+		return os.Getwd()
+	}
+
+	if dir == "~" || strings.HasPrefix(dir, "~/") || strings.HasPrefix(dir, `~\`) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("cannot expand ~ in download dir: %w", err)
+		}
+		dir = filepath.Join(home, dir[1:])
+	}
+
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("invalid download dir %q: %w", dir, err)
+	}
+	return abs, nil
 }
 
 // GetEnabledServers returns all servers that should be indexed
