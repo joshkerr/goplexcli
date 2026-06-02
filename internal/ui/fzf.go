@@ -38,7 +38,7 @@ func SelectWithFzf(items []string, prompt string, fzfPath string) (string, int, 
 
 	// Build fzf command
 	args := []string{
-		"--height=90%",
+		"--height=50%",
 		"--reverse",
 		"--border",
 		"--prompt=" + prompt + " ",
@@ -118,7 +118,7 @@ func SelectMediaWithPreview(media []plex.MediaItem, prompt string, fzfPath strin
 	// Build fzf command with preview and multi-select support
 	args := []string{
 		"--multi",
-		"--height=90%",
+		"--height=50%",
 		"--reverse",
 		"--border",
 		"--delimiter=\t",
@@ -236,7 +236,7 @@ func SelectMediaWithCustomLabels(media []plex.MediaItem, labels []string, prompt
 	defer os.Remove(filepath.Join(os.TempDir(), "goplexcli-preview-data.json"))
 
 	args := []string{
-		"--height=90%",
+		"--height=50%",
 		"--reverse",
 		"--border",
 		"--delimiter=\t",
@@ -504,7 +504,7 @@ func SelectQueueItemsForRemoval(queue []*plex.MediaItem, fzfPath string) ([]int,
 	// Build fzf command with multi-select
 	args := []string{
 		"--multi",
-		"--height=90%",
+		"--height=50%",
 		"--reverse",
 		"--border",
 		"--delimiter=\t",
