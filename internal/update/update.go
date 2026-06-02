@@ -71,23 +71,51 @@ func (r *Release) FindAsset(name string) (*Asset, bool) {
 	return nil, false
 }
 
-// findToken discovers a GitHub token for authenticating against private repos.
-// It checks GH_TOKEN then GITHUB_TOKEN, and finally falls back to the `gh` CLI
-// if it is installed and logged in. Returns "" when no token is available.
-func findToken() string {
-	for _, env := range []string{"GH_TOKEN", "GITHUB_TOKEN"} {
-		if v := strings.TrimSpace(os.Getenv(env)); v != "" {
-			return v
+// tokenCandidates returns GitHub tokens to try, in order: $GH_TOKEN,
+// $GITHUB_TOKEN, the `gh` CLI's token, and finally "" (unauthenticated, which
+// works for public repos). Trying several makes the updater resilient to a
+// stale or invalid env token shadowing a working `gh` login.
+func tokenCandidates() []string {
+	seen := map[string]bool{}
+	var cands []string
+	add := func(t string) {
+		t = strings.TrimSpace(t)
+		if t != "" && !seen[t] {
+			seen[t] = true
+			cands = append(cands, t)
 		}
 	}
+	add(os.Getenv("GH_TOKEN"))
+	add(os.Getenv("GITHUB_TOKEN"))
 	if path, err := exec.LookPath("gh"); err == nil {
-		if out, oerr := exec.Command(path, "auth", "token").Output(); oerr == nil {
-			if t := strings.TrimSpace(string(out)); t != "" {
-				return t
+		// Strip GH_TOKEN/GITHUB_TOKEN from gh's environment so it returns its
+		// stored (keyring) login instead of echoing back a possibly-invalid env
+		// token — which is already a candidate above.
+		cmd := exec.Command(path, "auth", "token")
+		cmd.Env = envWithout(os.Environ(), "GH_TOKEN", "GITHUB_TOKEN")
+		if out, oerr := cmd.Output(); oerr == nil {
+			add(string(out))
+		}
+	}
+	return append(cands, "") // final unauthenticated attempt (public repos)
+}
+
+// envWithout returns env with any KEY=... entries for the given keys removed.
+func envWithout(env []string, keys ...string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		drop := false
+		for _, k := range keys {
+			if strings.HasPrefix(kv, k+"=") {
+				drop = true
+				break
 			}
 		}
+		if !drop {
+			out = append(out, kv)
+		}
 	}
-	return ""
+	return out
 }
 
 // LatestRelease fetches the most recent published release for repo
@@ -280,12 +308,22 @@ func Run(ctx context.Context, repo, currentVersion string, checkOnly bool, out i
 		return nil
 	}
 
-	token := findToken()
-
 	fmt.Fprintln(out, "Checking for updates...")
-	rel, err := LatestRelease(ctx, repo, token)
-	if err != nil {
-		return err
+	// Try each token candidate until one resolves the release; this tolerates a
+	// bad env token by falling back to the gh CLI, then to unauthenticated.
+	var rel *Release
+	var token string
+	var lastErr error
+	for _, cand := range tokenCandidates() {
+		r, rerr := LatestRelease(ctx, repo, cand)
+		if rerr == nil {
+			rel, token = r, cand
+			break
+		}
+		lastErr = rerr
+	}
+	if rel == nil {
+		return lastErr
 	}
 
 	cmp := CompareVersions(currentVersion, rel.TagName)
