@@ -1,11 +1,13 @@
 # Makefile for GoplexCLI
 
-# Read the version from the VERSION file with a shell `cat`. We avoid $(file)
-# (needs GNU Make 4.x; macOS ships Make 3.81, where it silently yields empty
-# and the fallback wins) and Windows `type` (fails when Make's shell is
-# Git-Bash). Make's shell is POSIX on macOS, Linux, and Windows+Git-Bash, so
-# `cat` resolves correctly everywhere we build.
+# Read the version from the VERSION file. On Windows, Make is 4.x so $(file)
+# works and is shell-independent — it resolves from PowerShell/cmd AND Git-Bash.
+# macOS ships Make 3.81 (no $(file)), so it falls back to a shell `cat`.
+ifeq ($(OS),Windows_NT)
+VERSION ?= $(or $(strip $(file <VERSION)),0.1.0)
+else
 VERSION ?= $(shell cat VERSION 2>/dev/null || echo 0.1.0)
+endif
 LDFLAGS = -ldflags "-s -w -X main.version=$(VERSION)"
 
 # GitHub repository used by the release flow.
@@ -16,6 +18,11 @@ REPO = joshkerr/goplexcli
 # must be disabled; and some Termux Go builds have an os.Args off-by-one bug
 # where argv[0] is dropped, causing every subcommand to mis-dispatch. Probe
 # for the bug and prepend a throwaway arg if needed.
+ifeq ($(OS),Windows_NT)
+# Windows is never Termux; skip the uname probe, which errors under cmd.exe
+# ("The system cannot find the path specified.") on every invocation.
+GO ?= go
+else
 ifeq ($(shell uname -o 2>/dev/null),Android)
 export GOROOT ?= $(shell readlink -f $$(command -v go) 2>/dev/null | sed 's|/bin/go$$||')
 export GOTOOLCHAIN ?= local
@@ -27,6 +34,7 @@ GO := go
 endif
 else
 GO ?= go
+endif
 endif
 
 .PHONY: build install clean test run help lint vet build-all deps bump release-preflight release
@@ -113,33 +121,33 @@ deps:
 #   make bump V=0.3.0     # write VERSION, commit, push the current branch
 #   make release          # run checks, tag v$(VERSION), push the tag
 #
-# Recipes below use POSIX shell; on Windows run them from Git Bash (the default
-# make SHELL here) rather than cmd.
+# Recipes below use only plain commands (no &&, ||, if/then, or redirects) so
+# they run whether Make's shell is cmd.exe (PowerShell) or sh (Git-Bash/macOS).
 
 # Bump the VERSION file, commit, and push. Usage: make bump V=X.Y.Z
 bump:
-	@test -n "$(V)" || { echo "Usage: make bump V=X.Y.Z"; exit 1; }
-	@printf '%s\n' "$(V)" > VERSION
+	$(if $(V),,$(error Usage: make bump V=X.Y.Z))
+	@echo $(V)>VERSION
 	@git add VERSION
 	@git commit -m "chore: bump version to $(V)"
 	@git push origin HEAD
-	@echo "Bumped to $(V) and pushed. Run 'make release' to tag and publish."
+	@echo Bumped to $(V) and pushed. Run make release to tag and publish.
 
-# Verify the tree is clean and the tag for the current VERSION is unused.
+# Verify the working tree is clean. git diff exits non-zero on changes, which
+# stops make; untracked gitignored build artifacts are not considered.
 release-preflight:
-	@git diff --quiet && git diff --cached --quiet || { echo "ERROR: working tree is dirty; commit or stash first."; exit 1; }
-	@if git rev-parse -q --verify "refs/tags/v$(VERSION)" >/dev/null 2>&1; then \
-		echo "ERROR: tag v$(VERSION) already exists; 'make bump V=...' to a new version first."; exit 1; \
-	fi
-	@echo "Preflight OK: tree clean, v$(VERSION) is free."
+	@echo Checking working tree is clean...
+	git diff --quiet
+	git diff --cached --quiet
 
 # Tag the current VERSION and push the tag to trigger the release workflow.
-# Gated on vet + tests so a broken build is never tagged.
+# Gated on vet + tests so a broken build is never tagged. `git tag` fails if the
+# tag already exists, which stops the release.
 release: release-preflight vet test
-	@echo "Tagging and pushing v$(VERSION)..."
-	@git tag -a "v$(VERSION)" -m "Release v$(VERSION)"
-	@git push origin "v$(VERSION)"
-	@echo "Pushed v$(VERSION). Track the build: https://github.com/$(REPO)/actions/workflows/release.yml"
+	@echo Tagging and pushing v$(VERSION)...
+	git tag -a v$(VERSION) -m "Release v$(VERSION)"
+	git push origin v$(VERSION)
+	@echo Pushed v$(VERSION). CI: https://github.com/$(REPO)/actions/workflows/release.yml
 
 # Show help
 help:
