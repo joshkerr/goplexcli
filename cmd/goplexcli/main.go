@@ -1153,7 +1153,9 @@ func handleMediaAction(cfg *config.Config, q *queue.Queue, selectedMediaItems []
 		if len(selectedMediaItems) > 3 {
 			fmt.Printf("You selected %d items. Add all to queue? [y/N]: ", len(selectedMediaItems))
 			var confirm string
-			fmt.Scanln(&confirm)
+			// Ignore the error: empty input / EOF leaves confirm == "", which is
+			// treated as "no" below.
+			_, _ = fmt.Scanln(&confirm)
 			if confirm != "y" && confirm != "Y" {
 				fmt.Println(warningStyle.Render("Queue add cancelled."))
 				return nil
