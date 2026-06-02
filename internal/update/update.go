@@ -3,6 +3,9 @@
 // library: the GitHub REST API for release discovery and an atomic
 // rename-based swap that also works on Windows, where a running executable
 // cannot be overwritten but can be renamed aside.
+//
+// Private repositories are supported via a GitHub token, discovered from
+// GH_TOKEN / GITHUB_TOKEN or, failing that, the `gh` CLI (`gh auth token`).
 package update
 
 import (
@@ -12,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -21,6 +25,10 @@ import (
 
 // DefaultRepo is the GitHub "owner/name" the updater pulls releases from.
 const DefaultRepo = "joshkerr/goplexcli"
+
+// binaryName is the base name of the released binaries (asset names look like
+// "<binaryName>-<os>-<arch>" with a .exe suffix on Windows).
+const binaryName = "goplexcli"
 
 // httpTimeout bounds both the release lookup and the asset download.
 const httpTimeout = 60 * time.Second
@@ -32,9 +40,12 @@ type Release struct {
 	Assets  []Asset `json:"assets"`
 }
 
-// Asset is a single downloadable file attached to a release.
+// Asset is a single downloadable file attached to a release. URL is the API
+// asset endpoint (used for authenticated downloads on private repos);
+// BrowserDownloadURL is the public direct link.
 type Asset struct {
 	Name               string `json:"name"`
+	URL                string `json:"url"`
 	BrowserDownloadURL string `json:"browser_download_url"`
 	Size               int64  `json:"size"`
 }
@@ -43,7 +54,7 @@ type Asset struct {
 // matching the names produced by `make build-all`
 // (e.g. "goplexcli-darwin-arm64", "goplexcli-windows-amd64.exe").
 func AssetName() string {
-	name := fmt.Sprintf("goplexcli-%s-%s", runtime.GOOS, runtime.GOARCH)
+	name := fmt.Sprintf("%s-%s-%s", binaryName, runtime.GOOS, runtime.GOARCH)
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
@@ -60,16 +71,39 @@ func (r *Release) FindAsset(name string) (*Asset, bool) {
 	return nil, false
 }
 
+// findToken discovers a GitHub token for authenticating against private repos.
+// It checks GH_TOKEN then GITHUB_TOKEN, and finally falls back to the `gh` CLI
+// if it is installed and logged in. Returns "" when no token is available.
+func findToken() string {
+	for _, env := range []string{"GH_TOKEN", "GITHUB_TOKEN"} {
+		if v := strings.TrimSpace(os.Getenv(env)); v != "" {
+			return v
+		}
+	}
+	if path, err := exec.LookPath("gh"); err == nil {
+		if out, oerr := exec.Command(path, "auth", "token").Output(); oerr == nil {
+			if t := strings.TrimSpace(string(out)); t != "" {
+				return t
+			}
+		}
+	}
+	return ""
+}
+
 // LatestRelease fetches the most recent published release for repo
-// ("owner/name").
-func LatestRelease(ctx context.Context, repo string) (*Release, error) {
+// ("owner/name"). If token is non-empty it is sent as a bearer credential,
+// which is required for private repositories.
+func LatestRelease(ctx context.Context, repo, token string) (*Release, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "goplexcli-selfupdate")
+	req.Header.Set("User-Agent", binaryName+"-selfupdate")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 
 	client := &http.Client{Timeout: httpTimeout}
 	resp, err := client.Do(req)
@@ -79,6 +113,9 @@ func LatestRelease(ctx context.Context, repo string) (*Release, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
+		if token == "" {
+			return nil, fmt.Errorf("no releases found for %s (if it is a private repo, set GH_TOKEN/GITHUB_TOKEN or run `gh auth login`)", repo)
+		}
 		return nil, fmt.Errorf("no releases found for %s", repo)
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -148,7 +185,11 @@ func splitVersion(v string) []int {
 // swap renames the running binary to "<exe>.old" before moving the new binary
 // into place, which is the only approach that works while the binary is
 // executing on Windows. On success it best-effort removes the ".old" file.
-func Apply(ctx context.Context, asset *Asset, exePath string) error {
+//
+// The download uses the API asset endpoint with Accept: application/octet-stream
+// so it works for private repos when token is set; GitHub redirects to a signed
+// URL and Go drops the Authorization header on the cross-host redirect.
+func Apply(ctx context.Context, asset *Asset, token, exePath string) error {
 	dir := filepath.Dir(exePath)
 
 	tmp, err := os.CreateTemp(dir, ".goplexcli-update-*")
@@ -163,12 +204,20 @@ func Apply(ctx context.Context, asset *Asset, exePath string) error {
 		}
 	}()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.BrowserDownloadURL, nil)
+	downloadURL := asset.URL
+	if downloadURL == "" {
+		downloadURL = asset.BrowserDownloadURL
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
 		tmp.Close()
 		return err
 	}
-	req.Header.Set("User-Agent", "goplexcli-selfupdate")
+	req.Header.Set("Accept", "application/octet-stream")
+	req.Header.Set("User-Agent", binaryName+"-selfupdate")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 
 	client := &http.Client{Timeout: httpTimeout}
 	resp, err := client.Do(req)
@@ -231,8 +280,10 @@ func Run(ctx context.Context, repo, currentVersion string, checkOnly bool, out i
 		return nil
 	}
 
+	token := findToken()
+
 	fmt.Fprintln(out, "Checking for updates...")
-	rel, err := LatestRelease(ctx, repo)
+	rel, err := LatestRelease(ctx, repo, token)
 	if err != nil {
 		return err
 	}
@@ -255,7 +306,7 @@ func Run(ctx context.Context, repo, currentVersion string, checkOnly bool, out i
 	}
 
 	if checkOnly {
-		fmt.Fprintln(out, "Run 'goplexcli update' to install it.")
+		fmt.Fprintf(out, "Run '%s update' to install it.\n", binaryName)
 		return nil
 	}
 
@@ -263,15 +314,15 @@ func Run(ctx context.Context, repo, currentVersion string, checkOnly bool, out i
 	if err != nil {
 		return fmt.Errorf("cannot locate current executable: %w", err)
 	}
-	if resolved, err := filepath.EvalSymlinks(exePath); err == nil {
+	if resolved, rerr := filepath.EvalSymlinks(exePath); rerr == nil {
 		exePath = resolved
 	}
 
 	fmt.Fprintf(out, "Downloading %s...\n", assetName)
-	if err := Apply(ctx, asset, exePath); err != nil {
+	if err := Apply(ctx, asset, token, exePath); err != nil {
 		return err
 	}
 
-	fmt.Fprintf(out, "Updated to %s. Restart goplexcli to use the new version.\n", rel.TagName)
+	fmt.Fprintf(out, "Updated to %s. Restart %s to use the new version.\n", rel.TagName, binaryName)
 	return nil
 }
