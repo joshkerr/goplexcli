@@ -31,6 +31,9 @@ endif
 
 .PHONY: build install clean test run help lint vet build-all deps bump release-preflight release
 
+# Running `make` with no target shows the help menu instead of building.
+.DEFAULT_GOAL := help
+
 # Build the application
 build:
 	@echo "Building goplexcli v$(VERSION)..."
