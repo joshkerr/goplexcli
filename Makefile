@@ -143,7 +143,7 @@ release: release-preflight vet test
 
 # Show help
 help:
-	@echo "GoplexCLI Makefile"
+	@echo "GoplexCLI Makefile  (current version: v$(VERSION))"
 	@echo ""
 	@echo "Usage:"
 	@echo "  make build       - Build the application"
