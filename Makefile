@@ -1,11 +1,11 @@
 # Makefile for GoplexCLI
 
-# Read the version from the VERSION file without invoking a shell, so it
-# resolves identically under cmd.exe, sh/Git-Bash, and CI. ($(file) needs
-# GNU Make 4.x; the previous `type VERSION 2>nul` form silently fell back to
-# 0.1.0 when make's shell was sh.exe on Windows.)
-FILE_VERSION := $(strip $(file <VERSION))
-VERSION ?= $(or $(FILE_VERSION),0.1.0)
+# Read the version from the VERSION file with a shell `cat`. We avoid $(file)
+# (needs GNU Make 4.x; macOS ships Make 3.81, where it silently yields empty
+# and the fallback wins) and Windows `type` (fails when Make's shell is
+# Git-Bash). Make's shell is POSIX on macOS, Linux, and Windows+Git-Bash, so
+# `cat` resolves correctly everywhere we build.
+VERSION ?= $(shell cat VERSION 2>/dev/null || echo 0.1.0)
 LDFLAGS = -ldflags "-s -w -X main.version=$(VERSION)"
 
 # GitHub repository used by the release flow.
