@@ -58,9 +58,20 @@ jobs:
     - name: Generate release notes
       id: release_notes
       run: |
-        echo "RELEASE_NOTES<<EOF" >> $GITHUB_OUTPUT
-        git log --pretty=format:"- %s" $(git describe --tags --abbrev=0 HEAD^)..HEAD >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
+        # Find the previous tag; fall back to the full history if there isn't one.
+        PREV_TAG="$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)"
+        if [ -n "$PREV_TAG" ]; then
+          RANGE="${PREV_TAG}..HEAD"
+        else
+          RANGE="HEAD"
+        fi
+        # `tformat` terminates every line (incl. the last) with a newline, so the
+        # closing heredoc delimiter below always lands on its own line.
+        {
+          echo "RELEASE_NOTES<<EOF"
+          git log --pretty=tformat:"- %s" "$RANGE"
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
 
     - name: Create Release
       uses: softprops/action-gh-release@v1
