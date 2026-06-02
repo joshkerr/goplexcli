@@ -1,11 +1,15 @@
 # Makefile for GoplexCLI
 
-ifeq ($(OS),Windows_NT)
-VERSION ?= $(shell type VERSION 2>nul || echo 0.1.0)
-else
-VERSION ?= $(shell cat VERSION 2>/dev/null || echo 0.1.0)
-endif
+# Read the version from the VERSION file without invoking a shell, so it
+# resolves identically under cmd.exe, sh/Git-Bash, and CI. ($(file) needs
+# GNU Make 4.x; the previous `type VERSION 2>nul` form silently fell back to
+# 0.1.0 when make's shell was sh.exe on Windows.)
+FILE_VERSION := $(strip $(file <VERSION))
+VERSION ?= $(or $(FILE_VERSION),0.1.0)
 LDFLAGS = -ldflags "-s -w -X main.version=$(VERSION)"
+
+# GitHub repository used by the release flow.
+REPO = joshkerr/goplexcli
 
 # Termux (Android) support. The packaged Go is -trimpath'd so GOROOT must be
 # set explicitly; Android has no upstream toolchain tarball so auto-download
@@ -25,7 +29,7 @@ else
 GO ?= go
 endif
 
-.PHONY: build install clean test run help lint vet build-all deps
+.PHONY: build install clean test run help lint vet build-all deps bump release-preflight release
 
 # Build the application
 build:
@@ -98,6 +102,42 @@ deps:
 	@$(GO) mod tidy
 	@echo "Dependencies updated"
 
+# --- Release ---------------------------------------------------------------
+# Release flow (mirrors .github/workflows/release.yml, which triggers on a
+# pushed v* tag and uploads the per-platform binaries used by 'goplexcli
+# update'):
+#
+#   make bump V=0.3.0     # write VERSION, commit, push the current branch
+#   make release          # run checks, tag v$(VERSION), push the tag
+#
+# Recipes below use POSIX shell; on Windows run them from Git Bash (the default
+# make SHELL here) rather than cmd.
+
+# Bump the VERSION file, commit, and push. Usage: make bump V=X.Y.Z
+bump:
+	@test -n "$(V)" || { echo "Usage: make bump V=X.Y.Z"; exit 1; }
+	@printf '%s\n' "$(V)" > VERSION
+	@git add VERSION
+	@git commit -m "chore: bump version to $(V)"
+	@git push origin HEAD
+	@echo "Bumped to $(V) and pushed. Run 'make release' to tag and publish."
+
+# Verify the tree is clean and the tag for the current VERSION is unused.
+release-preflight:
+	@git diff --quiet && git diff --cached --quiet || { echo "ERROR: working tree is dirty; commit or stash first."; exit 1; }
+	@if git rev-parse -q --verify "refs/tags/v$(VERSION)" >/dev/null 2>&1; then \
+		echo "ERROR: tag v$(VERSION) already exists; 'make bump V=...' to a new version first."; exit 1; \
+	fi
+	@echo "Preflight OK: tree clean, v$(VERSION) is free."
+
+# Tag the current VERSION and push the tag to trigger the release workflow.
+# Gated on vet + tests so a broken build is never tagged.
+release: release-preflight vet test
+	@echo "Tagging and pushing v$(VERSION)..."
+	@git tag -a "v$(VERSION)" -m "Release v$(VERSION)"
+	@git push origin "v$(VERSION)"
+	@echo "Pushed v$(VERSION). Track the build: https://github.com/$(REPO)/actions/workflows/release.yml"
+
 # Show help
 help:
 	@echo "GoplexCLI Makefile"
@@ -112,4 +152,6 @@ help:
 	@echo "  make vet         - Run go vet"
 	@echo "  make run         - Build and run"
 	@echo "  make deps        - Download and tidy dependencies"
+	@echo "  make bump V=X.Y.Z - Bump VERSION, commit, and push"
+	@echo "  make release     - Tag v\$$(VERSION) and push to publish a release"
 	@echo "  make help        - Show this help message"
