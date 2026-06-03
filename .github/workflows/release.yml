@@ -47,6 +47,9 @@ jobs:
         # Windows AMD64
         GOOS=windows GOARCH=amd64 go build -ldflags "$LDFLAGS" -o build/goplexcli-windows-amd64.exe ./cmd/goplexcli
 
+        # Windows ARM64
+        GOOS=windows GOARCH=arm64 go build -ldflags "$LDFLAGS" -o build/goplexcli-windows-arm64.exe ./cmd/goplexcli
+
         # Create archives (for manual download)
         cd build
         tar czf goplexcli-darwin-amd64.tar.gz goplexcli-darwin-amd64
@@ -54,6 +57,7 @@ jobs:
         tar czf goplexcli-linux-amd64.tar.gz goplexcli-linux-amd64
         tar czf goplexcli-linux-arm64.tar.gz goplexcli-linux-arm64
         zip goplexcli-windows-amd64.zip goplexcli-windows-amd64.exe
+        zip goplexcli-windows-arm64.zip goplexcli-windows-arm64.exe
 
     - name: Generate release notes
       id: release_notes
@@ -82,6 +86,7 @@ jobs:
           build/goplexcli-linux-amd64
           build/goplexcli-linux-arm64
           build/goplexcli-windows-amd64.exe
+          build/goplexcli-windows-arm64.exe
           build/*.tar.gz
           build/*.zip
         body: |
