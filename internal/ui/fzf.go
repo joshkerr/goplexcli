@@ -406,6 +406,7 @@ func PromptActionWithQueue(fzfPath string, selectionCount, queueCount int) (stri
 	actions := []string{
 		"Watch",
 		"Download",
+		"Transfer to WebDAV",
 		"SenPlayer Play",
 		"SenPlayer Download",
 		queueLabel,
@@ -421,6 +422,9 @@ func PromptActionWithQueue(fzfPath string, selectionCount, queueCount int) (stri
 	// Normalize "Add (N) to Queue" selection
 	if strings.HasPrefix(selected, "Add (") && strings.Contains(selected, "Queue") {
 		return "queue", nil
+	}
+	if selected == "Transfer to WebDAV" {
+		return "transfer", nil
 	}
 
 	return strings.ToLower(selected), nil

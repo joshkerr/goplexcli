@@ -51,6 +51,17 @@ type Config struct {
 	// PathMappings translate Plex on-disk file paths into rclone remote paths
 	// during cache indexing. If empty, a legacy heuristic is used.
 	PathMappings []PathMapping `json:"path_mappings,omitempty"`
+
+	// WebDAVUser and WebDAVPass are the shared Basic Auth credentials used for
+	// every gowebdav server discovered on the LAN (the "transfer to webdav"
+	// action). gowebdav servers advertise themselves via mDNS but do not
+	// advertise credentials, so the same user/pass is assumed across all of
+	// them. Empty values mean connect anonymously.
+	WebDAVUser string `json:"webdav_user,omitempty"`
+	WebDAVPass string `json:"webdav_pass,omitempty"`
+	// WebDAVDir is an optional sub-path under the server root to upload into
+	// (e.g. "incoming"). Empty uploads to the server root.
+	WebDAVDir string `json:"webdav_dir,omitempty"`
 }
 
 // PathMapping translates a Plex on-disk file path prefix into an rclone remote.

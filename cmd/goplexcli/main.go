@@ -33,6 +33,7 @@ import (
 	"github.com/joshkerr/goplexcli/internal/stream"
 	"github.com/joshkerr/goplexcli/internal/ui"
 	"github.com/joshkerr/goplexcli/internal/update"
+	"github.com/joshkerr/goplexcli/internal/webdav"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -220,6 +221,27 @@ Downloading queued items:
 
 	serverCmd.AddCommand(serverListCmd, serverEnableCmd, serverDisableCmd, serverRemoveCmd)
 
+	// WebDAV command: discover gowebdav transfer targets on the LAN and manage
+	// the shared credentials used to reach them.
+	webdavCmd := &cobra.Command{
+		Use:   "webdav",
+		Short: "Discover gowebdav servers and manage transfer credentials",
+	}
+
+	webdavDiscoverCmd := &cobra.Command{
+		Use:   "discover",
+		Short: "Scan the LAN for running gowebdav servers",
+		RunE:  runWebDAVDiscover,
+	}
+
+	webdavSetCredsCmd := &cobra.Command{
+		Use:   "set-creds",
+		Short: "Set the shared username/password used for all gowebdav servers",
+		RunE:  runWebDAVSetCreds,
+	}
+
+	webdavCmd.AddCommand(webdavDiscoverCmd, webdavSetCredsCmd)
+
 	// Sort command
 	sortCmd := &cobra.Command{
 		Use:   "sort [field]",
@@ -281,7 +303,7 @@ installing it.`,
 		},
 	}
 
-	rootCmd.AddCommand(loginCmd, browseCmd, cacheCmd, configCmd, streamCmd, serverCmd, sortCmd, versionCmd, updateCmd, previewCmd)
+	rootCmd.AddCommand(loginCmd, browseCmd, cacheCmd, configCmd, streamCmd, serverCmd, webdavCmd, sortCmd, versionCmd, updateCmd, previewCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(errorStyle.Render("Error: " + err.Error()))
@@ -1145,6 +1167,8 @@ func handleMediaAction(cfg *config.Config, q *queue.Queue, selectedMediaItems []
 		return handleWatchMultiple(cfg, selectedMediaItems)
 	case "download":
 		return handleDownloadMultiple(cfg, selectedMediaItems)
+	case "transfer":
+		return handleTransferToWebDAV(cfg, selectedMediaItems)
 	case "senplayer play":
 		return handleSenPlayer(cfg, selectedMediaItems, "play")
 	case "senplayer download":
@@ -1470,6 +1494,175 @@ func handleDownloadMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) er
 	}
 
 	fmt.Println(successStyle.Render("✓ All downloads complete"))
+	return nil
+}
+
+// handleTransferToWebDAV discovers gowebdav servers on the LAN via mDNS, lets
+// the user pick one, and pushes the selected media to it using rclone's WebDAV
+// backend. Credentials are the shared ones stored in config (WebDAVUser/Pass).
+func handleTransferToWebDAV(cfg *config.Config, mediaItems []*plex.MediaItem) error {
+	if len(mediaItems) == 0 {
+		return fmt.Errorf("no media items provided")
+	}
+
+	// rclone is used for the actual transfer (same requirement as downloads).
+	if !download.IsAvailable(cfg.RclonePath) {
+		return fmt.Errorf("rclone is not installed. Please install rclone to transfer media")
+	}
+
+	// Collect rclone source paths and validate (mirrors handleDownloadMultiple).
+	var rclonePaths []string
+	for _, media := range mediaItems {
+		if media.RclonePath == "" {
+			fmt.Println(warningStyle.Render(fmt.Sprintf("⚠ Skipping %s (no rclone path)", media.FormatMediaTitle())))
+			continue
+		}
+		rclonePaths = append(rclonePaths, media.RclonePath)
+	}
+	if len(rclonePaths) == 0 {
+		return fmt.Errorf("no valid rclone paths available")
+	}
+
+	// Discover gowebdav servers advertised on the LAN.
+	fmt.Println(infoStyle.Render("\nSearching for gowebdav servers on the local network..."))
+	ctx := context.Background()
+	targets, err := webdav.Discover(ctx, 3*time.Second)
+	if err != nil {
+		return fmt.Errorf("discovery failed: %w", err)
+	}
+	if len(targets) == 0 {
+		fmt.Println(warningStyle.Render("No gowebdav servers found on the network"))
+		fmt.Println(infoStyle.Render("\nTo run a gowebdav server, on another machine run:"))
+		fmt.Println(infoStyle.Render("  gowebdav -name <label> -username <user> -password <pass>"))
+		fmt.Println(infoStyle.Render("(use the same credentials you set in goplexcli config)"))
+		return nil
+	}
+
+	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Found %d server(s)\n", len(targets))))
+
+	// Select a target if more than one was found.
+	var selected *webdav.Target
+	if len(targets) == 1 {
+		selected = targets[0]
+		fmt.Println(infoStyle.Render(fmt.Sprintf("Transferring to: %s (%s)", selected.Name, selected.BaseURL())))
+	} else {
+		var names []string
+		for _, t := range targets {
+			names = append(names, fmt.Sprintf("%s (%s)", t.Name, t.BaseURL()))
+		}
+		if ui.IsAvailable(cfg.FzfPath) {
+			_, idx, err := ui.SelectWithFzf(names, "Select gowebdav server:", cfg.FzfPath)
+			if err != nil {
+				if errors.Is(err, apperrors.ErrCancelled) {
+					return nil
+				}
+				return fmt.Errorf("server selection failed: %w", err)
+			}
+			selected = targets[idx]
+		} else {
+			fmt.Println(infoStyle.Render("Available servers:"))
+			for i, name := range names {
+				fmt.Printf("  %d. %s\n", i+1, name)
+			}
+			fmt.Print("\nSelect server number: ")
+			var choice int
+			if _, err := fmt.Scanln(&choice); err != nil {
+				return fmt.Errorf("failed to read selection: %w", err)
+			}
+			if choice < 1 || choice > len(targets) {
+				return fmt.Errorf("invalid selection")
+			}
+			selected = targets[choice-1]
+		}
+	}
+
+	baseURL := selected.BaseURL()
+	if baseURL == "" {
+		return fmt.Errorf("selected server %q has no reachable address", selected.Name)
+	}
+
+	if dryRun {
+		fmt.Println(warningStyle.Render(fmt.Sprintf("\n[DRY RUN] Would transfer %d file(s) to %s:", len(rclonePaths), baseURL)))
+		for _, p := range rclonePaths {
+			fmt.Println(infoStyle.Render("  - " + p))
+		}
+		return nil
+	}
+
+	if cfg.WebDAVUser == "" && cfg.WebDAVPass == "" {
+		fmt.Println(warningStyle.Render("Note: no webdav_user/webdav_pass set in config; connecting anonymously."))
+	}
+
+	fmt.Println(successStyle.Render(fmt.Sprintf("\n✓ Starting transfer of %d item(s) to %s...", len(rclonePaths), baseURL)))
+	if err := download.UploadToWebDAV(ctx, rclonePaths, baseURL, cfg.WebDAVUser, cfg.WebDAVPass, cfg.WebDAVDir, cfg.RclonePath); err != nil {
+		return fmt.Errorf("transfer failed: %w", err)
+	}
+
+	fmt.Println(successStyle.Render("✓ All transfers complete"))
+	return nil
+}
+
+// runWebDAVDiscover scans the LAN for gowebdav servers and prints them.
+func runWebDAVDiscover(cmd *cobra.Command, args []string) error {
+	fmt.Println(titleStyle.Render("gowebdav Discovery"))
+	fmt.Println(infoStyle.Render("Searching for gowebdav servers on the local network...\n"))
+
+	ctx := context.Background()
+	targets, err := webdav.Discover(ctx, 3*time.Second)
+	if err != nil {
+		return fmt.Errorf("discovery failed: %w", err)
+	}
+
+	if len(targets) == 0 {
+		fmt.Println(warningStyle.Render("No gowebdav servers found on the network"))
+		fmt.Println(infoStyle.Render("\nStart one on another machine with:"))
+		fmt.Println(infoStyle.Render("  gowebdav -name <label> -username <user> -password <pass>"))
+		return nil
+	}
+
+	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Found %d server(s):\n", len(targets))))
+	for _, t := range targets {
+		fmt.Printf("  %-20s %s\n", t.Name, t.BaseURL())
+	}
+	return nil
+}
+
+// runWebDAVSetCreds prompts for and saves the shared gowebdav credentials.
+func runWebDAVSetCreds(cmd *cobra.Command, args []string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	fmt.Println(titleStyle.Render("gowebdav Credentials"))
+	fmt.Println(infoStyle.Render("These are shared across every gowebdav server on your LAN.\n"))
+
+	fmt.Print("Username: ")
+	var username string
+	// An empty username (just Enter) is allowed for anonymous servers; ignore
+	// the EOF/empty-input error and treat it as blank.
+	_, _ = fmt.Scanln(&username)
+
+	fmt.Print("Password: ")
+	passwordBytes, err := term.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		return fmt.Errorf("failed to read password: %w", err)
+	}
+	fmt.Println()
+
+	fmt.Print("Upload sub-directory (optional, blank = server root): ")
+	var dir string
+	_, _ = fmt.Scanln(&dir)
+
+	cfg.WebDAVUser = strings.TrimSpace(username)
+	cfg.WebDAVPass = string(passwordBytes)
+	cfg.WebDAVDir = strings.TrimSpace(dir)
+
+	if err := cfg.Save(); err != nil {
+		return fmt.Errorf("failed to save config: %w", err)
+	}
+
+	fmt.Println(successStyle.Render("✓ Saved gowebdav credentials"))
 	return nil
 }
 
@@ -1847,12 +2040,13 @@ func promptActionManualWithQueue(selectionCount, queueCount int) (string, error)
 	fmt.Println(infoStyle.Render("\nSelect action:"))
 	fmt.Println("  1. Watch")
 	fmt.Println("  2. Download")
-	fmt.Println("  3. SenPlayer Play")
-	fmt.Println("  4. SenPlayer Download")
-	fmt.Printf("  5. %s\n", queueLabel)
-	fmt.Println("  6. Stream")
-	fmt.Println("  7. Cancel")
-	fmt.Print("\nChoice (1-7): ")
+	fmt.Println("  3. Transfer to WebDAV")
+	fmt.Println("  4. SenPlayer Play")
+	fmt.Println("  5. SenPlayer Download")
+	fmt.Printf("  6. %s\n", queueLabel)
+	fmt.Println("  7. Stream")
+	fmt.Println("  8. Cancel")
+	fmt.Print("\nChoice (1-8): ")
 
 	var choice int
 	if _, err := fmt.Scanln(&choice); err != nil {
@@ -1865,14 +2059,16 @@ func promptActionManualWithQueue(selectionCount, queueCount int) (string, error)
 	case 2:
 		return "download", nil
 	case 3:
-		return "senplayer play", nil
+		return "transfer", nil
 	case 4:
-		return "senplayer download", nil
+		return "senplayer play", nil
 	case 5:
-		return "queue", nil
+		return "senplayer download", nil
 	case 6:
-		return "stream", nil
+		return "queue", nil
 	case 7:
+		return "stream", nil
+	case 8:
 		return "cancel", nil
 	default:
 		return "cancel", nil
