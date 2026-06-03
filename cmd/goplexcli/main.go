@@ -24,6 +24,7 @@ import (
 	"github.com/joshkerr/goplexcli/internal/config"
 	"github.com/joshkerr/goplexcli/internal/download"
 	apperrors "github.com/joshkerr/goplexcli/internal/errors"
+	"github.com/joshkerr/goplexcli/internal/logging"
 	"github.com/joshkerr/goplexcli/internal/player"
 	"github.com/joshkerr/goplexcli/internal/plex"
 	"github.com/joshkerr/goplexcli/internal/preview"
@@ -1345,6 +1346,7 @@ func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error
 	}()
 
 	// Connect to MPV IPC and start tracking (with context for early cancellation)
+	tracking := false
 	if err := mpvClient.ConnectWithContext(ctx); err != nil {
 		// Only show warning if it wasn't due to MPV exiting
 		if ctx.Err() == nil {
@@ -1353,16 +1355,62 @@ func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error
 	} else {
 		defer func() { _ = mpvClient.Close() }()
 		tracker.Start(ctx, 10*time.Second)
-		defer tracker.Stop()
+		tracking = true
 	}
 
 	// Wait for playback to finish
-	if err := <-errCh; err != nil {
-		return fmt.Errorf("playback failed: %w", err)
+	playbackErr := <-errCh
+
+	// Stop tracking and flush the final position into the local cache so the
+	// just-watched item appears in "Continue Watching" immediately, without
+	// waiting for a 'cache reindex'.
+	if tracking {
+		tracker.Stop()
+		persistPlaybackProgress(tracker)
+	}
+
+	if playbackErr != nil {
+		return fmt.Errorf("playback failed: %w", playbackErr)
 	}
 
 	fmt.Println(successStyle.Render("✓ Playback finished"))
 	return nil
+}
+
+// persistPlaybackProgress writes the playback positions captured during this
+// session back into the local cache, keyed by media key. This makes
+// freshly-watched items appear in the "Continue Watching" hub immediately,
+// rather than only after a 'cache reindex'. Best-effort: cache write failures
+// are logged but do not fail playback.
+func persistPlaybackProgress(tracker *progress.Tracker) {
+	offsets := tracker.Progress()
+	if len(offsets) == 0 {
+		return
+	}
+
+	mediaCache, err := cache.Load()
+	if err != nil {
+		logging.Warn("failed to load cache to persist playback progress", "error", err)
+		return
+	}
+
+	now := time.Now().Unix()
+	updated := false
+	for i := range mediaCache.Media {
+		if offsetMs, ok := offsets[mediaCache.Media[i].Key]; ok {
+			mediaCache.Media[i].ViewOffset = offsetMs
+			mediaCache.Media[i].LastViewedAt = now
+			updated = true
+		}
+	}
+
+	if !updated {
+		return
+	}
+
+	if err := mediaCache.Save(); err != nil {
+		logging.Warn("failed to persist playback progress to cache", "error", err)
+	}
 }
 
 func handleDownloadMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error {

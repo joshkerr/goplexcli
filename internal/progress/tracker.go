@@ -23,7 +23,13 @@ type Tracker struct {
 	index      int
 	mu         sync.RWMutex
 	stopCh     chan struct{}
+	stopOnce   sync.Once
 	wg         sync.WaitGroup
+	// offsets records the last reported playback position (milliseconds) for
+	// each played item by playlist index. Used to flush progress into the
+	// local cache after playback so items appear in "Continue Watching"
+	// without a full reindex.
+	offsets map[int]int
 }
 
 // NewTracker creates a new progress tracker.
@@ -33,6 +39,7 @@ func NewTracker(items []*plex.MediaItem, mpv *MPVClient, plexClient *plex.Client
 		mpv:        mpv,
 		plexClient: plexClient,
 		stopCh:     make(chan struct{}),
+		offsets:    make(map[int]int),
 	}
 }
 
@@ -82,10 +89,28 @@ func (t *Tracker) Start(ctx context.Context, interval time.Duration) {
 	}()
 }
 
-// Stop stops the progress tracker.
+// Stop stops the progress tracker. It is safe to call multiple times.
 func (t *Tracker) Stop() {
-	close(t.stopCh)
+	t.stopOnce.Do(func() {
+		close(t.stopCh)
+	})
 	t.wg.Wait()
+}
+
+// Progress returns the last reported playback position (milliseconds) for each
+// played item, keyed by the item's Plex media key. Call after Stop so the
+// tracking goroutine has finished recording the final position.
+func (t *Tracker) Progress() map[string]int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	out := make(map[string]int, len(t.offsets))
+	for index, offsetMs := range t.offsets {
+		if index >= 0 && index < len(t.items) {
+			out[t.items[index].Key] = offsetMs
+		}
+	}
+	return out
 }
 
 // trackLoop is the main tracking loop.
@@ -196,18 +221,25 @@ func (t *Tracker) tick(lastPos *float64, lastIndex *int) {
 
 // reportPosition reports the current playback position to Plex.
 func (t *Tracker) reportPosition(index int, posSeconds float64, state string) {
-	if t.plexClient == nil {
-		return
-	}
-
 	if index < 0 || index >= len(t.items) {
 		return
 	}
 
 	media := t.items[index]
-	ratingKey := extractRatingKey(media.Key)
 	timeMs := int(posSeconds * 1000)
 
+	// Record the latest position so it can be flushed into the local cache
+	// when playback ends. This happens regardless of whether Plex reporting
+	// is available, so "Continue Watching" stays accurate even offline.
+	t.mu.Lock()
+	t.offsets[index] = timeMs
+	t.mu.Unlock()
+
+	if t.plexClient == nil {
+		return
+	}
+
+	ratingKey := extractRatingKey(media.Key)
 	err := t.plexClient.UpdateTimeline(ratingKey, state, timeMs, media.Duration)
 	if err != nil {
 		log.Printf("Failed to update timeline: %v", err)

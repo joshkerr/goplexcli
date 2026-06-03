@@ -358,9 +358,11 @@ GoplexCLI caches your media library locally to enable fast, offline browsing wit
 - Rclone remote paths (automatically converted from Plex paths)
 - Playback progress (used by the **Continue Watching** hub)
 
-> **Note:** `cache update` only fetches newly-added items, so playback progress
-> on older titles can lag behind your server. Run `goplexcli cache reindex` to
-> fully refresh **Continue Watching**.
+> **Note:** Progress for items you watch *through* GoplexCLI is written back to
+> the cache as soon as playback ends, so they appear in **Continue Watching**
+> right away. Progress made on *other* Plex clients still lags until the cache
+> is refreshed — `cache update` only fetches newly-added items, so run
+> `goplexcli cache reindex` to fully refresh **Continue Watching**.
 
 **Cache Location:**
 - macOS/Linux: `~/.config/goplexcli/cache/media.json`
