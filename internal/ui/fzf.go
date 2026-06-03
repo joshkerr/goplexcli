@@ -406,11 +406,9 @@ func PromptActionWithQueue(fzfPath string, selectionCount, queueCount int) (stri
 	actions := []string{
 		"Watch",
 		"Download",
-		"Transfer to WebDAV",
-		"SenPlayer Play",
-		"SenPlayer Download",
 		queueLabel,
-		"Stream",
+		"Transfer to WebDAV",
+		"More...",
 		"Cancel",
 	}
 
@@ -425,6 +423,32 @@ func PromptActionWithQueue(fzfPath string, selectionCount, queueCount int) (stri
 	}
 	if selected == "Transfer to WebDAV" {
 		return "transfer", nil
+	}
+	if selected == "More..." {
+		return "more", nil
+	}
+
+	return strings.ToLower(selected), nil
+}
+
+// PromptMoreAction shows the secondary action menu containing the less-common
+// playback/streaming options (SenPlayer, Stream) that would otherwise clutter
+// the main action menu. Returns "cancel" when the user backs out.
+func PromptMoreAction(fzfPath string) (string, error) {
+	actions := []string{
+		"SenPlayer Play",
+		"SenPlayer Download",
+		"Stream",
+		"Back",
+	}
+
+	selected, _, err := SelectWithFzf(actions, "More actions:", fzfPath)
+	if err != nil {
+		return "", err
+	}
+
+	if selected == "Back" {
+		return "cancel", nil
 	}
 
 	return strings.ToLower(selected), nil

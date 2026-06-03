@@ -1162,6 +1162,24 @@ func handleMediaAction(cfg *config.Config, q *queue.Queue, selectedMediaItems []
 		}
 	}
 
+	// "More..." opens a submenu with the less-common playback/streaming options.
+	if action == "more" {
+		if ui.IsAvailable(cfg.FzfPath) {
+			action, err = ui.PromptMoreAction(cfg.FzfPath)
+			if err != nil {
+				if errors.Is(err, apperrors.ErrCancelled) {
+					return nil
+				}
+				return err
+			}
+		} else {
+			action, err = promptMoreActionManual()
+			if err != nil {
+				return err
+			}
+		}
+	}
+
 	switch action {
 	case "watch":
 		return handleWatchMultiple(cfg, selectedMediaItems)
@@ -2040,13 +2058,11 @@ func promptActionManualWithQueue(selectionCount, queueCount int) (string, error)
 	fmt.Println(infoStyle.Render("\nSelect action:"))
 	fmt.Println("  1. Watch")
 	fmt.Println("  2. Download")
-	fmt.Println("  3. Transfer to WebDAV")
-	fmt.Println("  4. SenPlayer Play")
-	fmt.Println("  5. SenPlayer Download")
-	fmt.Printf("  6. %s\n", queueLabel)
-	fmt.Println("  7. Stream")
-	fmt.Println("  8. Cancel")
-	fmt.Print("\nChoice (1-8): ")
+	fmt.Printf("  3. %s\n", queueLabel)
+	fmt.Println("  4. Transfer to WebDAV")
+	fmt.Println("  5. More...")
+	fmt.Println("  6. Cancel")
+	fmt.Print("\nChoice (1-6): ")
 
 	var choice int
 	if _, err := fmt.Scanln(&choice); err != nil {
@@ -2059,17 +2075,39 @@ func promptActionManualWithQueue(selectionCount, queueCount int) (string, error)
 	case 2:
 		return "download", nil
 	case 3:
-		return "transfer", nil
-	case 4:
-		return "senplayer play", nil
-	case 5:
-		return "senplayer download", nil
-	case 6:
 		return "queue", nil
-	case 7:
-		return "stream", nil
-	case 8:
+	case 4:
+		return "transfer", nil
+	case 5:
+		return "more", nil
+	case 6:
 		return "cancel", nil
+	default:
+		return "cancel", nil
+	}
+}
+
+// promptMoreActionManual - fallback for no-fzf selection of the "More..." submenu.
+func promptMoreActionManual() (string, error) {
+	fmt.Println(infoStyle.Render("\nMore actions:"))
+	fmt.Println("  1. SenPlayer Play")
+	fmt.Println("  2. SenPlayer Download")
+	fmt.Println("  3. Stream")
+	fmt.Println("  4. Back")
+	fmt.Print("\nChoice (1-4): ")
+
+	var choice int
+	if _, err := fmt.Scanln(&choice); err != nil {
+		return "", fmt.Errorf("failed to read selection: %w", err)
+	}
+
+	switch choice {
+	case 1:
+		return "senplayer play", nil
+	case 2:
+		return "senplayer download", nil
+	case 3:
+		return "stream", nil
 	default:
 		return "cancel", nil
 	}
