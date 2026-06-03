@@ -140,14 +140,17 @@ release-preflight:
 	git diff --quiet
 	git diff --cached --quiet
 
-# Tag the current VERSION and push the tag to trigger the release workflow.
-# Gated on vet + tests so a broken build is never tagged. `git tag` fails if the
-# tag already exists, which stops the release.
+# Cut a release: auto-increment the patch in VERSION (or pass V=X.Y.Z), commit,
+# tag, and push. The tag triggers the GitHub build/publish of all platforms.
+# Gated on vet + tests so a broken build is never tagged.
+# Usage: make release            (auto-increment patch)
+#        make release V=X.Y.Z     (explicit version)
 release: release-preflight vet test
-	@echo Tagging and pushing v$(VERSION)...
-	git tag -a v$(VERSION) -m "Release v$(VERSION)"
-	git push origin v$(VERSION)
-	@echo Pushed v$(VERSION). CI: https://github.com/$(REPO)/actions/workflows/release.yml
+ifeq ($(OS),Windows_NT)
+	@scripts\release.bat $(V)
+else
+	@sh scripts/release.sh $(V)
+endif
 
 # Show help
 help:
