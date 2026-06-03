@@ -834,11 +834,6 @@ func (m *MediaItem) FormatMediaTitle() string {
 		title = m.Title
 	}
 
-	// Add server name if present and multiple servers might be in use
-	if m.ServerName != "" && m.ServerName != "Default Server" {
-		title = fmt.Sprintf("[%s] %s", m.ServerName, title)
-	}
-
 	// Add progress indicator
 	if m.Duration > 0 {
 		if m.ViewCount > 0 {
