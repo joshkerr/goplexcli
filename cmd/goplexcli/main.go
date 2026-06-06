@@ -1034,8 +1034,23 @@ browseLoop:
 			filteredMedia = mediaCache.Media
 		case "continue watching":
 			filteredMedia = buildContinueWatching(mediaCache.Media)
-		case "recently added":
-			filteredMedia = buildRecentlyAdded(mediaCache.Media, recentlyAddedLimit)
+		case "recently added movies":
+			var movies []plex.MediaItem
+			for _, item := range mediaCache.Media {
+				if item.Type == "movie" {
+					movies = append(movies, item)
+				}
+			}
+			filteredMedia = buildRecentlyAdded(movies, recentlyAddedLimit)
+		case "recently added tv shows":
+			// Keep every episode so the show -> season -> episode drill-down
+			// below can resolve seasons and episodes; the recency limit is
+			// applied to the show list itself, not the episode pool.
+			for _, item := range mediaCache.Media {
+				if item.Type == "episode" {
+					filteredMedia = append(filteredMedia, item)
+				}
+			}
 		default:
 			filteredMedia = mediaCache.Media
 		}
@@ -1047,9 +1062,17 @@ browseLoop:
 
 		// For TV shows, use hierarchical drill-down: Show -> Season -> Episode
 		var selectedMediaItems []*plex.MediaItem
-		if mediaType == "tv shows" && ui.IsAvailable(cfg.FzfPath) {
-			// Step 1: Select TV show
-			shows := ui.GetUniqueTVShows(filteredMedia)
+		isTVDrillDown := mediaType == "tv shows" || mediaType == "recently added tv shows"
+		if isTVDrillDown && ui.IsAvailable(cfg.FzfPath) {
+			// Step 1: Select TV show. "Recently Added TV Shows" orders the top
+			// level shows by how recently each was updated; "TV Shows" lists
+			// them alphabetically.
+			var shows []string
+			if mediaType == "recently added tv shows" {
+				shows = ui.GetRecentlyAddedTVShows(filteredMedia, recentlyAddedLimit)
+			} else {
+				shows = ui.GetUniqueTVShows(filteredMedia)
+			}
 			if len(shows) == 0 {
 				fmt.Println(warningStyle.Render("No TV shows found."))
 				continue browseLoop
@@ -2027,7 +2050,8 @@ func selectMediaTypeManualWithQueue(queueCount, continueCount int) (string, erro
 		options = append(options, option{fmt.Sprintf("Continue Watching (%s)", ui.PluralizeItems(continueCount)), "continue watching"})
 	}
 	options = append(options,
-		option{"Recently Added", "recently added"},
+		option{"Recently Added Movies", "recently added movies"},
+		option{"Recently Added TV Shows", "recently added tv shows"},
 		option{"Movies", "movies"},
 		option{"TV Shows", "tv shows"},
 		option{"All", "all"},

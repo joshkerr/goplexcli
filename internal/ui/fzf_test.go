@@ -31,6 +31,35 @@ func TestSelectQueueItemsForRemoval_FzfNotFound(t *testing.T) {
 	}
 }
 
+func TestGetRecentlyAddedTVShows(t *testing.T) {
+	episodes := []plex.MediaItem{
+		{Type: "episode", ParentTitle: "Old Show", AddedAt: 10},
+		{Type: "episode", ParentTitle: "Old Show", AddedAt: 15},
+		{Type: "episode", ParentTitle: "Fresh Show", AddedAt: 100},
+		{Type: "episode", ParentTitle: "Mid Show", AddedAt: 50},
+		{Type: "movie", ParentTitle: "", AddedAt: 200}, // movies ignored
+		{Type: "episode", ParentTitle: "", AddedAt: 300}, // missing show name ignored
+	}
+
+	got := GetRecentlyAddedTVShows(episodes, 0)
+
+	// Each show appears once, ordered by its newest episode.
+	want := []string{"Fresh Show", "Mid Show", "Old Show"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d shows, got %d: %v", len(want), len(got), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("position %d: expected %q, got %q (full: %v)", i, want[i], got[i], got)
+		}
+	}
+
+	// The limit caps the number of shows returned.
+	if capped := GetRecentlyAddedTVShows(episodes, 2); len(capped) != 2 || capped[0] != "Fresh Show" {
+		t.Errorf("limit not applied correctly: %v", capped)
+	}
+}
+
 func TestPluralizeItems(t *testing.T) {
 	tests := []struct {
 		count    int

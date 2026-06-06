@@ -457,8 +457,8 @@ func PromptMoreAction(fzfPath string) (string, error) {
 // SelectMediaTypeWithQueue presents the top-level browse menu. It adds a
 // "View Queue" option when the queue has items and a "Continue Watching" hub
 // when continueCount items have resumable progress. Returns a normalized
-// selection token: "queue", "continue watching", "recently added", "movies",
-// "tv shows", or "all".
+// selection token: "queue", "continue watching", "recently added movies",
+// "recently added tv shows", "movies", "tv shows", or "all".
 func SelectMediaTypeWithQueue(fzfPath string, queueCount, continueCount int) (string, error) {
 	var types []string
 
@@ -468,7 +468,7 @@ func SelectMediaTypeWithQueue(fzfPath string, queueCount, continueCount int) (st
 	if continueCount > 0 {
 		types = append(types, fmt.Sprintf("Continue Watching (%s)", PluralizeItems(continueCount)))
 	}
-	types = append(types, "Recently Added", "Movies", "TV Shows", "All")
+	types = append(types, "Recently Added Movies", "Recently Added TV Shows", "Movies", "TV Shows", "All")
 
 	selected, _, err := SelectWithFzf(types, "Select media type:", fzfPath)
 	if err != nil {
@@ -689,6 +689,36 @@ func GetUniqueTVShows(episodes []plex.MediaItem) []string {
 
 	// Sort alphabetically
 	sort.Strings(shows)
+	return shows
+}
+
+// GetRecentlyAddedTVShows returns unique show names ordered by how recently
+// their newest episode was added (newest first), capped at limit. A limit of 0
+// means no cap. Episodes are grouped by show (ParentTitle), and each show is
+// ranked by the most recent AddedAt across its episodes.
+func GetRecentlyAddedTVShows(episodes []plex.MediaItem, limit int) []string {
+	latest := make(map[string]int64)
+	var shows []string
+
+	for _, ep := range episodes {
+		if ep.Type == "episode" && ep.ParentTitle != "" {
+			if _, seen := latest[ep.ParentTitle]; !seen {
+				shows = append(shows, ep.ParentTitle)
+			}
+			if ep.AddedAt > latest[ep.ParentTitle] {
+				latest[ep.ParentTitle] = ep.AddedAt
+			}
+		}
+	}
+
+	// Most recently updated show first.
+	sort.SliceStable(shows, func(i, j int) bool {
+		return latest[shows[i]] > latest[shows[j]]
+	})
+
+	if limit > 0 && len(shows) > limit {
+		shows = shows[:limit]
+	}
 	return shows
 }
 
