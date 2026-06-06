@@ -4,40 +4,56 @@ A powerful, fast, and elegant command-line interface for browsing and streaming 
 
 ## Features
 
-- **Browse Media**: Quickly browse your entire Plex library using fzf's fuzzy finder
-- **Multi-Select**: Select multiple items with TAB for batch downloads or sequential playback
-- **Download Queue**: Add items to a persistent queue for batch downloads later
-- **Rich Previews**: View detailed metadata in the preview window
-- **Stream with MPV**: Watch movies and TV shows directly with MPV player
-- **Download with Rclone**: Download media files to your local system with beautiful progress bars
-- **Remote Streaming**: Publish streams for playback on other devices via mDNS discovery
-- **Smart Caching**: Cache your media library locally for instant browsing
-- **Multi-Server Support**: Connect to and manage multiple Plex servers
-- **Media Type Filtering**: Filter by Movies, TV Shows, or browse all media
-- **Cross-Platform**: Works on macOS, Linux, and Windows
-- **Beautiful UI**: Built with Charm libraries for a polished terminal experience
+- **Browse Media** — Quickly browse your entire Plex library using fzf's fuzzy finder
+- **Search** — Pass a search term directly to find movies and TV shows instantly
+- **Multi-Select** — Select multiple items with TAB for batch downloads or sequential playback
+- **Download Queue** — Add items to a persistent queue for batch downloads later
+- **Continue Watching** — Resume playback from where you left off, with progress tracked via MPV IPC
+- **Recently Added** — Jump straight to the newest items in your library
+- **Rich Previews** — View detailed metadata (rating, duration, cast, summary) in fzf's preview pane
+- **Stream with MPV** — Watch movies and TV shows directly with MPV player
+- **Download with Rclone** — Download media files with a real-time progress bar UI
+- **Remote Streaming** — Publish streams for playback on other devices via mDNS discovery and a web UI
+- **Transfer to WebDAV** — Push media to gowebdav servers discovered on your LAN via mDNS
+- **SenPlayer Integration** — Play or download media in SenPlayer via deep links (macOS)
+- **Sort & Filter** — Sort your library by name, date added, year, rating, or duration
+- **Smart Caching** — Cache your media library locally for instant offline browsing
+- **Multi-Server Support** — Connect to and manage multiple Plex servers
+- **Hierarchical TV Browsing** — Drill down through Show → Season → Episode
+- **Self-Updating** — Update to the latest release with a single command
+- **Shell Completions** — Tab completions for Bash, Zsh, Fish, and PowerShell
+- **Cross-Platform** — Works on macOS, Linux, and Windows (AMD64 and ARM64)
+- **Beautiful UI** — Built with Charm libraries for a polished terminal experience
 
 ## Prerequisites
 
 Before using GoplexCLI, ensure you have the following installed:
 
-- **Go** 1.20+ (for building from source)
-- **fzf** - Fuzzy finder for browsing media
+- **fzf** — Fuzzy finder for browsing media (required)
   - macOS: `brew install fzf`
   - Linux: `sudo apt install fzf` or `sudo pacman -S fzf`
-  - Windows: `choco install fzf`
-- **mpv** - Media player for streaming
+  - Windows: `choco install fzf` or `winget install junegunn.fzf`
+- **mpv** — Media player for streaming (required for Watch)
   - macOS: `brew install mpv`
   - Linux: `sudo apt install mpv` or `sudo pacman -S mpv`
   - Windows: Download from [mpv.io](https://mpv.io)
-- **rclone** - For downloading media files
+- **rclone** — For downloading media files (required for Download)
   - macOS: `brew install rclone`
   - Linux: `sudo apt install rclone` or download from [rclone.org](https://rclone.org)
   - Windows: Download from [rclone.org](https://rclone.org)
+- **chafa** (optional) — Terminal image viewer for poster art in the TUI browser
+  - macOS: `brew install chafa`
+  - Linux: `sudo apt install chafa`
 
 ## Installation
 
+### From Releases
+
+Download the latest binary for your platform from the [Releases](https://github.com/joshkerr/goplexcli/releases) page and place it somewhere in your PATH.
+
 ### From Source
+
+Requires Go 1.24+.
 
 ```bash
 git clone https://github.com/joshkerr/goplexcli.git
@@ -45,292 +61,173 @@ cd goplexcli
 make build
 ```
 
-This builds the `goplexcli` binary (the fzf preview pane is rendered by a hidden
-`__preview` subcommand of the same binary, so there's nothing else to install).
+This builds the `goplexcli` binary (or `goplexcli.exe` on Windows). The fzf preview pane is rendered by a hidden `__preview` subcommand of the same binary, so there's nothing else to install.
 
 Then install to your PATH:
 
 ```bash
-# Using make (installs to GOPATH/bin)
-make install
-
-# Or manually
+# macOS/Linux
 sudo cp goplexcli /usr/local/bin/
 
-# Or add project directory to PATH
-export PATH="$PATH:/path/to/goplexcli"
+# Or use make
+make install
 ```
 
 ## Quick Start
 
-### 1. Login to Plex
-
-First, authenticate with your Plex account:
-
 ```bash
+# 1. Authenticate with Plex
 goplexcli login
-```
 
-You'll be prompted for your Plex username and password. Your credentials are used only for authentication and the resulting token is saved securely in your config directory.
-
-### 2. Build Media Cache
-
-Index your media library:
-
-```bash
+# 2. Index your media library
 goplexcli cache reindex
-```
 
-This will fetch all your movies and TV shows from your Plex server and cache them locally for fast browsing.
-
-### 3. Browse and Play
-
-Launch the media browser:
-
-```bash
+# 3. Browse and play
 goplexcli browse
 ```
 
-This will open fzf with your entire media library. Use the arrow keys or type to search, then:
+## Usage
 
-- Press **TAB** to select/deselect items (multi-select mode)
-- Press **Enter** to confirm selection
-- Choose **Watch** to stream with MPV locally (plays sequentially if multiple items)
-- Choose **Download** to download with rclone (downloads all selected items)
-- Choose **Stream** to publish for remote playback on other devices (uses first item only)
+### Quick Search
 
-## Commands
-
-### `goplexcli login`
-
-Authenticate with your Plex account and save credentials.
+Pass a search term directly to find matching media:
 
 ```bash
-goplexcli login
+goplexcli "The Lincoln Lawyer"
+goplexcli -d "time travel"    # Also search descriptions/summaries
 ```
 
-### `goplexcli browse`
+Movies can be played immediately. TV shows drill into Season → Episode selection.
 
-Browse and play media from your Plex server.
+### Browse
 
 ```bash
 goplexcli browse
+goplexcli browse --dry-run          # Show what would download without downloading
+goplexcli browse --dest ~/Movies    # Override download directory
 ```
 
-**Features:**
-- Select media type (Movies, TV Shows, or All)
-- **Continue Watching** - jump straight to partially-watched items (shown when
-  any exist), most recently watched first
-- **Recently Added** - browse the newest items in your library first
-- Fuzzy search across your entire library
-- **Multi-select with TAB** - Select multiple items for batch operations
-- Press **Ctrl+P** to toggle preview window with:
-  - Year, rating, duration
-  - Plot summary
-  - File path
-- Press **Enter** to confirm selection
-- Choose **Watch** to stream locally (creates playlist if multiple items), **Download** to save all, **Add to Queue** to save for later, or **Stream** to publish for remote playback
+The browse flow:
 
-**Multi-Select Examples:**
+1. **Pick a category** — Movies, TV Shows, All, Recently Added, Continue Watching, or View Queue
+2. **Select media** — Fuzzy search with preview pane (Ctrl+P to toggle). TAB for multi-select.
+3. **Pick an action** — Watch, Download, Transfer to WebDAV, SenPlayer Play, SenPlayer Download, Add to Queue, or Stream
+
+For TV Shows, the picker drills hierarchically: Show → Season → Episode(s).
+
+### Sort
+
+Sort and display media from your cache:
+
 ```bash
-# Select multiple episodes of a TV show
-goplexcli browse
-# Select "TV Shows"
-# Search for "Breaking Bad"
-# Press TAB on episodes 1, 2, 3
-# Press Enter
-# Choose "Watch" - plays all episodes sequentially
-
-# Batch download movies
-goplexcli browse
-# Select "Movies"
-# Press TAB on multiple movies
-# Press Enter
-# Choose "Download" - downloads all selected files
+goplexcli sort added --desc --limit 20    # Last 20 added items
+goplexcli sort name --asc                 # A-Z by title
+goplexcli sort rating --desc --limit 10   # Top 10 rated
+goplexcli sort year --desc --type movies  # Newest movie releases
+goplexcli sort duration --desc -i         # Longest items, open in picker
 ```
 
-**Using the Download Queue:**
+Available fields: `name`, `added`, `year`, `rating`, `duration`
 
-The queue lets you collect items across multiple browsing sessions and download them all at once:
+Flags:
+- `--desc` / `--asc` — Sort direction (defaults: descending for numeric fields, ascending for name)
+- `--limit N` — Max items to display (default 20)
+- `--type` — Filter: `movies`, `shows`, or `all`
+- `-i` / `--interactive` — Open results in the interactive browser for playback/download
+
+### Cache Management
 
 ```bash
-# Add items to the queue
-goplexcli browse
-# Select media, press Enter
-# Choose "Add to Queue"
-
-# Later, view and download the queue
-goplexcli browse
-# Select "View Queue" from the media type menu
-# Choose "Download All" to download everything in the queue
+goplexcli cache reindex         # Rebuild entire cache from scratch
+goplexcli cache update          # Incremental update with new media
+goplexcli cache info            # Show cache statistics
+goplexcli cache search "title"  # Search in both cache and Plex server
 ```
 
-Queue features:
-- **Persistent**: Queue survives between sessions
-- **Concurrent-safe**: Multiple instances can safely add to the queue while another downloads
-- **Deduplication**: Same item won't be added twice
-- **Manage items**: Remove individual items or clear the entire queue
-
-### `goplexcli stream`
-
-Discover and play streams published by other devices on your local network.
+### Server Management
 
 ```bash
+goplexcli server list                  # List configured servers
+goplexcli server enable "Server Name"  # Enable a server for indexing
+goplexcli server disable "Server Name" # Disable a server
+goplexcli server remove "Server Name"  # Remove a server entirely
+```
+
+### Stream Discovery
+
+Publish a stream from one device and play it on another over the local network:
+
+```bash
+# On the publishing device: browse → select → choose "Stream"
+goplexcli browse
+
+# On the consuming device: discover and play
 goplexcli stream
 ```
 
-**How it works:**
+The stream server also exposes a web UI at `http://<ip>:8765` with deep links to Infuse, VLC, OutPlayer, SenPlayer, IINA, and VidHub — play directly on an iPad, iPhone, or Apple TV from your browser.
 
-**Publishing a stream (Mac/Desktop):**
-1. Run `goplexcli browse`, select media, and choose **Stream**
-2. Server starts on port 8765 and announces via mDNS
-3. Displays a URL like `http://192.168.1.5:8765` for easy access
-
-**Consuming streams:**
-
-**Option 1: Web UI (iPad/iPhone/Any Browser)**
-- Open the displayed URL in Safari/Chrome
-- See all available streams in a mobile-friendly interface
-- Tap "Play in Infuse/VLC/Plex" to launch your favorite player
-
-**Option 2: CLI (Mac/Linux)**
-- Run `goplexcli stream` to discover servers
-- Select a stream to play in MPV
-
-**Use cases:**
-- Browse your library on Mac, watch on iPad via web UI
-- Queue up content from laptop for TV playback
-- Share streams between devices without re-browsing the library
-
-**Supported Players:**
-- Infuse (iOS/tvOS) - Deep link support
-- VLC (iOS/Android/Desktop)
-- Plex (iOS/Android/Desktop)
-- MPV (via CLI on desktop)
-
-### `goplexcli cache`
-
-Manage your local media cache.
-
-#### Update Cache
-
-Update the cache with new media (incremental):
+### Self-Update
 
 ```bash
-goplexcli cache update
+goplexcli update          # Download and install the latest release
+goplexcli update --check  # Check for updates without installing
 ```
 
-#### Rebuild Cache
-
-Rebuild the entire cache from scratch:
+### Shell Completions
 
 ```bash
-goplexcli cache reindex
-```
-
-#### Cache Info
-
-View cache statistics:
-
-```bash
-goplexcli cache info
-```
-
-#### Search Cache
-
-Search for media in your cache:
-
-```bash
-goplexcli cache search "movie title"
-```
-
-### `goplexcli server`
-
-Manage multiple Plex servers.
-
-#### List Servers
-
-List all configured servers:
-
-```bash
-goplexcli server list
-```
-
-#### Enable/Disable Servers
-
-Enable or disable specific servers:
-
-```bash
-goplexcli server enable <server-name>
-goplexcli server disable <server-name>
-```
-
-### `goplexcli config`
-
-Display current configuration:
-
-```bash
-goplexcli config
-```
-
-### `goplexcli update`
-
-Update goplexcli to the latest release published on GitHub. Downloads the
-binary matching your platform and swaps it in place.
-
-```bash
-# Check whether an update is available (no install)
-goplexcli update --check
-
-# Download and install the latest release
-goplexcli update
-```
-
-Development builds (installed via `go build`/`make run` without a version)
-report that self-update is disabled — install a released binary or use
-`make install` to enable updates.
-
-### `goplexcli completion`
-
-Generate shell completion scripts. Completions include dynamic suggestions for
-configured server names (`server enable/disable/remove`) and sort fields.
-
-```bash
-# Bash (current shell)
+# Bash
 source <(goplexcli completion bash)
 
-# Zsh (add to a directory on $fpath)
+# Zsh
 goplexcli completion zsh > "${fpath[1]}/_goplexcli"
 
 # Fish
 goplexcli completion fish | source
 
-# PowerShell (add to your profile)
+# PowerShell
 goplexcli completion powershell | Out-String | Invoke-Expression
 ```
 
-Run `goplexcli completion <shell> --help` for instructions on installing the
-script permanently.
+### WebDAV Transfer
+
+Discover [gowebdav](https://github.com/joshkerr/gowebdav) servers on your LAN and push media to them:
+
+```bash
+goplexcli webdav discover      # Scan for gowebdav servers
+goplexcli webdav set-creds     # Set shared username/password for transfers
+```
+
+Then during browse, select media and choose **Transfer to WebDAV** to push files to the discovered server.
+
+### Other Commands
+
+```bash
+goplexcli login       # Authenticate with Plex (supports multi-server)
+goplexcli config      # Show current configuration
+goplexcli version     # Show version
+```
 
 ## Configuration
 
-Configuration files are stored in platform-specific directories:
+Configuration is stored in a platform-specific directory:
 
-- **macOS**: `~/.config/goplexcli/`
-- **Linux**: `~/.config/goplexcli/` or `$XDG_CONFIG_HOME/goplexcli/`
-- **Windows**: `%APPDATA%\goplexcli\`
+| Platform | Path |
+|----------|------|
+| macOS | `~/.config/goplexcli/config.json` |
+| Linux | `~/.config/goplexcli/config.json` (or `$XDG_CONFIG_HOME`) |
+| Windows | `%APPDATA%\goplexcli\config.json` |
 
-### Config File Structure
-
-The `config.json` file contains:
+### Config File
 
 ```json
 {
+  "plex_token": "your-auth-token",
   "servers": [
     {
       "name": "My Plex Server",
-      "url": "http://your-plex-server:32400",
-      "token": "your-auth-token",
+      "url": "http://192.168.1.100:32400",
       "enabled": true
     }
   ],
@@ -338,196 +235,100 @@ The `config.json` file contains:
   "mpv_path": "mpv",
   "rclone_path": "rclone",
   "fzf_path": "fzf",
-  "download_dir": "~/Downloads/Plex"
-}
-```
-
-The config supports multiple servers. You can manually edit this file to set custom paths for mpv, rclone, or fzf if they're not in your PATH.
-
-`download_dir` sets where downloads are saved (a leading `~` is expanded to your home directory). If omitted, downloads go to the current working directory. Override per-run with the `--dest` flag, e.g. `goplexcli browse --dest ~/Movies`.
-
-## How It Works
-
-### Media Caching
-
-GoplexCLI caches your media library locally to enable fast, offline browsing with fzf. The cache stores:
-
-- Movie titles, years, and metadata
-- TV show names, season and episode numbers
-- File paths for streaming and downloading
-- Rclone remote paths (automatically converted from Plex paths)
-- Playback progress (used by the **Continue Watching** hub)
-
-> **Note:** Progress for items you watch *through* GoplexCLI is written back to
-> the cache as soon as playback ends, so they appear in **Continue Watching**
-> right away. Progress made on *other* Plex clients still lags until the cache
-> is refreshed — `cache update` only fetches newly-added items, so run
-> `goplexcli cache reindex` to fully refresh **Continue Watching**.
-
-**Cache Location:**
-- macOS/Linux: `~/.config/goplexcli/cache/media.json`
-- Windows: `%APPDATA%\goplexcli\cache\media.json`
-
-### Rclone Path Conversion
-
-GoplexCLI automatically converts Plex file paths to rclone remote paths. For example:
-
-**Plex Path:**
-```
-/home/joshkerr/plexcloudservers2/Media/TV/ShowName/Season 01/Episode.mkv
-```
-
-**Rclone Path:**
-```
-plexcloudservers2:/Media/TV/ShowName/Season 01/Episode.mkv
-```
-
-**Configurable mappings (recommended):** add `path_mappings` to your config to
-control this translation explicitly. Each rule replaces a matching path prefix
-with an rclone remote; the longest matching prefix wins:
-
-```json
-{
+  "download_dir": "~/Downloads/Plex",
   "path_mappings": [
     { "prefix": "/mnt/media/tv/", "remote": "gdrive:Media/TV/" },
     { "prefix": "/mnt/media/", "remote": "gdrive:Media/" }
-  ]
+  ],
+  "webdav_user": "user",
+  "webdav_pass": "password",
+  "webdav_dir": ""
 }
 ```
 
-**Legacy fallback:** if no `path_mappings` are configured (or none match a given
-file), the original heuristic is used:
-1. Removes the `/home/joshkerr/` prefix
-2. Treats the first path component as the remote name (e.g., `plexcloudservers2`)
-   and adds a `:` after it
+- **servers** — One or more Plex servers, individually enabled/disabled
+- **mpv_path**, **rclone_path**, **fzf_path** — Override tool paths if not in PATH
+- **download_dir** — Default download destination (`~` is expanded). Override per-run with `--dest`.
+- **path_mappings** — Translate Plex file paths to rclone remotes. Longest matching prefix wins. Run `cache reindex` after changing.
+- **webdav_user**, **webdav_pass**, **webdav_dir** — Shared credentials and optional subdirectory for gowebdav transfers (set via `goplexcli webdav set-creds`)
 
-Run `goplexcli cache reindex` after changing `path_mappings` to re-translate
-existing items.
+## How It Works
 
-### Streaming
+### Playback Progress
 
-When you choose to watch a media item, GoplexCLI:
+When you watch media through GoplexCLI, progress is tracked via MPV's IPC socket and reported back to your Plex server in real time. After playback ends, progress is also written to the local cache so items appear in **Continue Watching** immediately — no reindex needed.
 
-1. Requests a direct stream URL from your Plex server
-2. Launches MPV with the stream URL
-3. MPV handles the playback with seeking and buffering
+Progress made on *other* Plex clients requires a `cache reindex` to refresh.
 
-### Downloading
+### Resume Playback
 
-When you choose to download a media item, GoplexCLI:
+If a media item has saved progress, you'll be prompted to resume from your last position or start from the beginning.
 
-1. Extracts the rclone remote path from the cached media
-2. Uses rclone to copy the file to your current directory
-3. Displays a progress bar during download (via rclone-golib)
+### Download Queue
+
+The queue is persistent between sessions and concurrent-safe (uses file locking). Multiple instances can add items while another downloads. Duplicate items are automatically deduplicated by key.
+
+### Rclone Path Conversion
+
+GoplexCLI translates Plex on-disk file paths to rclone remote paths for downloads. Configure `path_mappings` in your config for explicit control, or the legacy heuristic strips a prefix and infers the remote name from the first path component.
 
 ## Troubleshooting
 
-### "fzf not found"
-
-Install fzf using your package manager (see Prerequisites).
-
-### "mpv not found"
-
-Install mpv using your package manager (see Prerequisites).
-
-### "rclone not found"
-
-Install rclone and ensure it's configured with your remotes:
-
-```bash
-rclone config
-```
-
-### "Cache is empty"
-
-Run `goplexcli cache reindex` to build your media cache.
-
-### "Preview binary not found"
-
-Ensure both binaries are installed:
-
-```bash
-make build
-make install
-# Or add the project directory to your PATH
-```
-
-### Authentication Issues
-
-If you're having trouble logging in:
-
-1. Verify your Plex username and password
-2. Check that your Plex server is accessible
-3. Try manually editing `~/.config/goplexcli/config.json` with your server URL and token
-
-### Stream Discovery Issues
-
-**CLI discovery (`goplexcli stream`) not working:**
-
-1. Ensure both devices are on the same local network
-2. Check firewall allows mDNS (port 5353 UDP) and HTTP (port 8765 TCP)
-3. On the publishing device, verify the stream server started successfully
-4. Try the web UI instead: `http://<publisher-ip>:8765`
-
-**Web UI not accessible:**
-
-1. Get the IP address shown when you published the stream
-2. Ensure devices are on the same network
-3. Check firewall allows port 8765 TCP
-4. Try accessing directly: `http://<ip>:8765`
-5. On iOS, ensure you're not using cellular data
-
-**Deep links not working on iOS:**
-
-1. Ensure you have Infuse, VLC, or Plex installed
-2. If the link doesn't open, copy the stream URL and paste into your player manually
-3. Some players require you to tap-and-hold the link, then choose "Open in [App]"
+| Problem | Solution |
+|---------|----------|
+| "fzf not found" | Install fzf (see Prerequisites) |
+| "mpv not found" | Install mpv (see Prerequisites) |
+| "rclone not found" | Install rclone and run `rclone config` to set up remotes |
+| "Cache is empty" | Run `goplexcli cache reindex` |
+| Stream discovery not working | Ensure both devices are on the same network. Check firewall allows mDNS (port 5353 UDP) and HTTP (port 8765 TCP). |
+| Web UI not accessible | Verify the URL shown during stream publishing. Ensure port 8765 is not blocked. |
+| Deep links not opening on iOS | Ensure the target app (Infuse, VLC, etc.) is installed. Try copy/paste of the stream URL. |
 
 ## Project Structure
 
 ```
 goplexcli/
-├── cmd/
-│   └── goplexcli/
-│       └── main.go          # Main CLI application
+├── cmd/goplexcli/       # CLI entry point and all commands
 ├── internal/
-│   ├── cache/
-│   │   └── cache.go         # Media caching logic
-│   ├── config/
-│   │   └── config.go        # Configuration management
-│   ├── download/
-│   │   └── download.go      # Rclone download integration
-│   ├── player/
-│   │   └── player.go        # MPV player integration
-│   ├── plex/
-│   │   └── client.go        # Plex API client
-│   ├── queue/
-│   │   └── queue.go         # Persistent download queue
-│   ├── stream/
-│   │   └── server.go        # Stream server and mDNS discovery
-│   └── ui/
-│       └── fzf.go           # fzf integration
-├── Makefile                 # Build automation
+│   ├── cache/           # JSON-based media cache
+│   ├── config/          # Configuration loading/saving/validation
+│   ├── download/        # Rclone download with progress UI
+│   ├── errors/          # Shared error types
+│   ├── interfaces/      # Shared interfaces
+│   ├── logging/         # Logging utilities
+│   ├── player/          # MPV player wrapper
+│   ├── plex/            # Plex API client (SDK + direct HTTP)
+│   ├── preview/         # fzf preview pane renderer
+│   ├── progress/        # MPV IPC progress tracker
+│   ├── queue/           # Persistent download queue with file locking
+│   ├── stream/          # Stream server, mDNS, and web UI
+│   ├── termuxfix/       # Termux/Android compatibility
+│   ├── ui/              # fzf integration, TUI browser, resume prompts
+│   ├── update/          # Self-update from GitHub releases
+│   └── webdav/          # gowebdav server discovery via mDNS
+├── Makefile
 ├── go.mod
-├── go.sum
-├── .gitignore
-└── README.md
+└── go.sum
 ```
 
 ## Dependencies
 
-- [LukeHagar/plexgo](https://github.com/LukeHagar/plexgo) - Plex API SDK
-- [charmbracelet/lipgloss](https://github.com/charmbracelet/lipgloss) - Terminal styling
-- [charmbracelet/bubbletea](https://github.com/charmbracelet/bubbletea) - TUI framework
-- [spf13/cobra](https://github.com/spf13/cobra) - CLI framework
-- [joshkerr/rclone-golib](https://github.com/joshkerr/rclone-golib) - Rclone integration with progress bars
-- [gofrs/flock](https://github.com/gofrs/flock) - Cross-platform file locking
-- [golang.org/x/term](https://golang.org/x/term) - Secure terminal input
+**Go Libraries:**
+- [plexgo](https://github.com/LukeHagar/plexgo) — Plex API SDK
+- [bubbletea](https://github.com/charmbracelet/bubbletea) — TUI framework
+- [lipgloss](https://github.com/charmbracelet/lipgloss) — Terminal styling
+- [cobra](https://github.com/spf13/cobra) — CLI framework
+- [rclone-golib](https://github.com/joshkerr/rclone-golib) — Rclone integration with progress bars
+- [flock](https://github.com/gofrs/flock) — Cross-platform file locking
+- [zeroconf](https://github.com/grandcat/zeroconf) — mDNS/DNS-SD discovery
+- [fuzzy](https://github.com/sahilm/fuzzy) — Fuzzy matching
+- [term](https://golang.org/x/term) — Secure terminal input
 
 **External Tools:**
-- [fzf](https://github.com/junegunn/fzf) - Fuzzy finder
-- [mpv](https://mpv.io) - Media player
-- [rclone](https://rclone.org) - Cloud storage sync
+- [fzf](https://github.com/junegunn/fzf) — Fuzzy finder
+- [mpv](https://mpv.io) — Media player
+- [rclone](https://rclone.org) — Cloud storage transfers
+- [chafa](https://hpjansson.org/chafa/) (optional) — Terminal image rendering
 
 ## Contributing
 
@@ -535,10 +336,4 @@ Contributions are welcome! Please feel free to submit issues or pull requests.
 
 ## License
 
-MIT License - See LICENSE file for details
-
-## Acknowledgments
-
-- Built with [Charm](https://charm.sh/) libraries for beautiful terminal UIs
-- Plex API integration via [plexgo](https://github.com/LukeHagar/plexgo)
-- File downloads via [rclone-golib](https://github.com/joshkerr/rclone-golib)
+MIT License — See [LICENSE](LICENSE) for details.
