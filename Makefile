@@ -37,7 +37,7 @@ GO ?= go
 endif
 endif
 
-.PHONY: build install clean test run help lint vet build-all deps bump release-preflight release
+.PHONY: build install clean test run help lint vet build-all deps bump release-preflight release gui-dev gui-build gui-deps
 
 # Running `make` with no target shows the help menu instead of building.
 .DEFAULT_GOAL := help
@@ -113,6 +113,27 @@ deps:
 	@$(GO) mod tidy
 	@echo "Dependencies updated"
 
+# --- Desktop GUI -----------------------------------------------------------
+# The cross-platform desktop GUI lives in ./gui and is built with Wails v2.
+# It reuses the same internal packages as the CLI. Requires the Wails CLI and
+# Node.js (see 'make gui-deps'). Builds land in gui/build/bin.
+
+# Install the Wails CLI (one-time). Node.js must already be installed.
+gui-deps:
+	@echo "Installing Wails CLI..."
+	@$(GO) install github.com/wailsapp/wails/v2/cmd/wails@latest
+	@echo "Done. Ensure $$(go env GOPATH)/bin is on your PATH."
+
+# Run the GUI in development mode with hot reload.
+gui-dev:
+	@cd gui && wails dev
+
+# Build the native GUI binary for the current platform.
+gui-build:
+	@echo "Building GoplexCLI desktop app..."
+	@cd gui && wails build
+	@echo "Build complete: ./gui/build/bin/"
+
 # --- Release ---------------------------------------------------------------
 # Release flow (mirrors .github/workflows/release.yml, which triggers on a
 # pushed v* tag and uploads the per-platform binaries used by 'goplexcli
@@ -165,6 +186,9 @@ help:
 	@echo "  make lint        - Run golangci-lint"
 	@echo "  make vet         - Run go vet"
 	@echo "  make run         - Build and run"
+	@echo "  make gui-deps    - Install the Wails CLI (for the desktop GUI)"
+	@echo "  make gui-dev     - Run the desktop GUI with hot reload"
+	@echo "  make gui-build   - Build the native desktop GUI binary"
 	@echo "  make deps        - Download and tidy dependencies"
 	@echo "  make bump V=X.Y.Z - Bump VERSION, commit, and push"
 	@echo "  make release     - Tag v\$$(VERSION) and push to publish a release"

@@ -91,6 +91,27 @@ func (c *Cache) IsStale(maxAge time.Duration) bool {
 	return time.Since(c.LastUpdated) > maxAge
 }
 
+// ApplyOffsets writes playback positions (milliseconds, keyed by media key)
+// into the matching cached items, updating ViewOffset and LastViewedAt. It is
+// used after playback to flush progress into the local cache so items appear in
+// "Continue Watching" immediately, without a full reindex. It returns true if
+// any item was updated. Callers persist the change with Save().
+func (c *Cache) ApplyOffsets(offsets map[string]int) bool {
+	if len(offsets) == 0 {
+		return false
+	}
+	now := time.Now().Unix()
+	updated := false
+	for i := range c.Media {
+		if offsetMs, ok := offsets[c.Media[i].Key]; ok {
+			c.Media[i].ViewOffset = offsetMs
+			c.Media[i].LastViewedAt = now
+			updated = true
+		}
+	}
+	return updated
+}
+
 // GetMediaByTitle returns media items that match the given title
 func (c *Cache) GetMediaByTitle(title string) []plex.MediaItem {
 	var results []plex.MediaItem

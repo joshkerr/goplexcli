@@ -10,6 +10,30 @@ import (
 	"github.com/joshkerr/goplexcli/internal/plex"
 )
 
+func TestApplyOffsets(t *testing.T) {
+	c := &Cache{Media: []plex.MediaItem{
+		{Key: "a", Duration: 1000},
+		{Key: "b", Duration: 2000},
+	}}
+
+	if c.ApplyOffsets(nil) {
+		t.Fatal("ApplyOffsets(nil) should report no update")
+	}
+
+	if !c.ApplyOffsets(map[string]int{"a": 500, "missing": 999}) {
+		t.Fatal("ApplyOffsets should report an update when a key matches")
+	}
+	if c.Media[0].ViewOffset != 500 {
+		t.Errorf("expected ViewOffset 500 for item a, got %d", c.Media[0].ViewOffset)
+	}
+	if c.Media[0].LastViewedAt == 0 {
+		t.Error("expected LastViewedAt to be set for updated item")
+	}
+	if c.Media[1].ViewOffset != 0 {
+		t.Errorf("expected item b untouched, got ViewOffset %d", c.Media[1].ViewOffset)
+	}
+}
+
 func TestIsStale(t *testing.T) {
 	tests := []struct {
 		name        string

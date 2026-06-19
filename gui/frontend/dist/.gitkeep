@@ -1,0 +1,2 @@
+# Keeps dist present so the go:embed in gui/main.go compiles before the
+# frontend is built. Real assets are produced by `wails build`.

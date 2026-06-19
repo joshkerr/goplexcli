@@ -101,6 +101,11 @@ func playWithMPV(mpvPath string, streamURLs []string, opts PlaybackOptions) erro
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 
+	// On Windows, prevent a stray console window from appearing when launched
+	// from a GUI app (or via a console-mode shim). No-op on other platforms.
+	// mpv's own video window is unaffected.
+	configureMPVProc(cmd)
+
 	// Start mpv
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start mpv: %w", err)

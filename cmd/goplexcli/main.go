@@ -1459,17 +1459,7 @@ func persistPlaybackProgress(tracker *progress.Tracker) {
 		return
 	}
 
-	now := time.Now().Unix()
-	updated := false
-	for i := range mediaCache.Media {
-		if offsetMs, ok := offsets[mediaCache.Media[i].Key]; ok {
-			mediaCache.Media[i].ViewOffset = offsetMs
-			mediaCache.Media[i].LastViewedAt = now
-			updated = true
-		}
-	}
-
-	if !updated {
+	if !mediaCache.ApplyOffsets(offsets) {
 		return
 	}
 

@@ -73,6 +73,48 @@ sudo cp goplexcli /usr/local/bin/
 make install
 ```
 
+## Desktop GUI
+
+GoplexCLI also ships a cross-platform desktop app (macOS, Windows, Linux) with a
+modern poster-grid interface. It reuses the same engine as the CLI — Plex
+access, the local cache, MPV playback with progress tracking, and rclone
+downloads — so logging in or indexing from either side is shared.
+
+The GUI lives in [`gui/`](gui/) and is built with [Wails v2](https://wails.io)
+(Go backend + a React/TypeScript frontend). Playback still launches **MPV**
+externally and downloads still use **rclone**, so those prerequisites apply just
+as they do for the CLI.
+
+### Building the GUI
+
+Requires Go 1.24+, [Node.js](https://nodejs.org) 18+, and the Wails CLI:
+
+```bash
+make gui-deps        # one-time: installs the Wails CLI to GOPATH/bin
+make gui-dev         # run with hot reload
+make gui-build       # build a native binary into gui/build/bin/
+```
+
+(Equivalently, `cd gui && wails dev` / `wails build`.)
+
+**Platform notes**
+
+| Platform | Webview / extra deps |
+|----------|----------------------|
+| Windows  | WebView2 runtime (preinstalled on Windows 11) |
+| macOS    | WKWebView (built in) |
+| Linux    | `libgtk-3` and `libwebkit2gtk-4.0` (`sudo apt install libgtk-3-dev libwebkit2gtk-4.0-dev`) |
+
+### Using the GUI
+
+1. **Sign in** with your Plex account and pick the servers to index.
+2. **Build library** to populate the local cache (shows live progress).
+3. **Browse** Movies, TV Shows, Recently Added, and Continue Watching from the
+   sidebar; **search** filters the grid instantly.
+4. Open any title for details, then **Play**/**Resume** (MPV) or **Download**
+   (rclone, with live progress in the Downloads panel). TV shows drill into
+   Season → Episode with multi-select for playlist playback or batch downloads.
+
 ## Quick Start
 
 ```bash
@@ -289,6 +331,9 @@ GoplexCLI translates Plex on-disk file paths to rclone remote paths for download
 ```
 goplexcli/
 ├── cmd/goplexcli/       # CLI entry point and all commands
+├── gui/                 # Cross-platform desktop app (Wails v2 + React)
+│   ├── *.go             # Backend bindings reusing the internal/ packages
+│   └── frontend/        # React + TypeScript + Tailwind UI
 ├── internal/
 │   ├── cache/           # JSON-based media cache
 │   ├── config/          # Configuration loading/saving/validation
