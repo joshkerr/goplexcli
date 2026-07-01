@@ -6,6 +6,7 @@ package plex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -17,6 +18,11 @@ import (
 	"github.com/LukeHagar/plexgo"
 	"github.com/LukeHagar/plexgo/models/operations"
 )
+
+// errPlexServerError indicates the Plex server returned a 5xx response for a
+// page request. Large libraries can make the server fail on big container
+// windows, so callers detect this and retry with a smaller page size.
+var errPlexServerError = errors.New("plex server error")
 
 // apiLogger is used for logging API warnings (defaults to stderr, silent in production)
 var apiLogger = log.New(os.Stderr, "[plex] ", log.LstdFlags)
@@ -360,9 +366,24 @@ func getMediaFromServers(ctx context.Context, serverConfigs []struct{ Name, URL,
 // past a few hundred items.
 const sectionPageSize = 200
 
+// minSectionPageSize is the floor for adaptive page-size backoff. When the
+// server returns an HTTP 500 for a page (common for very large libraries at
+// deep container offsets), we halve the page window and retry the same offset,
+// but never shrink below this so a persistently failing page still surfaces an
+// error instead of looping forever.
+const minSectionPageSize = 10
+
+// pageRetryDelay is a short, fixed courtesy pause between page retries so we
+// don't hammer the server with back-to-back requests. Retries are only useful
+// while they shrink the page window (see pageMetadata): once the window is at
+// the floor and the server still 500s, the failure is deterministic and no
+// amount of waiting helps, so we don't escalate the delay or keep retrying.
+const pageRetryDelay = 500 * time.Millisecond
+
 // sectionMetadata mirrors a single item in a library section's Metadata array.
 type sectionMetadata struct {
 	Key                   string   `json:"key"`
+	RatingKey             string   `json:"ratingKey"`
 	Title                 string   `json:"title"`
 	Year                  *int     `json:"year"`
 	Summary               *string  `json:"summary"`
@@ -427,46 +448,19 @@ func (c *Client) getMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 		baseURL += "&sort=addedAt:desc"
 	}
 
-	// Page through the section, accumulating raw metadata across requests.
-	var allMetadata []sectionMetadata
-	fetched := 0
-	for start := 0; ; start += sectionPageSize {
-		page, total, err := c.fetchSectionPage(ctx, baseURL, sectionKey, start, sectionPageSize)
+	allMetadata, err := c.pageMetadata(ctx, baseURL, "section "+sectionKey, since, onPage)
+	if err != nil {
+		// For TV libraries the flat type=4 query enumerates every episode in the
+		// library in one sorted list. Some servers cannot compute that for very
+		// large libraries and return HTTP 500 even at the smallest page window.
+		// Fall back to walking the library show-by-show, which issues far
+		// smaller per-show queries.
+		if sectionType == "show" && errors.Is(err, errPlexServerError) {
+			apiLogger.Printf("flat episode enumeration failed for section %s (%v); falling back to per-show traversal", sectionKey, err)
+			allMetadata, err = c.fetchEpisodesPerShow(ctx, sectionKey, since, onPage)
+		}
 		if err != nil {
 			return nil, err
-		}
-		fetched += len(page)
-
-		// In incremental mode the page is newest-first; keep items until we
-		// hit one older than the threshold, then stop.
-		reachedKnown := false
-		if since > 0 {
-			for i := range page {
-				if valueOrZeroInt64(page[i].AddedAt) < since {
-					reachedKnown = true
-					break
-				}
-				allMetadata = append(allMetadata, page[i])
-			}
-		} else {
-			allMetadata = append(allMetadata, page...)
-		}
-
-		// Report incremental progress so long fetches don't look frozen. The
-		// section total is meaningless in incremental mode (we fetch a small
-		// slice), so report it as unknown.
-		if onPage != nil {
-			progressTotal := total
-			if since > 0 {
-				progressTotal = 0
-			}
-			onPage(len(allMetadata), progressTotal)
-		}
-
-		// Stop when we've reached known items, exhausted the section, or the
-		// server reported fewer than a full page.
-		if reachedKnown || len(page) < sectionPageSize || (total > 0 && fetched >= total) {
-			break
 		}
 	}
 
@@ -569,6 +563,209 @@ func (c *Client) getMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 	return items, nil
 }
 
+// pageMetadata pages through a Plex MediaContainer endpoint using container
+// pagination with adaptive backoff, returning all item metadata. baseURL must
+// already contain its query string (token, type, sort); the container
+// Start/Size parameters are appended per request. logKey labels the resource in
+// log and retry messages.
+//
+// On an HTTP 500 the same offset is retried with a smaller page window (large
+// windows at deep offsets make the server 500). Retrying only helps while it
+// shrinks the window, so once the window is already at the floor a further 500
+// is treated as a deterministic failure and returned immediately rather than
+// waited on — waiting doesn't fix a request the server structurally can't
+// satisfy. A short fixed pause separates retries so we don't hammer the server.
+//
+// If since > 0 the endpoint is assumed to be ordered newest-first: paging stops
+// as soon as an item older than since is seen, and only items with
+// addedAt >= since are returned. report, if non-nil, is called after each page
+// with the running item count and the container's total (0 when unknown, e.g.
+// in incremental mode).
+func (c *Client) pageMetadata(ctx context.Context, baseURL, logKey string, since int64, report func(fetched, total int)) ([]sectionMetadata, error) {
+	var collected []sectionMetadata
+	fetched := 0
+	size := sectionPageSize
+	for start := 0; ; {
+		page, total, err := c.fetchSectionPage(ctx, baseURL, logKey, start, size)
+		if err != nil {
+			// Retry with a smaller window, but only while shrinking is still
+			// possible; a 500 at the floor is deterministic, so give up fast.
+			if errors.Is(err, errPlexServerError) && size > minSectionPageSize {
+				newSize := size / 2
+				if newSize < minSectionPageSize {
+					newSize = minSectionPageSize
+				}
+				apiLogger.Printf("plex returned a server error for %s at start=%d size=%d; retrying with size=%d", logKey, start, size, newSize)
+				size = newSize
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(pageRetryDelay):
+				}
+				continue
+			}
+			return nil, err
+		}
+		fetched += len(page)
+
+		// In incremental mode the page is newest-first; keep items until we
+		// hit one older than the threshold, then stop.
+		reachedKnown := false
+		if since > 0 {
+			for i := range page {
+				if valueOrZeroInt64(page[i].AddedAt) < since {
+					reachedKnown = true
+					break
+				}
+				collected = append(collected, page[i])
+			}
+		} else {
+			collected = append(collected, page...)
+		}
+
+		// Report incremental progress so long fetches don't look frozen. The
+		// total is meaningless in incremental mode (we fetch a small slice), so
+		// report it as unknown.
+		if report != nil {
+			progressTotal := total
+			if since > 0 {
+				progressTotal = 0
+			}
+			report(len(collected), progressTotal)
+		}
+
+		// Stop when we've reached known items, exhausted the container, or the
+		// server reported fewer than a full page.
+		if reachedKnown || len(page) < size || (total > 0 && fetched >= total) {
+			break
+		}
+
+		// Advance by the number of items actually returned so the next request
+		// picks up where this page ended, regardless of any backoff resize.
+		start += len(page)
+	}
+	return collected, nil
+}
+
+// fetchEpisodesPerShow enumerates a TV library by walking it show-by-show: it
+// lists the shows in the section, then fetches each show's episodes via the
+// per-show /allLeaves endpoint. This is the fallback for libraries so large
+// that the single, library-wide type=4 query 500s even at the smallest page
+// window. Each per-show query is small, so the server can satisfy it.
+//
+// A show with so many episodes that even its /allLeaves query 500s (e.g. a
+// long-running daily series) is retried one level deeper, season-by-season.
+//
+// When since > 0 only episodes added on or after since are returned. allLeaves
+// ordering is not guaranteed, so every episode is checked rather than stopping
+// early. A show whose episodes can't be fetched even per-season is logged and
+// skipped rather than failing the whole library.
+func (c *Client) fetchEpisodesPerShow(ctx context.Context, sectionKey string, since int64, onPage func(fetched, total int)) ([]sectionMetadata, error) {
+	// List the shows in this section. The default /all (no type) returns the
+	// show directories, a far smaller set than every episode.
+	showsURL := fmt.Sprintf("%s/library/sections/%s/all?X-Plex-Token=%s", c.serverURL, sectionKey, c.token)
+	shows, err := c.pageMetadata(ctx, showsURL, "section "+sectionKey+" shows", 0, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list shows: %w", err)
+	}
+	apiLogger.Printf("per-show traversal of section %s: walking %d shows", sectionKey, len(shows))
+
+	var episodes []sectionMetadata
+	for _, show := range shows {
+		if show.RatingKey == "" {
+			apiLogger.Printf("warning: show %q has no ratingKey, skipping", show.Title)
+			continue
+		}
+
+		leavesURL := fmt.Sprintf("%s/library/metadata/%s/allLeaves?X-Plex-Token=%s", c.serverURL, show.RatingKey, c.token)
+
+		// Report progress cumulatively across shows so long traversals don't
+		// look frozen. base is the count before this show; pageMetadata reports
+		// the running count within the show synchronously, so this is safe.
+		base := len(episodes)
+		report := func(fetched, total int) {
+			if onPage != nil {
+				onPage(base+fetched, 0)
+			}
+		}
+
+		showEpisodes, err := c.pageMetadata(ctx, leavesURL, "show "+show.RatingKey, 0, report)
+		if err != nil {
+			// Respect cancellation immediately.
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return nil, err
+			}
+			// Some shows have so many episodes that even /allLeaves 500s. Drop
+			// one level deeper and walk the show season-by-season.
+			if errors.Is(err, errPlexServerError) {
+				apiLogger.Printf("allLeaves failed for show %q (ratingKey %s); falling back to per-season traversal", show.Title, show.RatingKey)
+				showEpisodes, err = c.fetchEpisodesPerSeason(ctx, show.RatingKey, base, onPage)
+			}
+			if err != nil {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return nil, err
+				}
+				apiLogger.Printf("warning: failed to get episodes for show %q (ratingKey %s): %v; skipping", show.Title, show.RatingKey, err)
+				continue
+			}
+		}
+
+		if since > 0 {
+			for i := range showEpisodes {
+				if valueOrZeroInt64(showEpisodes[i].AddedAt) >= since {
+					episodes = append(episodes, showEpisodes[i])
+				}
+			}
+		} else {
+			episodes = append(episodes, showEpisodes...)
+		}
+	}
+	return episodes, nil
+}
+
+// fetchEpisodesPerSeason walks a single show season-by-season, the deepest
+// fallback for a show whose /allLeaves query is too large for the server to
+// satisfy. It lists the show's seasons, then fetches each season's episodes via
+// the per-season /children endpoint (a handful of items each). base is the
+// running episode count before this show, used only to keep progress reporting
+// cumulative. A season that can't be fetched is logged and skipped.
+func (c *Client) fetchEpisodesPerSeason(ctx context.Context, showRatingKey string, base int, onPage func(fetched, total int)) ([]sectionMetadata, error) {
+	seasonsURL := fmt.Sprintf("%s/library/metadata/%s/children?X-Plex-Token=%s", c.serverURL, showRatingKey, c.token)
+	seasons, err := c.pageMetadata(ctx, seasonsURL, "show "+showRatingKey+" seasons", 0, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list seasons: %w", err)
+	}
+
+	var episodes []sectionMetadata
+	for _, season := range seasons {
+		if season.RatingKey == "" {
+			continue
+		}
+
+		episodesURL := fmt.Sprintf("%s/library/metadata/%s/children?X-Plex-Token=%s", c.serverURL, season.RatingKey, c.token)
+
+		// Report cumulatively: base (episodes before this show) plus what this
+		// show has accumulated across earlier seasons plus the current page.
+		seasonBase := len(episodes)
+		report := func(fetched, total int) {
+			if onPage != nil {
+				onPage(base+seasonBase+fetched, 0)
+			}
+		}
+
+		seasonEpisodes, err := c.pageMetadata(ctx, episodesURL, "season "+season.RatingKey, 0, report)
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return nil, err
+			}
+			apiLogger.Printf("warning: failed to get episodes for season %q (ratingKey %s) of show %s: %v; skipping", season.Title, season.RatingKey, showRatingKey, err)
+			continue
+		}
+		episodes = append(episodes, seasonEpisodes...)
+	}
+	return episodes, nil
+}
+
 // fetchSectionPage requests a single page of a library section and returns the
 // parsed metadata along with the section's reported total size. The container
 // pagination parameters are appended to baseURL.
@@ -600,6 +797,11 @@ func (c *Client) fetchSectionPage(ctx context.Context, baseURL, sectionKey strin
 		if resp.StatusCode == http.StatusNotFound {
 			apiLogger.Printf("warning: section %s not found - it may have been removed", sectionKey)
 			return nil, 0, fmt.Errorf("library section %s not found (status %d)", sectionKey, resp.StatusCode)
+		}
+		if resp.StatusCode >= 500 {
+			// Wrap with errPlexServerError so the pager can retry this page
+			// with a smaller container window.
+			return nil, 0, fmt.Errorf("unexpected status code %d from Plex server: %w", resp.StatusCode, errPlexServerError)
 		}
 		return nil, 0, fmt.Errorf("unexpected status code %d from Plex server", resp.StatusCode)
 	}
