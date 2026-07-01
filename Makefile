@@ -144,6 +144,13 @@ gui-build:
 #
 # Recipes below use only plain commands (no &&, ||, if/then, or redirects) so
 # they run whether Make's shell is cmd.exe (PowerShell) or sh (Git-Bash/macOS).
+#
+# echo arguments MUST be quoted. GNU Make on Windows fast-paths a recipe line
+# with no shell metacharacters straight to CreateProcess, and `echo` is a
+# cmd.exe builtin (there is no echo.exe), so a bare `@echo foo` fails with
+# "CreateProcess(NULL, echo foo) failed". The quotes are a metacharacter that
+# forces Make through the shell, where echo resolves. Likewise a .bat is not a
+# CreateProcess-executable, so it is invoked via `cmd /c`.
 
 # Bump the VERSION file, commit, and push. Usage: make bump V=X.Y.Z
 bump:
@@ -152,12 +159,12 @@ bump:
 	@git add VERSION
 	@git commit -m "chore: bump version to $(V)"
 	@git push origin HEAD
-	@echo Bumped to $(V) and pushed. Run make release to tag and publish.
+	@echo "Bumped to $(V) and pushed. Run make release to tag and publish."
 
 # Verify the working tree is clean. git diff exits non-zero on changes, which
 # stops make; untracked gitignored build artifacts are not considered.
 release-preflight:
-	@echo Checking working tree is clean...
+	@echo "Checking working tree is clean..."
 	git diff --quiet
 	git diff --cached --quiet
 
@@ -168,7 +175,7 @@ release-preflight:
 #        make release V=X.Y.Z     (explicit version)
 release: release-preflight vet test
 ifeq ($(OS),Windows_NT)
-	@scripts\release.bat $(V)
+	@cmd /c scripts\release.bat $(V)
 else
 	@sh scripts/release.sh $(V)
 endif
