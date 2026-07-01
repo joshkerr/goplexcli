@@ -74,13 +74,42 @@ func (c *Cache) Save() error {
 	}
 	
 	c.LastUpdated = time.Now()
-	
-	data, err := json.MarshalIndent(c, "", "  ")
+
+	// Compact JSON: the cache is machine-read only, and for large libraries
+	// indented output roughly doubles the file size and marshal time.
+	data, err := json.Marshal(c)
 	if err != nil {
 		return err
 	}
-	
-	return os.WriteFile(cachePath, data, 0644)
+
+	// Write to a temp file and rename into place so an interrupted index run
+	// (crash, Ctrl-C, power loss) can never leave a truncated cache behind.
+	tmp, err := os.CreateTemp(cacheDir, ".media-*.json.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	cleanup := func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		cleanup()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := os.Chmod(tmpPath, 0644); err != nil {
+		cleanup()
+		return err
+	}
+	if err := os.Rename(tmpPath, cachePath); err != nil {
+		cleanup()
+		return err
+	}
+	return nil
 }
 
 // IsStale checks if the cache is older than the given duration

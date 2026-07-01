@@ -11,13 +11,22 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/LukeHagar/plexgo"
 	"github.com/LukeHagar/plexgo/models/operations"
+	"golang.org/x/sync/errgroup"
 )
+
+// sectionHTTPClient is shared by the indexing path (section listing and page
+// fetches). The per-request timeout ensures a hung or unreachable Plex server
+// fails an index run with an error instead of blocking it forever; pages are
+// small (see sectionPageSize), so healthy responses finish well within it.
+var sectionHTTPClient = &http.Client{Timeout: 60 * time.Second}
 
 // errPlexServerError indicates the Plex server returned a 5xx response for a
 // page request. Large libraries can make the server fail on big container
@@ -123,7 +132,12 @@ func NewWithName(serverURL, token, serverName string) (*Client, error) {
 
 // Test validates the connection to the Plex server
 func (c *Client) Test() error {
-	ctx := context.Background()
+	return c.TestContext(context.Background())
+}
+
+// TestContext validates the connection to the Plex server, honoring the
+// caller's context for cancellation and deadlines.
+func (c *Client) TestContext(ctx context.Context) error {
 	_, err := c.sdk.General.GetIdentity(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to connect to plex server: %w", err)
@@ -164,8 +178,7 @@ func (c *Client) GetLibraries(ctx context.Context) ([]Library, error) {
 	req.Header.Set("X-Plex-Product", "GoplexCLI")
 	req.Header.Set("X-Plex-Version", "1.0")
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := sectionHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get sections: %w", err)
 	}
@@ -246,40 +259,31 @@ func (c *Client) getMedia(ctx context.Context, sinceFor func(libType string) int
 		return nil, err
 	}
 
-	var allMedia []MediaItem
-	totalLibs := 0
-
-	// Count libraries we'll actually process
+	var tasks []sectionFetchTask
 	for _, lib := range libraries {
-		if lib.Type == "movie" || lib.Type == "show" {
-			totalLibs++
+		if lib.Type != "movie" && lib.Type != "show" {
+			continue
 		}
+		var since int64
+		if sinceFor != nil {
+			since = sinceFor(lib.Type)
+		}
+		tasks = append(tasks, sectionFetchTask{
+			client: c,
+			lib:    lib,
+			libNum: len(tasks) + 1,
+			since:  since,
+		})
+	}
+	for i := range tasks {
+		tasks[i].totalLibs = len(tasks)
 	}
 
-	currentLib := 0
-	for _, lib := range libraries {
-		if lib.Type == "movie" || lib.Type == "show" {
-			currentLib++
-			libTitle := lib.Title
-			libNum := currentLib
-			onPage := func(fetched, total int) {
-				if progressCallback != nil {
-					progressCallback(libTitle, fetched, total, totalLibs, libNum)
-				}
-			}
-			var since int64
-			if sinceFor != nil {
-				since = sinceFor(lib.Type)
-			}
-			media, err := c.getMediaFromSection(ctx, lib.Key, lib.Type, since, onPage)
-			if err != nil {
-				return nil, fmt.Errorf("failed to get media from section %s: %w", lib.Title, err)
-			}
-			allMedia = append(allMedia, media...)
+	return fetchSections(ctx, tasks, func(task sectionFetchTask, fetched, total int) {
+		if progressCallback != nil {
+			progressCallback(task.lib.Title, fetched, total, task.totalLibs, task.libNum)
 		}
-	}
-
-	return allMedia, nil
+	})
 }
 
 // GetAllMediaFromServers returns all media items from multiple Plex servers.
@@ -301,9 +305,9 @@ func GetNewMediaFromServers(ctx context.Context, serverConfigs []struct{ Name, U
 // getMediaFromServers is the shared implementation for GetAllMediaFromServers
 // and GetNewMediaFromServers.
 func getMediaFromServers(ctx context.Context, serverConfigs []struct{ Name, URL, Token string }, mappings []PathMapping, sinceFor func(serverName, libType string) int64, progressCallback ServerProgressCallback) ([]MediaItem, error) {
-	var allMedia []MediaItem
 	totalServers := len(serverConfigs)
 
+	var tasks []sectionFetchTask
 	for serverNum, serverConfig := range serverConfigs {
 		client, err := NewWithName(serverConfig.URL, serverConfig.Token, serverConfig.Name)
 		if err != nil {
@@ -311,8 +315,12 @@ func getMediaFromServers(ctx context.Context, serverConfigs []struct{ Name, URL,
 		}
 		client.SetPathMappings(mappings)
 
-		// Test connection
-		if err := client.Test(); err != nil {
+		// Bound the connection test so one hung server fails fast instead of
+		// stalling the whole index run.
+		testCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		err = client.TestContext(testCtx)
+		cancel()
+		if err != nil {
 			return nil, fmt.Errorf("failed to connect to server %s: %w", serverConfig.Name, err)
 		}
 
@@ -321,39 +329,98 @@ func getMediaFromServers(ctx context.Context, serverConfigs []struct{ Name, URL,
 			return nil, fmt.Errorf("failed to get libraries from server %s: %w", serverConfig.Name, err)
 		}
 
-		totalLibs := 0
+		serverTaskStart := len(tasks)
+		libNum := 0
 		for _, lib := range libraries {
-			if lib.Type == "movie" || lib.Type == "show" {
-				totalLibs++
+			if lib.Type != "movie" && lib.Type != "show" {
+				continue
 			}
+			libNum++
+			var since int64
+			if sinceFor != nil {
+				since = sinceFor(serverConfig.Name, lib.Type)
+			}
+			tasks = append(tasks, sectionFetchTask{
+				client:       client,
+				lib:          lib,
+				libNum:       libNum,
+				serverName:   serverConfig.Name,
+				serverNum:    serverNum + 1,
+				totalServers: totalServers,
+				since:        since,
+			})
 		}
-
-		currentLib := 0
-		for _, lib := range libraries {
-			if lib.Type == "movie" || lib.Type == "show" {
-				currentLib++
-				libTitle := lib.Title
-				libNum := currentLib
-				srvName := serverConfig.Name
-				srvNum := serverNum + 1
-				onPage := func(fetched, total int) {
-					if progressCallback != nil {
-						progressCallback(srvName, libTitle, fetched, total, totalLibs, libNum, srvNum, totalServers)
-					}
-				}
-				var since int64
-				if sinceFor != nil {
-					since = sinceFor(serverConfig.Name, lib.Type)
-				}
-				media, err := client.getMediaFromSection(ctx, lib.Key, lib.Type, since, onPage)
-				if err != nil {
-					return nil, fmt.Errorf("failed to get media from section %s on server %s: %w", lib.Title, serverConfig.Name, err)
-				}
-				allMedia = append(allMedia, media...)
-			}
+		for i := serverTaskStart; i < len(tasks); i++ {
+			tasks[i].totalLibs = libNum
 		}
 	}
 
+	return fetchSections(ctx, tasks, func(task sectionFetchTask, fetched, total int) {
+		if progressCallback != nil {
+			progressCallback(task.serverName, task.lib.Title, fetched, total, task.totalLibs, task.libNum, task.serverNum, task.totalServers)
+		}
+	})
+}
+
+// sectionFetchTask describes one library section to index: which client to
+// fetch it with, how to attribute progress, and the incremental threshold.
+type sectionFetchTask struct {
+	client       *Client
+	lib          Library
+	libNum       int
+	totalLibs    int
+	serverName   string
+	serverNum    int
+	totalServers int
+	since        int64
+}
+
+// sectionFetchConcurrency bounds how many library sections are fetched in
+// parallel during indexing. Parallel sections overlap network latency across
+// libraries (and across servers in multi-server mode) while staying gentle
+// enough not to overload a modest Plex server.
+const sectionFetchConcurrency = 4
+
+// fetchSections runs all section fetch tasks through a bounded worker pool
+// and returns their items concatenated in task order, so cache ordering stays
+// deterministic regardless of which section finishes first. onProgress calls
+// are serialized, so callers may safely write terminal progress from them. A
+// failed task cancels the remaining ones and its error is returned.
+func fetchSections(ctx context.Context, tasks []sectionFetchTask, onProgress func(task sectionFetchTask, fetched, total int)) ([]MediaItem, error) {
+	results := make([][]MediaItem, len(tasks))
+	var progressMu sync.Mutex
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(sectionFetchConcurrency)
+	for i, task := range tasks {
+		g.Go(func() error {
+			onPage := func(fetched, total int) {
+				if onProgress == nil {
+					return
+				}
+				progressMu.Lock()
+				defer progressMu.Unlock()
+				onProgress(task, fetched, total)
+			}
+			media, err := task.client.getMediaFromSection(gctx, task.lib.Key, task.lib.Type, task.since, onPage)
+			if err != nil {
+				if task.serverName != "" {
+					return fmt.Errorf("failed to get media from section %s on server %s: %w", task.lib.Title, task.serverName, err)
+				}
+				return fmt.Errorf("failed to get media from section %s: %w", task.lib.Title, err)
+			}
+			results[i] = media
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	var allMedia []MediaItem
+	for _, media := range results {
+		allMedia = append(allMedia, media...)
+	}
 	return allMedia, nil
 }
 
@@ -378,7 +445,16 @@ const minSectionPageSize = 10
 // while they shrink the page window (see pageMetadata): once the window is at
 // the floor and the server still 500s, the failure is deterministic and no
 // amount of waiting helps, so we don't escalate the delay or keep retrying.
-const pageRetryDelay = 500 * time.Millisecond
+// A variable rather than a constant so tests can shrink it.
+var pageRetryDelay = 500 * time.Millisecond
+
+// pageNetRetries is how many consecutive transport-level failures (connection
+// reset, request timeout, ...) are retried at the same offset before giving
+// up. Unlike a 500 — which signals the response was too big and shrinking the
+// window is the fix — a transport error is usually transient, so the same
+// request is simply tried again after a short pause. The counter resets after
+// every successful page so a long index run tolerates occasional blips.
+const pageNetRetries = 2
 
 // sectionMetadata mirrors a single item in a library section's Metadata array.
 type sectionMetadata struct {
@@ -585,6 +661,7 @@ func (c *Client) pageMetadata(ctx context.Context, baseURL, logKey string, since
 	var collected []sectionMetadata
 	fetched := 0
 	size := sectionPageSize
+	netRetries := 0
 	for start := 0; ; {
 		page, total, err := c.fetchSectionPage(ctx, baseURL, logKey, start, size)
 		if err != nil {
@@ -604,8 +681,23 @@ func (c *Client) pageMetadata(ctx context.Context, baseURL, logKey string, since
 				}
 				continue
 			}
+			// Transport-level failures (connection reset, request timeout) are
+			// usually transient: retry the same offset a couple of times before
+			// surfacing the error, so a blip doesn't abort a long index run.
+			var urlErr *url.Error
+			if errors.As(err, &urlErr) && ctx.Err() == nil && netRetries < pageNetRetries {
+				netRetries++
+				apiLogger.Printf("transient network error for %s at start=%d (retry %d/%d): %v", logKey, start, netRetries, pageNetRetries, err)
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(pageRetryDelay):
+				}
+				continue
+			}
 			return nil, err
 		}
+		netRetries = 0
 		fetched += len(page)
 
 		// In incremental mode the page is newest-first; keep items until we
@@ -782,8 +874,7 @@ func (c *Client) fetchSectionPage(ctx context.Context, baseURL, sectionKey strin
 	req.Header.Set("X-Plex-Product", "GoplexCLI")
 	req.Header.Set("X-Plex-Version", "1.0")
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := sectionHTTPClient.Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to get library items: %w", err)
 	}
