@@ -261,9 +261,11 @@ goplexcli outplayer remove iPhone    # Delete a target
 
 Enable Wi-Fi transfer in Outplayer (which shows the address to use), add it as a
 target, then during browse select media and choose **Transfer to Outplayer**.
-The **Transfer to Outplayer** action only appears when at least one target is
-enabled, so disabling all targets hides it. Uploads default to the device root;
-Outplayer's built-in folders (e.g. `Inbox`) are not writable.
+You can also transfer an entire queue: from **View Queue** choose **Transfer to
+Outplayer** (or **Transfer to WebDAV**) to send every queued item — the queue is
+left intact afterwards. The **Transfer to Outplayer** action only appears when at
+least one target is enabled, so disabling all targets hides it. Uploads default
+to the device root; Outplayer's built-in folders (e.g. `Inbox`) are not writable.
 
 ### Other Commands
 
