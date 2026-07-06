@@ -15,6 +15,7 @@ A powerful, fast, and elegant command-line interface for browsing and streaming 
 - **Download with Rclone** — Download media files with a real-time progress bar UI
 - **Remote Streaming** — Publish streams for playback on other devices via mDNS discovery and a web UI
 - **Transfer to WebDAV** — Push media to gowebdav servers discovered on your LAN via mDNS
+- **Transfer to Outplayer** — Upload media to the Outplayer iOS app over Wi-Fi to multiple configurable targets
 - **SenPlayer Integration** — Play or download media in SenPlayer via deep links (macOS)
 - **Sort & Filter** — Sort your library by name, date added, year, rating, or duration
 - **Smart Caching** — Cache your media library locally for instant offline browsing
@@ -153,7 +154,7 @@ The browse flow:
 
 1. **Pick a category** — Movies, TV Shows, All, Recently Added, Continue Watching, or View Queue
 2. **Select media** — Fuzzy search with preview pane (Ctrl+P to toggle). TAB for multi-select.
-3. **Pick an action** — Watch, Download, Transfer to WebDAV, SenPlayer Play, SenPlayer Download, Add to Queue, or Stream
+3. **Pick an action** — Watch, Download, Transfer to WebDAV, Transfer to Outplayer, SenPlayer Play, SenPlayer Download, Add to Queue, or Stream
 
 For TV Shows, the picker drills hierarchically: Show → Season → Episode(s).
 
@@ -243,6 +244,27 @@ goplexcli webdav set-creds     # Set shared username/password for transfers
 
 Then during browse, select media and choose **Transfer to WebDAV** to push files to the discovered server.
 
+### Outplayer Transfer
+
+[Outplayer](https://outplayer.app) is an iOS media player with a "Wi-Fi transfer"
+feature that runs a small HTTP upload server on your device. Configure one or
+more Outplayer targets and push media to them straight from your rclone remotes
+(the file is streamed through, never staged on local disk):
+
+```bash
+goplexcli outplayer add              # Add a target (name + URL, e.g. http://192.168.0.34)
+goplexcli outplayer list             # List targets and their enabled/disabled status
+goplexcli outplayer disable iPhone   # Hide a target from the transfer menu
+goplexcli outplayer enable iPhone    # Show it again
+goplexcli outplayer remove iPhone    # Delete a target
+```
+
+Enable Wi-Fi transfer in Outplayer (which shows the address to use), add it as a
+target, then during browse select media and choose **Transfer to Outplayer**.
+The **Transfer to Outplayer** action only appears when at least one target is
+enabled, so disabling all targets hides it. Uploads default to the device root;
+Outplayer's built-in folders (e.g. `Inbox`) are not writable.
+
 ### Other Commands
 
 ```bash
@@ -284,7 +306,10 @@ Configuration is stored in a platform-specific directory:
   ],
   "webdav_user": "user",
   "webdav_pass": "password",
-  "webdav_dir": ""
+  "webdav_dir": "",
+  "outplayer_targets": [
+    { "name": "iPhone", "url": "http://192.168.0.34", "dir": "", "enabled": true }
+  ]
 }
 ```
 
@@ -293,6 +318,7 @@ Configuration is stored in a platform-specific directory:
 - **download_dir** — Default download destination (`~` is expanded). Override per-run with `--dest`.
 - **path_mappings** — Translate Plex file paths to rclone remotes. Longest matching prefix wins. Run `cache reindex` after changing.
 - **webdav_user**, **webdav_pass**, **webdav_dir** — Shared credentials and optional subdirectory for gowebdav transfers (set via `goplexcli webdav set-creds`)
+- **outplayer_targets** — Outplayer Wi-Fi transfer destinations, each with a `name`, `url`, optional `dir`, and `enabled` flag (managed via `goplexcli outplayer add/list/enable/disable/remove`)
 
 ## How It Works
 
@@ -341,6 +367,7 @@ goplexcli/
 │   ├── errors/          # Shared error types
 │   ├── interfaces/      # Shared interfaces
 │   ├── logging/         # Logging utilities
+│   ├── outplayer/       # Outplayer Wi-Fi transfer uploads (streamed via rclone)
 │   ├── player/          # MPV player wrapper
 │   ├── plex/            # Plex API client (SDK + direct HTTP)
 │   ├── preview/         # fzf preview pane renderer
