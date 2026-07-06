@@ -491,14 +491,17 @@ func SelectMediaTypeWithQueue(fzfPath string, queueCount, continueCount int) (st
 	return strings.ToLower(selected), nil
 }
 
-// PromptQueueAction shows queue management options
-func PromptQueueAction(fzfPath string, queueCount int) (string, error) {
+// PromptQueueAction shows queue management options. "Transfer to Outplayer" is
+// only offered when outplayerCount > 0.
+func PromptQueueAction(fzfPath string, queueCount, outplayerCount int) (string, error) {
 	actions := []string{
 		fmt.Sprintf("Download All (%s)", PluralizeItems(queueCount)),
-		"Clear Queue",
-		"Remove Items",
-		"Back to Browse",
+		"Transfer to WebDAV",
 	}
+	if outplayerCount > 0 {
+		actions = append(actions, "Transfer to Outplayer")
+	}
+	actions = append(actions, "Clear Queue", "Remove Items", "Back to Browse")
 
 	selected, _, err := SelectWithFzf(actions, "Queue action:", fzfPath)
 	if err != nil {
@@ -510,6 +513,10 @@ func PromptQueueAction(fzfPath string, queueCount int) (string, error) {
 	}
 
 	switch selected {
+	case "Transfer to WebDAV":
+		return "transfer", nil
+	case "Transfer to Outplayer":
+		return "transfer-outplayer", nil
 	case "Clear Queue":
 		return "clear", nil
 	case "Remove Items":

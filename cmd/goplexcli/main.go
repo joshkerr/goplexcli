@@ -131,8 +131,8 @@ Downloading queued items:
   When the queue is non-empty, 'browse' shows "View Queue (N items)"
   at the top of the media-type picker. Select it, then choose
   "Download All (N items)" to download every queued item back to back.
-  The same menu also lets you remove individual items or clear the
-  queue.`,
+  The same menu can also transfer the whole queue to WebDAV or an
+  Outplayer target, remove individual items, or clear the queue.`,
 		RunE: runBrowse,
 	}
 	browseCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be downloaded without actually downloading")
@@ -2204,12 +2204,14 @@ func handleQueueView(cfg *config.Config, q *queue.Queue) (string, error) {
 	}
 	fmt.Println()
 
-	// Prompt for queue action
+	// Prompt for queue action. "Transfer to Outplayer" is only offered when at
+	// least one Outplayer target is enabled (mirrors the browse action menu).
+	outplayerCount := len(cfg.GetEnabledOutplayerTargets())
 	var action string
 	var err error
 
 	if ui.IsAvailable(cfg.FzfPath) {
-		action, err = ui.PromptQueueAction(cfg.FzfPath, q.Len())
+		action, err = ui.PromptQueueAction(cfg.FzfPath, q.Len(), outplayerCount)
 		if err != nil {
 			if errors.Is(err, apperrors.ErrCancelled) {
 				return "back", nil
@@ -2217,7 +2219,7 @@ func handleQueueView(cfg *config.Config, q *queue.Queue) (string, error) {
 			return "", err
 		}
 	} else {
-		action, err = promptQueueActionManual(q.Len())
+		action, err = promptQueueActionManual(q.Len(), outplayerCount)
 		if err != nil {
 			return "", err
 		}
@@ -2243,6 +2245,22 @@ func handleQueueView(cfg *config.Config, q *queue.Queue) (string, error) {
 			return "", fmt.Errorf("failed to update queue: %w", err)
 		}
 		return "done", nil
+
+	case "transfer":
+		// Transfers are non-destructive: the queue is left intact (the transfer
+		// handler returns nil on soft no-ops like cancelling target selection,
+		// so auto-removing here could silently clear the queue). Stay in the
+		// queue view so the user can also download or clear afterwards.
+		if err := handleTransferToWebDAV(cfg, q.Items); err != nil {
+			return "", err
+		}
+		return "back", nil
+
+	case "transfer-outplayer":
+		if err := handleTransferToOutplayer(cfg, q.Items); err != nil {
+			return "", err
+		}
+		return "back", nil
 
 	case "clear":
 		if err := q.Clear(); err != nil {
@@ -2281,32 +2299,41 @@ func handleQueueView(cfg *config.Config, q *queue.Queue) (string, error) {
 	}
 }
 
-// promptQueueActionManual - fallback for no-fzf queue action selection
-func promptQueueActionManual(queueCount int) (string, error) {
+// promptQueueActionManual - fallback for no-fzf queue action selection.
+// "Transfer to Outplayer" is only listed when outplayerCount > 0, so the option
+// numbering is built dynamically.
+func promptQueueActionManual(queueCount, outplayerCount int) (string, error) {
+	type option struct {
+		label string
+		token string
+	}
+	options := []option{
+		{fmt.Sprintf("Download All (%s)", ui.PluralizeItems(queueCount)), "download"},
+		{"Transfer to WebDAV", "transfer"},
+	}
+	if outplayerCount > 0 {
+		options = append(options, option{"Transfer to Outplayer", "transfer-outplayer"})
+	}
+	options = append(options,
+		option{"Clear Queue", "clear"},
+		option{"Remove Items", "remove"},
+		option{"Back to Browse", "back"},
+	)
+
 	fmt.Println(infoStyle.Render("\nQueue actions:"))
-	fmt.Printf("  1. Download All (%s)\n", ui.PluralizeItems(queueCount))
-	fmt.Println("  2. Clear Queue")
-	fmt.Println("  3. Remove Items")
-	fmt.Println("  4. Back to Browse")
-	fmt.Print("\nChoice (1-4): ")
+	for i, opt := range options {
+		fmt.Printf("  %d. %s\n", i+1, opt.label)
+	}
+	fmt.Printf("\nChoice (1-%d): ", len(options))
 
 	var choice int
 	if _, err := fmt.Scanln(&choice); err != nil {
 		return "", fmt.Errorf("failed to read selection: %w", err)
 	}
-
-	switch choice {
-	case 1:
-		return "download", nil
-	case 2:
-		return "clear", nil
-	case 3:
-		return "remove", nil
-	case 4:
-		return "back", nil
-	default:
+	if choice < 1 || choice > len(options) {
 		return "back", nil
 	}
+	return options[choice-1].token, nil
 }
 
 // removeFromQueueManual - fallback for no-fzf queue item removal
