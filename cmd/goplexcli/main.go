@@ -6,6 +6,7 @@ package main
 import _ "github.com/joshkerr/goplexcli/internal/termuxfix"
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 	"github.com/joshkerr/goplexcli/internal/download"
 	apperrors "github.com/joshkerr/goplexcli/internal/errors"
 	"github.com/joshkerr/goplexcli/internal/logging"
+	"github.com/joshkerr/goplexcli/internal/outplayer"
 	"github.com/joshkerr/goplexcli/internal/player"
 	"github.com/joshkerr/goplexcli/internal/plex"
 	"github.com/joshkerr/goplexcli/internal/preview"
@@ -242,6 +244,52 @@ Downloading queued items:
 
 	webdavCmd.AddCommand(webdavDiscoverCmd, webdavSetCredsCmd)
 
+	// Outplayer command: manage Outplayer "Wi-Fi transfer" targets, which are
+	// user-defined HTTP upload destinations (an iOS app feature) rather than
+	// LAN-discovered servers.
+	outplayerCmd := &cobra.Command{
+		Use:   "outplayer",
+		Short: "Manage Outplayer Wi-Fi transfer targets",
+	}
+
+	outplayerListCmd := &cobra.Command{
+		Use:   "list",
+		Short: "List configured Outplayer targets",
+		RunE:  runOutplayerList,
+	}
+
+	outplayerAddCmd := &cobra.Command{
+		Use:   "add",
+		Short: "Add an Outplayer target",
+		RunE:  runOutplayerAdd,
+	}
+
+	outplayerRemoveCmd := &cobra.Command{
+		Use:               "remove [name]",
+		Short:             "Remove an Outplayer target",
+		Args:              cobra.MinimumNArgs(1),
+		ValidArgsFunction: completeOutplayerNames,
+		RunE:              runOutplayerRemove,
+	}
+
+	outplayerEnableCmd := &cobra.Command{
+		Use:               "enable [name]",
+		Short:             "Enable an Outplayer target",
+		Args:              cobra.MinimumNArgs(1),
+		ValidArgsFunction: completeOutplayerNames,
+		RunE:              runOutplayerEnable,
+	}
+
+	outplayerDisableCmd := &cobra.Command{
+		Use:               "disable [name]",
+		Short:             "Disable an Outplayer target (hides it from the transfer menu)",
+		Args:              cobra.MinimumNArgs(1),
+		ValidArgsFunction: completeOutplayerNames,
+		RunE:              runOutplayerDisable,
+	}
+
+	outplayerCmd.AddCommand(outplayerListCmd, outplayerAddCmd, outplayerRemoveCmd, outplayerEnableCmd, outplayerDisableCmd)
+
 	// Sort command
 	sortCmd := &cobra.Command{
 		Use:   "sort [field]",
@@ -303,7 +351,7 @@ installing it.`,
 		},
 	}
 
-	rootCmd.AddCommand(loginCmd, browseCmd, cacheCmd, configCmd, streamCmd, serverCmd, webdavCmd, sortCmd, versionCmd, updateCmd, previewCmd)
+	rootCmd.AddCommand(loginCmd, browseCmd, cacheCmd, configCmd, streamCmd, serverCmd, webdavCmd, outplayerCmd, sortCmd, versionCmd, updateCmd, previewCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(errorStyle.Render("Error: " + err.Error()))
@@ -1167,11 +1215,13 @@ var errAddedToQueue = errors.New("items added to queue")
 // Returns nil for actions that complete successfully.
 // Returns other errors for failures.
 func handleMediaAction(cfg *config.Config, q *queue.Queue, selectedMediaItems []*plex.MediaItem) error {
-	// Ask what to do
+	// Ask what to do. "Transfer to Outplayer" is only offered when at least one
+	// Outplayer target is enabled (disabling all targets hides the action).
+	outplayerCount := len(cfg.GetEnabledOutplayerTargets())
 	var action string
 	var err error
 	if ui.IsAvailable(cfg.FzfPath) {
-		action, err = ui.PromptActionWithQueue(cfg.FzfPath, len(selectedMediaItems), q.Len())
+		action, err = ui.PromptActionWithQueue(cfg.FzfPath, len(selectedMediaItems), q.Len(), outplayerCount)
 		if err != nil {
 			if errors.Is(err, apperrors.ErrCancelled) {
 				return nil
@@ -1179,7 +1229,7 @@ func handleMediaAction(cfg *config.Config, q *queue.Queue, selectedMediaItems []
 			return err
 		}
 	} else {
-		action, err = promptActionManualWithQueue(len(selectedMediaItems), q.Len())
+		action, err = promptActionManualWithQueue(len(selectedMediaItems), q.Len(), outplayerCount)
 		if err != nil {
 			return err
 		}
@@ -1210,6 +1260,8 @@ func handleMediaAction(cfg *config.Config, q *queue.Queue, selectedMediaItems []
 		return handleDownloadMultiple(cfg, selectedMediaItems)
 	case "transfer":
 		return handleTransferToWebDAV(cfg, selectedMediaItems)
+	case "transfer-outplayer":
+		return handleTransferToOutplayer(cfg, selectedMediaItems)
 	case "senplayer play":
 		return handleSenPlayer(cfg, selectedMediaItems, "play")
 	case "senplayer download":
@@ -1697,6 +1749,276 @@ func runWebDAVSetCreds(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// findOutplayerTarget returns the index of the target whose name matches (case
+// insensitively), or -1 if none match.
+func findOutplayerTarget(cfg *config.Config, name string) int {
+	for i, t := range cfg.OutplayerTargets {
+		if strings.EqualFold(t.Name, name) {
+			return i
+		}
+	}
+	return -1
+}
+
+// completeOutplayerNames provides shell completion of configured target names.
+func completeOutplayerNames(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	already := make(map[string]struct{}, len(args))
+	for _, a := range args {
+		already[a] = struct{}{}
+	}
+	var names []string
+	for _, t := range cfg.OutplayerTargets {
+		if _, dup := already[t.Name]; dup {
+			continue
+		}
+		names = append(names, t.Name)
+	}
+	return names, cobra.ShellCompDirectiveNoFileComp
+}
+
+// runOutplayerList prints all configured Outplayer targets and their status.
+func runOutplayerList(cmd *cobra.Command, args []string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	fmt.Println(titleStyle.Render("Outplayer Targets"))
+	if len(cfg.OutplayerTargets) == 0 {
+		fmt.Println(warningStyle.Render("No Outplayer targets configured."))
+		fmt.Println(infoStyle.Render("Add one with: goplexcli outplayer add"))
+		return nil
+	}
+
+	for _, t := range cfg.OutplayerTargets {
+		dir := t.Dir
+		if dir == "" {
+			dir = "/"
+		}
+		status := successStyle.Render("enabled")
+		if !t.Enabled {
+			status = warningStyle.Render("disabled")
+		}
+		fmt.Printf("  %-20s %-28s dir=%-12s %s\n", t.Name, t.URL, dir, status)
+	}
+	return nil
+}
+
+// runOutplayerAdd interactively adds a new Outplayer target to the config.
+func runOutplayerAdd(cmd *cobra.Command, args []string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Println(titleStyle.Render("Add Outplayer Target"))
+	fmt.Println(infoStyle.Render("In Outplayer, enable Wi-Fi transfer to see the address to use.\n"))
+
+	fmt.Print("Name (e.g. iPhone): ")
+	name, _ := reader.ReadString('\n')
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("name is required")
+	}
+	if findOutplayerTarget(cfg, name) != -1 {
+		return fmt.Errorf("a target named %q already exists", name)
+	}
+
+	fmt.Print("URL (e.g. http://192.168.0.34): ")
+	rawURL, _ := reader.ReadString('\n')
+	rawURL = strings.TrimSpace(rawURL)
+	// Default to http:// when the user omits the scheme.
+	if rawURL != "" && !strings.Contains(rawURL, "://") {
+		rawURL = "http://" + rawURL
+	}
+	rawURL = strings.TrimRight(rawURL, "/")
+
+	fmt.Print("Upload folder (optional, blank = root): ")
+	dir, _ := reader.ReadString('\n')
+	dir = strings.TrimSpace(dir)
+
+	target := config.OutplayerTarget{
+		Name:    name,
+		URL:     rawURL,
+		Dir:     dir,
+		Enabled: true,
+	}
+	if err := target.Validate(); err != nil {
+		return fmt.Errorf("invalid target: %w", err)
+	}
+
+	// Best-effort connectivity check; a target can still be saved while offline.
+	fmt.Println(infoStyle.Render("\nChecking connectivity..."))
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	if err := outplayer.Reachable(ctx, target.URL); err != nil {
+		fmt.Println(warningStyle.Render(fmt.Sprintf("⚠ Could not reach target: %v", err)))
+		fmt.Println(infoStyle.Render("Saved anyway. Enable Wi-Fi transfer in Outplayer before uploading."))
+	} else {
+		fmt.Println(successStyle.Render("✓ Target is reachable"))
+	}
+
+	cfg.OutplayerTargets = append(cfg.OutplayerTargets, target)
+	if err := cfg.Save(); err != nil {
+		return fmt.Errorf("failed to save config: %w", err)
+	}
+	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Added Outplayer target %q", name)))
+	return nil
+}
+
+// runOutplayerRemove deletes a target from the config by name.
+func runOutplayerRemove(cmd *cobra.Command, args []string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	name := args[0]
+	idx := findOutplayerTarget(cfg, name)
+	if idx == -1 {
+		return fmt.Errorf("no Outplayer target named %q", name)
+	}
+	removed := cfg.OutplayerTargets[idx].Name
+	cfg.OutplayerTargets = append(cfg.OutplayerTargets[:idx], cfg.OutplayerTargets[idx+1:]...)
+	if err := cfg.Save(); err != nil {
+		return fmt.Errorf("failed to save config: %w", err)
+	}
+	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Removed Outplayer target %q", removed)))
+	return nil
+}
+
+// runOutplayerEnable enables a target so it appears in the transfer menu.
+func runOutplayerEnable(cmd *cobra.Command, args []string) error {
+	return setOutplayerEnabled(args[0], true)
+}
+
+// runOutplayerDisable disables a target so it is hidden from the transfer menu.
+func runOutplayerDisable(cmd *cobra.Command, args []string) error {
+	return setOutplayerEnabled(args[0], false)
+}
+
+// setOutplayerEnabled toggles the Enabled flag of a target by name and saves.
+func setOutplayerEnabled(name string, enabled bool) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	idx := findOutplayerTarget(cfg, name)
+	if idx == -1 {
+		return fmt.Errorf("no Outplayer target named %q", name)
+	}
+	cfg.OutplayerTargets[idx].Enabled = enabled
+	if err := cfg.Save(); err != nil {
+		return fmt.Errorf("failed to save config: %w", err)
+	}
+	state := "enabled"
+	if !enabled {
+		state = "disabled"
+	}
+	fmt.Println(successStyle.Render(fmt.Sprintf("✓ %s Outplayer target %q", state, cfg.OutplayerTargets[idx].Name)))
+	return nil
+}
+
+// handleTransferToOutplayer uploads the selected media to a user-configured
+// Outplayer Wi-Fi transfer target. The media source is streamed from its rclone
+// remote directly into Outplayer's HTTP uploader (see internal/outplayer).
+func handleTransferToOutplayer(cfg *config.Config, mediaItems []*plex.MediaItem) error {
+	if len(mediaItems) == 0 {
+		return fmt.Errorf("no media items provided")
+	}
+
+	// rclone provides the source bytes (same requirement as downloads).
+	if !download.IsAvailable(cfg.RclonePath) {
+		return fmt.Errorf("rclone is not installed. Please install rclone to transfer media")
+	}
+
+	// Collect rclone source paths and validate (mirrors handleTransferToWebDAV).
+	var rclonePaths []string
+	for _, media := range mediaItems {
+		if media.RclonePath == "" {
+			fmt.Println(warningStyle.Render(fmt.Sprintf("⚠ Skipping %s (no rclone path)", media.FormatMediaTitle())))
+			continue
+		}
+		rclonePaths = append(rclonePaths, media.RclonePath)
+	}
+	if len(rclonePaths) == 0 {
+		return fmt.Errorf("no valid rclone paths available")
+	}
+
+	targets := cfg.GetEnabledOutplayerTargets()
+	if len(targets) == 0 {
+		fmt.Println(warningStyle.Render("No enabled Outplayer targets."))
+		fmt.Println(infoStyle.Render("Add one with: goplexcli outplayer add"))
+		return nil
+	}
+
+	// Select a target if more than one is enabled.
+	var selected config.OutplayerTarget
+	if len(targets) == 1 {
+		selected = targets[0]
+		fmt.Println(infoStyle.Render(fmt.Sprintf("Uploading to: %s (%s)", selected.Name, selected.URL)))
+	} else {
+		names := make([]string, len(targets))
+		for i, t := range targets {
+			names[i] = fmt.Sprintf("%s (%s)", t.Name, t.URL)
+		}
+		if ui.IsAvailable(cfg.FzfPath) {
+			_, idx, err := ui.SelectWithFzf(names, "Select Outplayer target:", cfg.FzfPath)
+			if err != nil {
+				if errors.Is(err, apperrors.ErrCancelled) {
+					return nil
+				}
+				return fmt.Errorf("target selection failed: %w", err)
+			}
+			selected = targets[idx]
+		} else {
+			fmt.Println(infoStyle.Render("Available targets:"))
+			for i, n := range names {
+				fmt.Printf("  %d. %s\n", i+1, n)
+			}
+			fmt.Print("\nSelect target number: ")
+			var choice int
+			if _, err := fmt.Scanln(&choice); err != nil {
+				return fmt.Errorf("failed to read selection: %w", err)
+			}
+			if choice < 1 || choice > len(targets) {
+				return fmt.Errorf("invalid selection")
+			}
+			selected = targets[choice-1]
+		}
+	}
+
+	if dryRun {
+		fmt.Println(warningStyle.Render(fmt.Sprintf("\n[DRY RUN] Would upload %d file(s) to %s (%s):", len(rclonePaths), selected.Name, selected.URL)))
+		for _, p := range rclonePaths {
+			fmt.Println(infoStyle.Render("  - " + p))
+		}
+		return nil
+	}
+
+	ctx := context.Background()
+
+	// Fail fast if the target is unreachable (e.g. Wi-Fi transfer is off).
+	checkCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	err := outplayer.Reachable(checkCtx, selected.URL)
+	cancel()
+	if err != nil {
+		return fmt.Errorf("cannot reach %s (%s): %w\nMake sure Outplayer's Wi-Fi transfer is enabled and on the same network", selected.Name, selected.URL, err)
+	}
+
+	fmt.Println(successStyle.Render(fmt.Sprintf("\n✓ Uploading %d item(s) to %s...", len(rclonePaths), selected.Name)))
+	if err := outplayer.Upload(ctx, rclonePaths, selected.URL, selected.Dir, cfg.RclonePath); err != nil {
+		return fmt.Errorf("upload failed: %w", err)
+	}
+
+	fmt.Println(successStyle.Render("✓ All uploads complete"))
+	return nil
+}
+
 func handleSenPlayer(cfg *config.Config, mediaItems []*plex.MediaItem, mode string) error {
 	if len(mediaItems) == 0 {
 		return fmt.Errorf("no media items provided")
@@ -2062,43 +2384,44 @@ func selectMediaTypeManualWithQueue(queueCount, continueCount int) (string, erro
 	return options[choice-1].token, nil
 }
 
-// promptActionManualWithQueue - fallback for no-fzf action selection with queue
-func promptActionManualWithQueue(selectionCount, queueCount int) (string, error) {
+// promptActionManualWithQueue - fallback for no-fzf action selection with queue.
+// "Transfer to Outplayer" is only listed when outplayerCount > 0, so the option
+// numbering is built dynamically.
+func promptActionManualWithQueue(selectionCount, queueCount, outplayerCount int) (string, error) {
 	queueLabel := fmt.Sprintf("Add (%d) to Queue", selectionCount)
 	if queueCount > 0 {
 		queueLabel = fmt.Sprintf("Add (%d) to Queue (%d)", selectionCount, queueCount)
 	}
 
+	type option struct {
+		label string
+		token string
+	}
+	options := []option{
+		{"Watch", "watch"},
+		{"Download", "download"},
+		{queueLabel, "queue"},
+		{"Transfer to WebDAV", "transfer"},
+	}
+	if outplayerCount > 0 {
+		options = append(options, option{"Transfer to Outplayer", "transfer-outplayer"})
+	}
+	options = append(options, option{"More...", "more"}, option{"Cancel", "cancel"})
+
 	fmt.Println(infoStyle.Render("\nSelect action:"))
-	fmt.Println("  1. Watch")
-	fmt.Println("  2. Download")
-	fmt.Printf("  3. %s\n", queueLabel)
-	fmt.Println("  4. Transfer to WebDAV")
-	fmt.Println("  5. More...")
-	fmt.Println("  6. Cancel")
-	fmt.Print("\nChoice (1-6): ")
+	for i, opt := range options {
+		fmt.Printf("  %d. %s\n", i+1, opt.label)
+	}
+	fmt.Printf("\nChoice (1-%d): ", len(options))
 
 	var choice int
 	if _, err := fmt.Scanln(&choice); err != nil {
 		return "", fmt.Errorf("failed to read selection: %w", err)
 	}
-
-	switch choice {
-	case 1:
-		return "watch", nil
-	case 2:
-		return "download", nil
-	case 3:
-		return "queue", nil
-	case 4:
-		return "transfer", nil
-	case 5:
-		return "more", nil
-	case 6:
-		return "cancel", nil
-	default:
+	if choice < 1 || choice > len(options) {
 		return "cancel", nil
 	}
+	return options[choice-1].token, nil
 }
 
 // promptMoreActionManual - fallback for no-fzf selection of the "More..." submenu.

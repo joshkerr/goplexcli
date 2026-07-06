@@ -396,8 +396,9 @@ func PluralizeItems(count int) string {
 	return fmt.Sprintf("%d items", count)
 }
 
-// PromptActionWithQueue asks the user what action to take, showing queue count
-func PromptActionWithQueue(fzfPath string, selectionCount, queueCount int) (string, error) {
+// PromptActionWithQueue asks the user what action to take, showing queue count.
+// "Transfer to Outplayer" is only offered when outplayerCount > 0.
+func PromptActionWithQueue(fzfPath string, selectionCount, queueCount, outplayerCount int) (string, error) {
 	queueLabel := fmt.Sprintf("Add (%d) to Queue", selectionCount)
 	if queueCount > 0 {
 		queueLabel = fmt.Sprintf("Add (%d) to Queue (%d)", selectionCount, queueCount)
@@ -408,9 +409,11 @@ func PromptActionWithQueue(fzfPath string, selectionCount, queueCount int) (stri
 		"Download",
 		queueLabel,
 		"Transfer to WebDAV",
-		"More...",
-		"Cancel",
 	}
+	if outplayerCount > 0 {
+		actions = append(actions, "Transfer to Outplayer")
+	}
+	actions = append(actions, "More...", "Cancel")
 
 	selected, _, err := SelectWithFzf(actions, "Select action:", fzfPath)
 	if err != nil {
@@ -423,6 +426,9 @@ func PromptActionWithQueue(fzfPath string, selectionCount, queueCount int) (stri
 	}
 	if selected == "Transfer to WebDAV" {
 		return "transfer", nil
+	}
+	if selected == "Transfer to Outplayer" {
+		return "transfer-outplayer", nil
 	}
 	if selected == "More..." {
 		return "more", nil

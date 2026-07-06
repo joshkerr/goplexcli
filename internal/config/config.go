@@ -62,6 +62,45 @@ type Config struct {
 	// WebDAVDir is an optional sub-path under the server root to upload into
 	// (e.g. "incoming"). Empty uploads to the server root.
 	WebDAVDir string `json:"webdav_dir,omitempty"`
+
+	// OutplayerTargets are user-defined Outplayer "Wi-Fi transfer" destinations.
+	// Unlike gowebdav servers they are not discovered on the LAN; each is
+	// configured explicitly with a base URL. Individually enabled or disabled;
+	// disabled targets are hidden from the transfer menu but kept in config.
+	OutplayerTargets []OutplayerTarget `json:"outplayer_targets,omitempty"`
+}
+
+// OutplayerTarget represents an Outplayer "Wi-Fi transfer" destination.
+// Outplayer is an iOS media player whose Wi-Fi transfer feature runs a small
+// HTTP server (GCDWebUploader) that accepts multipart file uploads. Multiple
+// targets can be configured and each individually enabled or disabled.
+type OutplayerTarget struct {
+	// Name is a human-readable identifier for the target (e.g. "iPhone").
+	Name string `json:"name"`
+	// URL is the base URL of the Outplayer Wi-Fi transfer server, as shown in
+	// the app (e.g. "http://192.168.0.34").
+	URL string `json:"url"`
+	// Dir is the destination folder on the target to upload into. Empty means
+	// the server root. Note that some built-in folders (e.g. "Inbox") are not
+	// writable, so the root is the safe default.
+	Dir string `json:"dir,omitempty"`
+	// Enabled determines whether this target appears in the transfer menu.
+	Enabled bool `json:"enabled"`
+}
+
+// Validate checks that an Outplayer target has the required fields and a usable
+// URL. It is called when adding a target so misconfiguration is caught early.
+func (t OutplayerTarget) Validate() error {
+	if t.Name == "" {
+		return fmt.Errorf("name is required")
+	}
+	if t.URL == "" {
+		return fmt.Errorf("URL is required")
+	}
+	if err := validateServerURL(t.URL); err != nil {
+		return err
+	}
+	return nil
 }
 
 // PathMapping translates a Plex on-disk file path prefix into an rclone remote.
@@ -232,6 +271,18 @@ func (c *Config) GetEnabledServers() []PlexServer {
 	for _, server := range c.Servers {
 		if server.Enabled {
 			enabled = append(enabled, server)
+		}
+	}
+	return enabled
+}
+
+// GetEnabledOutplayerTargets returns all Outplayer targets that are enabled and
+// should be offered as transfer destinations.
+func (c *Config) GetEnabledOutplayerTargets() []OutplayerTarget {
+	var enabled []OutplayerTarget
+	for _, t := range c.OutplayerTargets {
+		if t.Enabled {
+			enabled = append(enabled, t)
 		}
 	}
 	return enabled

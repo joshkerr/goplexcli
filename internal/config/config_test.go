@@ -317,3 +317,74 @@ func findSubstring(s, substr string) bool {
 	}
 	return false
 }
+
+func TestGetEnabledOutplayerTargets(t *testing.T) {
+	cfg := Config{
+		OutplayerTargets: []OutplayerTarget{
+			{Name: "iPhone", URL: "http://192.168.0.34", Enabled: true},
+			{Name: "iPad", URL: "http://192.168.0.35", Enabled: false},
+			{Name: "AppleTV", URL: "http://192.168.0.36", Enabled: true},
+		},
+	}
+	enabled := cfg.GetEnabledOutplayerTargets()
+	if len(enabled) != 2 {
+		t.Fatalf("got %d enabled targets, want 2", len(enabled))
+	}
+	if enabled[0].Name != "iPhone" || enabled[1].Name != "AppleTV" {
+		t.Errorf("unexpected enabled targets: %+v", enabled)
+	}
+
+	if got := (&Config{}).GetEnabledOutplayerTargets(); len(got) != 0 {
+		t.Errorf("empty config returned %d targets, want 0", len(got))
+	}
+}
+
+func TestOutplayerTargetValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		target  OutplayerTarget
+		wantErr bool
+	}{
+		{"valid", OutplayerTarget{Name: "iPhone", URL: "http://192.168.0.34"}, false},
+		{"valid https", OutplayerTarget{Name: "iPhone", URL: "https://phone.local"}, false},
+		{"missing name", OutplayerTarget{URL: "http://192.168.0.34"}, true},
+		{"missing url", OutplayerTarget{Name: "iPhone"}, true},
+		{"bad scheme", OutplayerTarget{Name: "iPhone", URL: "ftp://192.168.0.34"}, true},
+		{"no host", OutplayerTarget{Name: "iPhone", URL: "http://"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.target.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestOutplayerTargetsRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("APPDATA", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cfg := &Config{
+		PlexToken: "tok",
+		OutplayerTargets: []OutplayerTarget{
+			{Name: "iPhone", URL: "http://192.168.0.34", Dir: "Movies", Enabled: true},
+		},
+	}
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(loaded.OutplayerTargets) != 1 {
+		t.Fatalf("got %d targets after round-trip, want 1", len(loaded.OutplayerTargets))
+	}
+	got := loaded.OutplayerTargets[0]
+	if got.Name != "iPhone" || got.URL != "http://192.168.0.34" || got.Dir != "Movies" || !got.Enabled {
+		t.Errorf("round-trip mismatch: %+v", got)
+	}
+}
