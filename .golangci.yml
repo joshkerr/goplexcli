@@ -1,0 +1,27 @@
+# golangci-lint configuration (schema v2).
+#
+# The CI lint job pins `version: latest`, which under the golangci-lint-action
+# v8 runner means golangci-lint v2. v2 dropped the lenient default exclusions
+# that v1 shipped with, so without this file the upgrade would newly flag
+# patterns CI never enforced (unchecked resp.Body.Close()/fmt.Fprint*, etc.).
+# This config restores the prior behavior so the action bump is a no-op for
+# lint results rather than a hidden policy change.
+version: "2"
+
+linters:
+  exclusions:
+    presets:
+      # EXC0001-equivalent: don't flag the conventionally-ignored errcheck
+      # cases (Close, Flush, fmt.Fprint*/Print*, os.Setenv, ...). v1 excluded
+      # these by default.
+      - std-error-handling
+  settings:
+    staticcheck:
+      # v2 folds gosimple/stylecheck into the single staticcheck linter and
+      # enables the ST (stylecheck) and QF (quickfix) checks. Under v1 those
+      # were separate, non-default linters, so disable both categories to keep
+      # the enabled-check set equivalent to the previous v1.64.x run (SA + S).
+      checks:
+        - all
+        - -ST1*
+        - -QF1*
