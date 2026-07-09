@@ -22,10 +22,13 @@ type App struct {
 	mu  sync.RWMutex
 	cfg *config.Config
 
-	// pendingToken/pendingUser hold the auth token captured by Login until the
-	// user confirms a server selection via SaveServers.
-	pendingToken string
-	pendingUser  string
+	// pendingToken/pendingUser/pendingServers hold the auth token and server
+	// list captured by Login until the user confirms a server selection via
+	// SaveServers. The server list is kept so each saved server can be paired
+	// with its per-server access token (required for shared, non-owner users).
+	pendingToken   string
+	pendingUser    string
+	pendingServers []plex.Server
 
 	// busy guards long-running, mutually-exclusive operations (reindex) so the
 	// UI can't kick off two at once.
@@ -176,6 +179,7 @@ func (a *App) Login(username, password string) ([]ServerDTO, error) {
 	a.mu.Lock()
 	a.pendingToken = token
 	a.pendingUser = username
+	a.pendingServers = servers
 	a.mu.Unlock()
 
 	out := make([]ServerDTO, 0, len(servers))
@@ -191,6 +195,7 @@ func (a *App) SaveServers(selections []ServerSelection) error {
 	a.mu.RLock()
 	token := a.pendingToken
 	user := a.pendingUser
+	pendingServers := a.pendingServers
 	a.mu.RUnlock()
 	if token == "" {
 		return fmt.Errorf("not logged in - call Login first")
@@ -204,9 +209,17 @@ func (a *App) SaveServers(selections []ServerSelection) error {
 	if user != "" {
 		cfg.PlexUsername = user
 	}
+	// Per-server access tokens from the Login discovery, keyed by server name.
+	// Shared (non-owner) users need these: the server rejects their account
+	// token with a 401.
+	accessTokens := make(map[string]string, len(pendingServers))
+	for _, ps := range pendingServers {
+		accessTokens[ps.Name] = ps.AccessToken
+	}
+
 	cfg.Servers = cfg.Servers[:0]
 	for _, s := range selections {
-		cfg.Servers = append(cfg.Servers, config.PlexServer{Name: s.Name, URL: s.URL, Enabled: true})
+		cfg.Servers = append(cfg.Servers, config.PlexServer{Name: s.Name, URL: s.URL, Token: accessTokens[s.Name], Enabled: true})
 	}
 	if err := cfg.Validate(); err != nil {
 		return err

@@ -1155,6 +1155,10 @@ type Server struct {
 	Local       bool
 	Owned       bool
 	Connections []string
+	// AccessToken is the per-server token issued by plex.tv. For shared
+	// (non-owner) users this is the only token the server accepts; the
+	// account token used to talk to plex.tv gets a 401.
+	AccessToken string
 }
 
 // Authenticate authenticates with Plex using username and password
@@ -1209,8 +1213,9 @@ func Authenticate(username, password string) (string, []Server, error) {
 	for _, device := range resourcesRes.PlexDevices {
 		if device.Provides != "" && strings.Contains(device.Provides, "server") {
 			server := Server{
-				Name:  device.Name,
-				Owned: device.Owned,
+				Name:        device.Name,
+				Owned:       device.Owned,
+				AccessToken: device.AccessToken,
 			}
 
 			// Collect all connection URLs

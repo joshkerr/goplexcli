@@ -21,6 +21,12 @@ type PlexServer struct {
 	Name string `json:"name"`
 	// URL is the base URL of the Plex server (e.g., "http://192.168.1.100:32400")
 	URL string `json:"url"`
+	// Token is this server's access token from plex.tv. Shared (non-owner)
+	// accounts cannot use their account token against a server — the server
+	// returns 401 — so the per-server token must be used when present. Empty
+	// for configs saved before this field existed; callers fall back to the
+	// account-wide PlexToken (see Config.TokenForServer).
+	Token string `json:"token,omitempty"`
 	// Enabled determines whether this server is included when indexing media
 	Enabled bool `json:"enabled"`
 }
@@ -263,6 +269,31 @@ func (c *Config) ResolveDownloadDir(override string) (string, error) {
 		return "", fmt.Errorf("invalid download dir %q: %w", dir, err)
 	}
 	return abs, nil
+}
+
+// TokenForServer returns the token to use when talking to a specific server:
+// the server's own access token when present, otherwise the account-wide
+// PlexToken. Owners can use their account token directly, but shared users
+// get a 401 from the server unless the per-server token is used.
+func (c *Config) TokenForServer(s PlexServer) string {
+	if s.Token != "" {
+		return s.Token
+	}
+	return c.PlexToken
+}
+
+// TokenForURL returns the token to use for the server at the given URL,
+// matching configured servers while ignoring trailing slashes. It falls back
+// to the account-wide PlexToken when no configured server matches or the
+// matching server has no token of its own.
+func (c *Config) TokenForURL(serverURL string) string {
+	target := strings.TrimRight(serverURL, "/")
+	for _, s := range c.Servers {
+		if strings.TrimRight(s.URL, "/") == target && s.Token != "" {
+			return s.Token
+		}
+	}
+	return c.PlexToken
 }
 
 // GetEnabledServers returns all servers that should be indexed

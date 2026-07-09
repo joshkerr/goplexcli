@@ -107,7 +107,7 @@ func (a *App) thumbURL(item *plex.MediaItem) string {
 	if base == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s%s?X-Plex-Token=%s", strings.TrimRight(base, "/"), item.Thumb, a.config().PlexToken)
+	return fmt.Sprintf("%s%s?X-Plex-Token=%s", strings.TrimRight(base, "/"), item.Thumb, a.config().TokenForURL(base))
 }
 
 // toDTO converts a cached MediaItem into its frontend shape.

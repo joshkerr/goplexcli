@@ -362,6 +362,48 @@ func TestOutplayerTargetValidate(t *testing.T) {
 	}
 }
 
+func TestTokenForServer(t *testing.T) {
+	cfg := &Config{PlexToken: "account-token"}
+
+	withToken := PlexServer{Name: "Shared", URL: "http://shared:32400", Token: "server-token"}
+	if got := cfg.TokenForServer(withToken); got != "server-token" {
+		t.Errorf("TokenForServer(with token) = %q, want %q", got, "server-token")
+	}
+
+	withoutToken := PlexServer{Name: "Legacy", URL: "http://legacy:32400"}
+	if got := cfg.TokenForServer(withoutToken); got != "account-token" {
+		t.Errorf("TokenForServer(without token) = %q, want %q", got, "account-token")
+	}
+}
+
+func TestTokenForURL(t *testing.T) {
+	cfg := &Config{
+		PlexToken: "account-token",
+		Servers: []PlexServer{
+			{Name: "Shared", URL: "http://shared:32400/", Token: "server-token", Enabled: true},
+			{Name: "Legacy", URL: "http://legacy:32400", Enabled: true},
+		},
+	}
+
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{"matching server with token", "http://shared:32400", "server-token"},
+		{"trailing slash mismatch tolerated", "http://shared:32400/", "server-token"},
+		{"matching server without token falls back", "http://legacy:32400", "account-token"},
+		{"unknown URL falls back", "http://other:32400", "account-token"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := cfg.TokenForURL(tt.url); got != tt.want {
+				t.Errorf("TokenForURL(%q) = %q, want %q", tt.url, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestOutplayerTargetsRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("APPDATA", dir)

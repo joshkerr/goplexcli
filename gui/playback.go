@@ -43,7 +43,7 @@ func (a *App) Play(keys []string, resume bool) error {
 
 	// All playlist items must share a server for stream-URL generation and
 	// progress reporting; use the first item's server.
-	client, err := plex.NewWithName(items[0].ServerURL, cfg.PlexToken, items[0].ServerName)
+	client, err := plex.NewWithName(items[0].ServerURL, cfg.TokenForURL(items[0].ServerURL), items[0].ServerName)
 	if err != nil {
 		return fmt.Errorf("failed to create Plex client: %w", err)
 	}
@@ -52,7 +52,7 @@ func (a *App) Play(keys []string, resume bool) error {
 	for _, it := range items {
 		itemClient := client
 		if it.ServerURL != items[0].ServerURL {
-			if c2, e := plex.NewWithName(it.ServerURL, cfg.PlexToken, it.ServerName); e == nil {
+			if c2, e := plex.NewWithName(it.ServerURL, cfg.TokenForURL(it.ServerURL), it.ServerName); e == nil {
 				itemClient = c2
 			}
 		}

@@ -551,6 +551,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 			for i, s := range cfg.Servers {
 				if s.URL == selectedURL {
 					cfg.Servers[i].Enabled = true
+					cfg.Servers[i].Token = selectedServer.AccessToken
 					serverExists = true
 					fmt.Println(infoStyle.Render("Server already exists, enabled it"))
 					break
@@ -562,6 +563,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 				cfg.Servers = append(cfg.Servers, config.PlexServer{
 					Name:    selectedServer.Name,
 					URL:     selectedURL,
+					Token:   selectedServer.AccessToken,
 					Enabled: true,
 				})
 				fmt.Println(successStyle.Render(fmt.Sprintf("✓ Added server '%s'", selectedServer.Name)))
@@ -572,6 +574,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 				{
 					Name:    selectedServer.Name,
 					URL:     selectedURL,
+					Token:   selectedServer.AccessToken,
 					Enabled: true,
 				},
 			}
@@ -583,6 +586,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 			{
 				Name:    selectedServer.Name,
 				URL:     selectedURL,
+				Token:   selectedServer.AccessToken,
 				Enabled: true,
 			},
 		}
@@ -1313,7 +1317,7 @@ func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error
 	fmt.Println(infoStyle.Render(fmt.Sprintf("\nPreparing to play %d items...", len(mediaItems))))
 
 	// Create Plex client
-	client, err := plex.New(cfg.PlexURL, cfg.PlexToken)
+	client, err := plex.New(cfg.PlexURL, cfg.TokenForURL(cfg.PlexURL))
 	if err != nil {
 		return fmt.Errorf("failed to create plex client: %w", err)
 	}
@@ -2037,7 +2041,7 @@ func handleSenPlayer(cfg *config.Config, mediaItems []*plex.MediaItem, mode stri
 	fmt.Println(infoStyle.Render(fmt.Sprintf("\nPreparing for SenPlayer (%s): %s", actionText, media.FormatMediaTitle())))
 
 	// Create Plex client
-	client, err := plex.New(cfg.PlexURL, cfg.PlexToken)
+	client, err := plex.New(cfg.PlexURL, cfg.TokenForURL(cfg.PlexURL))
 	if err != nil {
 		return fmt.Errorf("failed to create plex client: %w", err)
 	}
@@ -2096,7 +2100,7 @@ func handleStream(cfg *config.Config, media *plex.MediaItem) error {
 	fmt.Println(infoStyle.Render("\nPublishing stream: " + media.FormatMediaTitle()))
 
 	// Create Plex client
-	client, err := plex.New(cfg.PlexURL, cfg.PlexToken)
+	client, err := plex.New(cfg.PlexURL, cfg.TokenForURL(cfg.PlexURL))
 	if err != nil {
 		return fmt.Errorf("failed to create plex client: %w", err)
 	}
@@ -2114,7 +2118,7 @@ func handleStream(cfg *config.Config, media *plex.MediaItem) error {
 	}
 
 	// Publish the stream
-	streamID := server.PublishStream(media, streamURL, cfg.PlexURL, cfg.PlexToken)
+	streamID := server.PublishStream(media, streamURL, cfg.PlexURL, cfg.TokenForURL(cfg.PlexURL))
 
 	localIP := stream.GetLocalIP()
 	webURL := fmt.Sprintf("http://%s:%d", localIP, stream.DefaultPort)
@@ -2561,7 +2565,7 @@ func updateCache(fullReindex bool) error {
 			serverConfigs = append(serverConfigs, struct{ Name, URL, Token string }{
 				Name:  server.Name,
 				URL:   server.URL,
-				Token: cfg.PlexToken,
+				Token: cfg.TokenForServer(server),
 			})
 		}
 
@@ -2592,17 +2596,19 @@ func updateCache(fullReindex bool) error {
 		}
 	} else {
 		// Single-server mode (legacy or single enabled server)
-		var serverURL string
+		var serverURL, serverToken string
 		if len(enabledServers) == 1 {
 			serverURL = enabledServers[0].URL
+			serverToken = cfg.TokenForServer(enabledServers[0])
 		} else {
 			serverURL = cfg.PlexURL
+			serverToken = cfg.TokenForURL(serverURL)
 		}
 
 		fmt.Println(infoStyle.Render("Connecting to Plex server..."))
 
 		// Create Plex client
-		client, err := plex.New(serverURL, cfg.PlexToken)
+		client, err := plex.New(serverURL, serverToken)
 		if err != nil {
 			return fmt.Errorf("failed to create plex client: %w", err)
 		}
@@ -3005,7 +3011,7 @@ func runCacheSearch(cmd *cobra.Command, args []string) error {
 	// Search in Plex directly
 	fmt.Println(infoStyle.Render("=== Checking Plex Server ==="))
 
-	client, err := plex.New(cfg.PlexURL, cfg.PlexToken)
+	client, err := plex.New(cfg.PlexURL, cfg.TokenForURL(cfg.PlexURL))
 	if err != nil {
 		return fmt.Errorf("failed to create plex client: %w", err)
 	}

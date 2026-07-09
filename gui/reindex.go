@@ -99,7 +99,7 @@ func (a *App) emitReindexDone(count int, err error) {
 func buildServerConfigs(cfg *config.Config) ([]struct{ Name, URL, Token string }, error) {
 	var out []struct{ Name, URL, Token string }
 	for _, s := range cfg.GetEnabledServers() {
-		out = append(out, struct{ Name, URL, Token string }{Name: s.Name, URL: s.URL, Token: cfg.PlexToken})
+		out = append(out, struct{ Name, URL, Token string }{Name: s.Name, URL: s.URL, Token: cfg.TokenForServer(s)})
 	}
 	// Legacy single-server fallback.
 	if len(out) == 0 && cfg.PlexURL != "" {
