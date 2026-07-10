@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"sync"
 
 	"github.com/joshkerr/goplexcli/internal/cache"
@@ -39,25 +40,33 @@ type App struct {
 	// and JSON-decoding it on every browse/search call would make the UI
 	// unresponsive. We parse it once and reuse it, refreshing only after a
 	// reindex or an explicit invalidation.
-	mediaMu      sync.RWMutex
-	mediaCache   *cache.Cache
+	mediaMu    sync.RWMutex
+	mediaCache *cache.Cache
+
+	posters *posterCache
 }
 
 // NewApp creates a new App. Config is loaded lazily in startup.
 func NewApp() *App {
-	return &App{}
+	return &App{posters: newPosterCache(http.DefaultClient)}
 }
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	if err := a.posters.start(); err != nil {
+		fmt.Printf("poster cache server unavailable: %v\n", err)
+	}
 	if cfg, err := config.Load(); err == nil {
 		a.mu.Lock()
 		a.cfg = cfg
 		a.mu.Unlock()
 	}
+	go a.posters.prune()
 }
 
-func (a *App) shutdown(ctx context.Context) {}
+func (a *App) shutdown(ctx context.Context) {
+	a.posters.close(ctx)
+}
 
 // config returns the in-memory config, loading it from disk if needed.
 func (a *App) config() *config.Config {
@@ -94,15 +103,15 @@ func (a *App) reloadConfig() *config.Config {
 // StatusDTO describes the app's readiness on launch so the frontend can route
 // to login, first-run indexing, or the library.
 type StatusDTO struct {
-	Configured      bool   `json:"configured"`
-	HasCache        bool   `json:"hasCache"`
-	CacheCount      int    `json:"cacheCount"`
-	LastUpdated     string `json:"lastUpdated"`
-	MovieCount      int    `json:"movieCount"`
-	ShowCount       int    `json:"showCount"`
-	EpisodeCount    int    `json:"episodeCount"`
-	MPVAvailable    bool   `json:"mpvAvailable"`
-	RcloneAvailable bool   `json:"rcloneAvailable"`
+	Configured      bool     `json:"configured"`
+	HasCache        bool     `json:"hasCache"`
+	CacheCount      int      `json:"cacheCount"`
+	LastUpdated     string   `json:"lastUpdated"`
+	MovieCount      int      `json:"movieCount"`
+	ShowCount       int      `json:"showCount"`
+	EpisodeCount    int      `json:"episodeCount"`
+	MPVAvailable    bool     `json:"mpvAvailable"`
+	RcloneAvailable bool     `json:"rcloneAvailable"`
 	ServerNames     []string `json:"serverNames"`
 }
 

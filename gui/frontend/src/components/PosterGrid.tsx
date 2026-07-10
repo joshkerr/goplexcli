@@ -17,6 +17,8 @@ const LABEL_H = 48; // title + subtitle area beneath each poster
 const PAD_X = 32; // px-8
 const PAD_Y = 24; // py-6
 const OVERSCAN = 2; // extra rows rendered above/below the viewport
+const PREFETCH_ROWS = 2; // warm the next rows while the browser is idle
+const prefetchedPosters = new Set<string>();
 
 /**
  * A windowed (virtualized) poster grid.
@@ -91,6 +93,36 @@ export function PosterGrid({ items, loading, emptyMessage, onSelect }: Props) {
   const startIdx = ready ? firstRow * cols : 0;
   const endIdx = ready ? Math.min(items.length - 1, (lastRow + 1) * cols - 1) : -1;
   const visible = ready ? items.slice(startIdx, endIdx + 1) : [];
+  const viewportFirstRow = Math.max(0, Math.floor((scrollTop - PAD_Y) / rowH));
+  const viewportLastRow = Math.min(
+    rowCount - 1,
+    Math.floor((scrollTop - PAD_Y + dims.height) / rowH)
+  );
+
+  // Warm a small number of posters immediately after the rendered window.
+  // The persistent backend cache makes this useful across app launches, while
+  // requestIdleCallback avoids competing with visible, high-priority images.
+  useEffect(() => {
+    if (!ready) return;
+    const from = Math.min(items.length, endIdx + 1);
+    const to = Math.min(items.length, from + cols * PREFETCH_ROWS);
+    const run = () => {
+      for (let i = from; i < to; i++) {
+        const src = items[i]?.thumbURL;
+        if (!src || prefetchedPosters.has(src)) continue;
+        prefetchedPosters.add(src);
+        const image = new Image();
+        image.decoding = "async";
+        image.src = src;
+      }
+    };
+    if ("requestIdleCallback" in window) {
+      const id = window.requestIdleCallback(run, { timeout: 1000 });
+      return () => window.cancelIdleCallback(id);
+    }
+    const id = window.setTimeout(run, 150);
+    return () => window.clearTimeout(id);
+  }, [ready, items, endIdx, cols]);
 
   // Spacer heights above/below the rendered window.
   const topPad = PAD_Y + firstRow * rowH;
@@ -140,9 +172,13 @@ export function PosterGrid({ items, loading, emptyMessage, onSelect }: Props) {
           >
             {visible.map((item, i) => (
               <PosterCard
-                key={startIdx + i}
+                key={item.key}
                 media={item}
                 onClick={() => onSelect(item)}
+                priority={
+                  Math.floor((startIdx + i) / cols) >= viewportFirstRow &&
+                  Math.floor((startIdx + i) / cols) <= viewportLastRow
+                }
               />
             ))}
           </div>

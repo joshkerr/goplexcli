@@ -37,7 +37,7 @@ GO ?= go
 endif
 endif
 
-.PHONY: build install clean test run help lint vet build-all deps bump release-preflight release gui-dev gui-build gui-deps
+.PHONY: build install clean test run help lint vet build-all deps bump release-preflight release gui-dev gui-build gui-install gui-deps
 
 # Running `make` with no target shows the help menu instead of building.
 .DEFAULT_GOAL := help
@@ -126,13 +126,26 @@ gui-deps:
 
 # Run the GUI in development mode with hot reload.
 gui-dev:
-	@cd gui && wails dev
+	@cd gui/frontend && npm run build
+	@cd gui && $(GO) run -tags dev .
 
 # Build the native GUI binary for the current platform.
 gui-build:
 	@echo "Building GoplexCLI desktop app..."
-	@cd gui && wails build
+	@cd gui && wails build -m -nosyncgomod
 	@echo "Build complete: ./gui/build/bin/"
+
+# Install the icon-enabled desktop GUI. On Windows this installs per-user under
+# LOCALAPPDATA and creates a Start Menu shortcut. Pass DESKTOP=1 to also create
+# a desktop shortcut. Other platforms currently keep the built app in
+# gui/build/bin and print platform-specific manual installation guidance.
+gui-install: gui-build
+ifeq ($(OS),Windows_NT)
+	@powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-gui-windows.ps1 -Source "gui/build/bin/goplexcli-gui.exe" $(if $(filter 1,$(DESKTOP)),-DesktopShortcut,)
+else
+	@echo "Automatic GUI installation is currently available on Windows only."
+	@echo "Install the application from ./gui/build/bin/ using your platform's application directory."
+endif
 
 # --- Release ---------------------------------------------------------------
 # Release flow (mirrors .github/workflows/release.yml, which triggers on a
@@ -196,6 +209,7 @@ help:
 	@echo "  make gui-deps    - Install the Wails CLI (for the desktop GUI)"
 	@echo "  make gui-dev     - Run the desktop GUI with hot reload"
 	@echo "  make gui-build   - Build the native desktop GUI binary"
+	@echo "  make gui-install - Build and install the GUI (DESKTOP=1 adds a desktop shortcut)"
 	@echo "  make deps        - Download and tidy dependencies"
 	@echo "  make bump V=X.Y.Z - Bump VERSION, commit, and push"
 	@echo "  make release     - Tag v\$$(VERSION) and push to publish a release"

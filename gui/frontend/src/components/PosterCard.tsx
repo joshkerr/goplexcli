@@ -8,9 +8,10 @@ interface Props {
   // regardless of the source image's aspect ratio. When omitted, the card falls
   // back to a 2:3 aspect ratio.
   posterHeight?: number;
+  priority?: boolean;
 }
 
-export function PosterCard({ media, onClick, posterHeight }: Props) {
+export function PosterCard({ media, onClick, posterHeight, priority = false }: Props) {
   const isShow = media.type === "show";
   const Placeholder = isShow ? TvIcon : FilmIcon;
   const subtitle =
@@ -37,7 +38,9 @@ export function PosterCard({ media, onClick, posterHeight }: Props) {
           <img
             src={media.thumbURL}
             alt={media.title}
-            loading="lazy"
+            loading={priority ? "eager" : "lazy"}
+            fetchPriority={priority ? "high" : "auto"}
+            decoding="async"
             className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
             onError={(e) => {
               (e.currentTarget as HTMLImageElement).style.display = "none";

@@ -52,8 +52,21 @@ function app(): WailsApp {
   return a;
 }
 
+// In development mode Vite may render React just before Wails has injected its
+// bindings into the webview. Wait briefly instead of turning that harmless
+// startup race into a permanent loading screen.
+async function waitForApp(timeoutMs = 5000): Promise<WailsApp> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const bound = window.go?.main?.App;
+    if (bound) return bound;
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+  }
+  return app(); // Throw the existing actionable error after the timeout.
+}
+
 export const api = {
-  getStatus: () => app().GetStatus(),
+  getStatus: async () => (await waitForApp()).GetStatus(),
   login: (u: string, p: string) => app().Login(u, p),
   saveServers: (s: ServerSelection[]) => app().SaveServers(s),
   getConfig: () => app().GetConfig(),

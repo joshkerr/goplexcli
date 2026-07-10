@@ -92,9 +92,14 @@ Requires Go 1.24+, [Node.js](https://nodejs.org) 18+, and the Wails CLI:
 
 ```bash
 make gui-deps        # one-time: installs the Wails CLI to GOPATH/bin
-make gui-dev         # run with hot reload
+make gui-dev         # build the frontend and run with Wails development tools
 make gui-build       # build a native binary into gui/build/bin/
+make gui-install     # Windows: install per-user and create a Start Menu shortcut
 ```
+
+On Windows, `make gui-install DESKTOP=1` also creates a desktop shortcut. The
+icon-enabled executable is installed under
+`%LOCALAPPDATA%\Programs\GoplexCLI`; administrator privileges are not required.
 
 (Equivalently, `cd gui && wails dev` / `wails build`.)
 
@@ -115,6 +120,11 @@ make gui-build       # build a native binary into gui/build/bin/
 4. Open any title for details, then **Play**/**Resume** (MPV) or **Download**
    (rclone, with live progress in the Downloads panel). TV shows drill into
    Season → Episode with multi-select for playlist playback or batch downloads.
+
+Poster grids request compact Plex-generated renditions and keep them in a
+bounded local cache under the GoplexCLI cache directory. Visible posters are
+prioritized and upcoming rows are prefetched while the GUI is idle, so repeat
+browsing does not need to download the artwork again.
 
 ## Quick Start
 

@@ -97,9 +97,9 @@ func (a *App) invalidateMedia() {
 	a.mediaMu.Unlock()
 }
 
-// thumbURL builds a directly-loadable Plex poster URL for an item, embedding
-// the auth token as a query parameter so the webview can fetch it.
-func (a *App) thumbURL(item *plex.MediaItem) string {
+// thumbURL registers a token-free, same-origin URL backed by the persistent
+// poster cache. Plex produces a rendition sized for its display context.
+func (a *App) thumbURL(item *plex.MediaItem, width, height int) string {
 	if item.Thumb == "" {
 		return ""
 	}
@@ -107,7 +107,13 @@ func (a *App) thumbURL(item *plex.MediaItem) string {
 	if base == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s%s?X-Plex-Token=%s", strings.TrimRight(base, "/"), item.Thumb, a.config().TokenForURL(base))
+	return a.posters.register(posterSource{
+		ServerURL: strings.TrimRight(base, "/"),
+		ThumbPath: item.Thumb,
+		Token:     a.config().TokenForURL(base),
+		Width:     width,
+		Height:    height,
+	})
 }
 
 // toDTO converts a cached MediaItem into its frontend shape.
@@ -133,7 +139,7 @@ func (a *App) toDTO(item *plex.MediaItem) MediaDTO {
 		ViewOffset:    item.ViewOffset,
 		ViewCount:     item.ViewCount,
 		ProgressPct:   progressPct(item),
-		ThumbURL:      a.thumbURL(item),
+		ThumbURL:      a.thumbURL(item, 500, 750),
 		ServerName:    item.ServerName,
 	}
 }
@@ -146,7 +152,7 @@ func (a *App) toCard(item *plex.MediaItem) MediaCardDTO {
 		Title:        item.Title,
 		Year:         item.Year,
 		DisplayTitle: item.FormatMediaTitle(),
-		ThumbURL:     a.thumbURL(item),
+		ThumbURL:     a.thumbURL(item, 320, 480),
 		ProgressPct:  progressPct(item),
 		ViewCount:    item.ViewCount,
 	}
@@ -255,7 +261,7 @@ func (a *App) showDTO(c *cache.Cache, title string) (MediaDTO, error) {
 			dto.Year = item.Year
 			dto.Summary = item.Summary
 			dto.Genre = item.Genre
-			dto.ThumbURL = a.thumbURL(item)
+			dto.ThumbURL = a.thumbURL(item, 500, 750)
 			dto.ServerName = item.ServerName
 			found = true
 		}
@@ -304,7 +310,7 @@ func (a *App) groupShowCards(c *cache.Cache) []MediaCardDTO {
 				Title:        item.ParentTitle,
 				DisplayTitle: item.ParentTitle,
 				Year:         item.Year,
-				ThumbURL:     a.thumbURL(item),
+				ThumbURL:     a.thumbURL(item, 320, 480),
 			}
 			byShow[item.ParentTitle] = &card
 			order = append(order, item.ParentTitle)

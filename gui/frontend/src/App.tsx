@@ -36,6 +36,7 @@ const EMPTY_MESSAGES: Partial<Record<NavKey, string>> = {
 
 export default function App() {
   const [status, setStatus] = useState<Status | null>(null);
+  const [startupError, setStartupError] = useState("");
   const [setupDone, setSetupDone] = useState(false);
 
   const [active, setActive] = useState<NavKey>("movies");
@@ -62,9 +63,12 @@ export default function App() {
     try {
       const s = await api.getStatus();
       setStatus(s);
+      setStartupError("");
       return s;
     } catch (e: any) {
-      toast(String(e?.message ?? e), "error");
+      const message = String(e?.message ?? e);
+      setStartupError(message);
+      toast(message, "error");
       return null;
     }
   }, [toast]);
@@ -151,8 +155,23 @@ export default function App() {
 
   if (!status) {
     return (
-      <div className="flex h-full items-center justify-center bg-ink-900 text-white/40">
-        Loading…
+      <div className="flex h-full items-center justify-center bg-ink-900 px-8 text-center">
+        {startupError ? (
+          <div className="max-w-lg">
+            <div className="text-base font-semibold text-white/80">
+              GoplexCLI could not start
+            </div>
+            <div className="mt-2 text-sm text-red-300/80">{startupError}</div>
+            <button
+              onClick={refreshStatus}
+              className="mt-5 rounded-lg bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20"
+            >
+              Retry
+            </button>
+          </div>
+        ) : (
+          <div className="text-white/40">Loading…</div>
+        )}
       </div>
     );
   }

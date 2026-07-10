@@ -813,6 +813,26 @@ Add feature for sorting media by rating
 - Directories: `0755`
 - Temp files with tokens: `0600`
 
+### GUI Poster Pipeline
+
+- `gui/media.go` exposes opaque poster URLs through a loopback-only HTTP server
+  started by `gui/poster_cache.go` on an ephemeral port.
+- `gui/poster_cache.go` requests resized images from Plex's
+  `/photo/:/transcode` endpoint and maintains a bounded persistent disk cache.
+- Plex tokens stay in the Go backend and must not be placed in frontend image
+  URLs. Do not use Wails asset middleware for posters: Wails v2's external dev
+  asset handler is incompatible with custom middleware under Vite 5.
+- Grid and detail renditions use different dimensions; avoid returning original
+  full-size Plex artwork to poster cards.
+- `PosterGrid.tsx` prioritizes the visible viewport and performs bounded idle
+  prefetching for upcoming rows.
+- `make gui-dev` deliberately builds `frontend/dist` and launches the app with
+  `go run -tags dev ./gui`. The `dev` tag is required by Wails. Do not switch
+  it to the external Vite 5 dev server: that
+  combination can load React without injecting the Wails bridge.
+- Avoid using a globally installed Wails CLI for ordinary development; a newer
+  CLI can silently upgrade the repository's Go and Wails versions.
+
 ### Color Codes (Lipgloss)
 - 205: Pink (titles)
 - 42: Green (success)

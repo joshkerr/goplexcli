@@ -40,6 +40,13 @@ Thumbs.db
 # directive still compiles on a fresh clone.
 gui/frontend/node_modules/
 gui/build/bin/
+# Keep Wails application artwork while ignoring generated build products.
+!gui/build/
+gui/build/*
+!gui/build/appicon.png
+!gui/build/windows/
+gui/build/windows/*
+!gui/build/windows/icon.ico
 gui/frontend/dist/*
 !gui/frontend/dist/.gitkeep
 # Wails-generated JS bindings (regenerated on each build; the frontend uses its
