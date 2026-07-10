@@ -44,6 +44,7 @@ gui/build/bin/
 !gui/build/
 gui/build/*
 !gui/build/appicon.png
+!gui/build/gen_icons.py
 !gui/build/windows/
 gui/build/windows/*
 !gui/build/windows/icon.ico
