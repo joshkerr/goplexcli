@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"sync/atomic"
 
 	"github.com/joshkerr/goplexcli/internal/cache"
 	"github.com/joshkerr/goplexcli/internal/config"
@@ -34,6 +35,12 @@ type App struct {
 	// busy guards long-running, mutually-exclusive operations (reindex) so the
 	// UI can't kick off two at once.
 	busy sync.Mutex
+
+	// dlMu serializes rclone transfers so only one file downloads at a time,
+	// even across separate Download() calls; queued jobs report "pending" until
+	// their turn. dlSeq makes job IDs unique across calls.
+	dlMu  sync.Mutex
+	dlSeq atomic.Int64
 
 	// mediaMu/media memoize the parsed media cache in memory. The on-disk
 	// media.json can be tens of MB for large libraries (20k+ items), so loading

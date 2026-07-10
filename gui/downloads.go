@@ -75,13 +75,13 @@ func (a *App) Download(keys []string, destOverride string) error {
 	}
 
 	var jobs []downloadJob
-	for i, it := range items {
+	for _, it := range items {
 		if it.RclonePath == "" {
 			continue // no rclone path; skip silently
 		}
 		name := filepath.Base(it.RclonePath)
 		jobs = append(jobs, downloadJob{
-			id:   fmt.Sprintf("dl_%d_%s", i, name),
+			id:   fmt.Sprintf("dl_%d_%s", a.dlSeq.Add(1), name),
 			src:  it.RclonePath,
 			dest: filepath.Join(destDir, name),
 			name: name,
@@ -91,9 +91,18 @@ func (a *App) Download(keys []string, destOverride string) error {
 		return fmt.Errorf("none of the selected items have a downloadable path")
 	}
 
+	// Show every job as queued right away; each waits for dlMu below so only
+	// one transfer runs at a time, across all Download() calls.
+	for _, j := range jobs {
+		a.emitDownload(DownloadProgress{ID: j.id, Name: j.name, Status: "pending"})
+	}
+
 	var firstErr error
 	for _, j := range jobs {
-		if err := a.runRclone(rcloneBin, j); err != nil && firstErr == nil {
+		a.dlMu.Lock()
+		err := a.runRclone(rcloneBin, j)
+		a.dlMu.Unlock()
+		if err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
