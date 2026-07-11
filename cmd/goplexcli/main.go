@@ -54,11 +54,14 @@ var downloadDest string
 // updateCheckOnly, when true, makes `update` report availability without installing.
 var updateCheckOnly bool
 
-// syncServePort is the port `sync serve` binds; syncPullPeer, when set, makes
-// `sync pull` target that host directly instead of using mDNS discovery.
+// syncServePort is the port `sync serve` binds; syncServeUpdateInterval is how
+// often the serving machine refreshes its own cache from Plex (0 = never);
+// syncPullPeer, when set, makes `sync pull` target that host directly instead of
+// using mDNS discovery.
 var (
-	syncServePort int
-	syncPullPeer  string
+	syncServePort           int
+	syncServeUpdateInterval time.Duration
+	syncPullPeer            string
 )
 
 // searchDescriptions when true also matches against item summaries
@@ -381,6 +384,7 @@ it's open; use this on a headless or CLI-only machine.`,
 		RunE: runSyncServe,
 	}
 	syncServeCmd.Flags().IntVar(&syncServePort, "port", lansync.DefaultPort, "Port to serve on (0 for a random port)")
+	syncServeCmd.Flags().DurationVar(&syncServeUpdateInterval, "update-interval", time.Hour, "How often to refresh this cache from Plex so peers stay current (0 to disable)")
 	syncPullCmd := &cobra.Command{
 		Use:   "pull",
 		Short: "Pull the newest cache from another computer on the LAN",
@@ -3269,6 +3273,16 @@ func runSyncServe(cmd *cobra.Command, args []string) error {
 	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Serving cache as %q on port %d", host, srv.Port())))
 	fmt.Println(infoStyle.Render("Other computers can pull it with the GUI's Sync button, 'goplexcli sync pull',"))
 	fmt.Println(infoStyle.Render(fmt.Sprintf("or directly:  goplexcli sync pull --peer %s", peerHint(host, srv.Port()))))
+
+	// Optionally keep this machine's cache fresh from Plex so peers that pull
+	// always get current data. Runs incremental updates (like 'cache update') on
+	// an interval in the background; serving continues throughout.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if syncServeUpdateInterval > 0 {
+		fmt.Println(infoStyle.Render(fmt.Sprintf("Auto-updating this cache from Plex every %s.", syncServeUpdateInterval)))
+		go serveUpdateLoop(ctx, syncServeUpdateInterval)
+	}
 	fmt.Println(infoStyle.Render("Press Ctrl+C to stop.\n"))
 
 	sigChan := make(chan os.Signal, 1)
@@ -3276,6 +3290,25 @@ func runSyncServe(cmd *cobra.Command, args []string) error {
 	<-sigChan
 	fmt.Println(infoStyle.Render("\nStopping sync server..."))
 	return nil
+}
+
+// serveUpdateLoop refreshes the local cache from Plex on the given interval
+// until ctx is cancelled. Failures are logged but non-fatal — a transient Plex
+// hiccup shouldn't stop the server from serving the last-good cache.
+func serveUpdateLoop(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			fmt.Println(infoStyle.Render(fmt.Sprintf("\n[%s] Running scheduled cache update…", time.Now().Format("15:04"))))
+			if err := updateCache(false); err != nil {
+				fmt.Println(warningStyle.Render("Scheduled cache update failed: " + err.Error()))
+			}
+		}
+	}
 }
 
 // peerHint formats the address to hand to `sync pull --peer`, omitting the port
