@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/joshkerr/goplexcli/internal/lansync"
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -21,10 +22,12 @@ func (a *App) newSyncServer() *lansync.Server {
 	})
 }
 
-// SyncFromLAN discovers peers, pulls the newest cache if one is newer than ours,
-// and hot-swaps it into memory. It emits "sync:progress" events throughout and a
-// final "sync:done" ({updated, upToDate, count, source} or {error}). It shares
-// the busy lock with Reindex/Update so the three can't run at once.
+// SyncFromLAN pulls the newest media cache from another computer and hot-swaps
+// it into memory. If a sync peer is configured (Settings), it goes straight to
+// that host; otherwise it auto-discovers peers via mDNS. It emits "sync:progress"
+// events throughout and a final "sync:done" ({updated, upToDate, count, source}
+// or {error}). It shares the busy lock with Reindex/Update so the three can't run
+// at once.
 func (a *App) SyncFromLAN() error {
 	if a.lan == nil {
 		return fmt.Errorf("lan sync unavailable")
@@ -39,7 +42,13 @@ func (a *App) SyncFromLAN() error {
 		local = lansync.Meta{Count: len(c.Media), LastUpdated: c.LastUpdated}
 	}
 
-	res, err := lansync.SyncFromLAN(context.Background(), a.lan.Instance(), local, a.emitSyncProgress)
+	var res lansync.Result
+	var err error
+	if peer := strings.TrimSpace(a.config().SyncPeer); peer != "" {
+		res, err = lansync.SyncFromPeer(context.Background(), lansync.NormalizePeerAddr(peer), local, a.emitSyncProgress)
+	} else {
+		res, err = lansync.SyncFromLAN(context.Background(), a.lan.Instance(), local, a.emitSyncProgress)
+	}
 	if err != nil {
 		a.emitSyncDone(map[string]any{"error": err.Error()})
 		return err

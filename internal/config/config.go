@@ -54,6 +54,11 @@ type Config struct {
 	// current working directory. Can be overridden per-run with --dest.
 	DownloadDir string `json:"download_dir,omitempty"`
 
+	// SyncPeer is the hostname or IP (optionally host:port) of another computer
+	// on the LAN to pull the media cache from ("Sync from LAN"). When set, sync
+	// goes straight to this host; when empty, mDNS auto-discovery is used.
+	SyncPeer string `json:"sync_peer,omitempty"`
+
 	// PathMappings translate Plex on-disk file paths into rclone remote paths
 	// during cache indexing. If empty, a legacy heuristic is used.
 	PathMappings []PathMapping `json:"path_mappings,omitempty"`
@@ -123,7 +128,7 @@ type PathMapping struct {
 // GetConfigDir returns the platform-specific config directory
 func GetConfigDir() (string, error) {
 	var baseDir string
-	
+
 	switch runtime.GOOS {
 	case "darwin":
 		home, err := os.UserHomeDir()
@@ -150,7 +155,7 @@ func GetConfigDir() (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported platform: %s", runtime.GOOS)
 	}
-	
+
 	configDir := filepath.Join(baseDir, "goplexcli")
 	return configDir, nil
 }
@@ -179,7 +184,7 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -187,17 +192,17 @@ func Load() (*Config, error) {
 		}
 		return nil, err
 	}
-	
+
 	var config Config
 	if err := json.Unmarshal(data, &config); err != nil {
 		return nil, err
 	}
-	
+
 	// Migrate legacy single-server config to multi-server
 	if err := config.MigrateLegacy(); err != nil {
 		return nil, err
 	}
-	
+
 	return &config, nil
 }
 
@@ -207,22 +212,22 @@ func (c *Config) Save() error {
 	if err != nil {
 		return err
 	}
-	
+
 	// Create config directory if it doesn't exist
 	if err := os.MkdirAll(configDir, 0755); err != nil {
 		return err
 	}
-	
+
 	configPath, err := GetConfigPath()
 	if err != nil {
 		return err
 	}
-	
+
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
-	
+
 	return os.WriteFile(configPath, data, 0600)
 }
 

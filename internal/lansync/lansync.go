@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,9 +38,15 @@ const (
 	// Domain is the mDNS domain used for discovery.
 	Domain = "local."
 
+	// DefaultPort is the well-known port the sync server binds by default, so a
+	// peer can be addressed directly (e.g. `sync pull --peer host`) without
+	// knowing a random port. If it's already in use, an ephemeral port is used
+	// instead and mDNS is relied on for discovery.
+	DefaultPort = 47820
+
 	metaTimeout = 4 * time.Second
 	pullTimeout = 10 * time.Minute
-	discoverFor = 3 * time.Second
+	discoverFor = 5 * time.Second
 )
 
 // httpClient is shared by the client-side probes and pulls. Timeouts are bound
@@ -108,17 +115,30 @@ func (s *Server) AdvertiseError() error {
 	return s.advErr
 }
 
-// Start binds a LAN-reachable HTTP server and advertises it via mDNS. It returns
-// an error only when serving cannot start (the port can't be bound); a failure
-// to advertise is recorded in AdvertiseError and does not stop serving.
+// Start binds the server on DefaultPort (falling back to an ephemeral port if
+// it's taken) and advertises it via mDNS.
 func (s *Server) Start() error {
+	return s.StartOn(DefaultPort)
+}
+
+// StartOn binds a LAN-reachable HTTP server on the given port (0 = ephemeral)
+// and advertises it via mDNS. If a non-zero port is already in use it falls back
+// to an ephemeral port rather than failing. It returns an error only when
+// serving cannot start at all; a failure to advertise is recorded in
+// AdvertiseError and does not stop serving.
+func (s *Server) StartOn(port int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.server != nil {
 		return nil
 	}
 
-	listener, err := net.Listen("tcp", ":0")
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil && port != 0 {
+		// Well-known port busy (e.g. the GUI is already serving on it) — take an
+		// ephemeral port and let mDNS handle discovery.
+		listener, err = net.Listen("tcp", ":0")
+	}
 	if err != nil {
 		return fmt.Errorf("lan sync listen: %w", err)
 	}
@@ -395,4 +415,51 @@ func SyncFromLAN(ctx context.Context, excludeInstance string, local Meta, progre
 		return Result{}, err
 	}
 	return Result{Updated: true, Source: source, Cache: c}, nil
+}
+
+// SyncFromPeer pulls from an explicitly addressed peer, bypassing mDNS discovery
+// entirely — the reliable path when multicast is blocked but the host is
+// directly reachable (e.g. `--peer ghost-2.local`). It pulls only if the peer's
+// cache is newer than local.
+func SyncFromPeer(ctx context.Context, addr string, local Meta, progress func(string)) (Result, error) {
+	report := func(msg string) {
+		if progress != nil {
+			progress(msg)
+		}
+	}
+
+	peer := Peer{Addr: addr}
+	report(fmt.Sprintf("Contacting %s…", addr))
+	m, err := FetchMeta(ctx, peer)
+	if err != nil {
+		return Result{}, fmt.Errorf("could not reach %s: %w", addr, err)
+	}
+	peer.Instance = m.Instance
+	if !m.LastUpdated.After(local.LastUpdated) {
+		return Result{UpToDate: true}, nil
+	}
+
+	source := peer.Host()
+	if source == "" {
+		source = addr
+	}
+	report(fmt.Sprintf("Downloading cache from %s…", source))
+	c, err := Pull(ctx, peer)
+	if err != nil {
+		return Result{}, err
+	}
+	return Result{Updated: true, Source: source, Cache: c}, nil
+}
+
+// NormalizePeerAddr appends DefaultPort to a bare host (e.g. "ghost-2.local")
+// so users can name a machine without remembering the port.
+func NormalizePeerAddr(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return addr
+	}
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		return net.JoinHostPort(addr, strconv.Itoa(DefaultPort))
+	}
+	return addr
 }

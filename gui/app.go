@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -154,6 +155,7 @@ type ConfigDTO struct {
 	DownloadDir string `json:"downloadDir"`
 	MPVPath     string `json:"mpvPath"`
 	RclonePath  string `json:"rclonePath"`
+	SyncPeer    string `json:"syncPeer"`
 }
 
 // ---- Bound methods: status & config ----
@@ -267,6 +269,7 @@ func (a *App) GetConfig() ConfigDTO {
 		DownloadDir: cfg.DownloadDir,
 		MPVPath:     cfg.MPVPath,
 		RclonePath:  cfg.RclonePath,
+		SyncPeer:    cfg.SyncPeer,
 	}
 }
 
@@ -276,6 +279,7 @@ func (a *App) SaveConfig(dto ConfigDTO) error {
 	cfg.DownloadDir = dto.DownloadDir
 	cfg.MPVPath = dto.MPVPath
 	cfg.RclonePath = dto.RclonePath
+	cfg.SyncPeer = strings.TrimSpace(dto.SyncPeer)
 	if err := cfg.Save(); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
 	}

@@ -13,6 +13,7 @@ export function Settings({ status, onReindexed, onToast }: Props) {
     downloadDir: "",
     mpvPath: "",
     rclonePath: "",
+    syncPeer: "",
   });
   const [saving, setSaving] = useState(false);
   const [indexing, setIndexing] = useState<
@@ -202,9 +203,9 @@ export function Settings({ status, onReindexed, onToast }: Props) {
           </button>
         </div>
         <p className="text-xs text-white/30">
-          Update fetches only newly added titles. Sync from LAN pulls the newest
-          cache from another computer running GoplexCLI on your network. Reindex
-          rebuilds the whole library from scratch.
+          Update fetches only newly added titles. Sync from LAN pulls the cache
+          from the computer set in Preferences below (or auto-discovers one if
+          blank). Reindex rebuilds the whole library from scratch.
         </p>
       </section>
 
@@ -222,6 +223,12 @@ export function Settings({ status, onReindexed, onToast }: Props) {
           "rclonePath",
           "rclone",
           "Override if rclone is not on your PATH."
+        )}
+        {field(
+          "Sync from computer (LAN)",
+          "syncPeer",
+          "e.g. ghost-2.local",
+          "Hostname or IP of another computer running GoplexCLI to pull the cache from with “Sync from LAN”. Leave blank to auto-discover."
         )}
         <div className="flex items-center gap-3 pt-1 text-xs">
           <Availability label="mpv" ok={status.mpvAvailable} />

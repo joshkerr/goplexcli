@@ -29,6 +29,7 @@ export interface AppConfig {
   downloadDir: string;
   mpvPath: string;
   rclonePath: string;
+  syncPeer: string;
 }
 
 // MediaCard is the lightweight row used by the poster grid (see GetItem for

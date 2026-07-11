@@ -54,6 +54,13 @@ var downloadDest string
 // updateCheckOnly, when true, makes `update` report availability without installing.
 var updateCheckOnly bool
 
+// syncServePort is the port `sync serve` binds; syncPullPeer, when set, makes
+// `sync pull` target that host directly instead of using mDNS discovery.
+var (
+	syncServePort int
+	syncPullPeer  string
+)
+
 // searchDescriptions when true also matches against item summaries
 var searchDescriptions bool
 
@@ -373,14 +380,22 @@ peers until interrupted (Ctrl-C). The GUI already does this automatically while
 it's open; use this on a headless or CLI-only machine.`,
 		RunE: runSyncServe,
 	}
+	syncServeCmd.Flags().IntVar(&syncServePort, "port", lansync.DefaultPort, "Port to serve on (0 for a random port)")
 	syncPullCmd := &cobra.Command{
 		Use:   "pull",
 		Short: "Pull the newest cache from another computer on the LAN",
 		Long: `Find other computers running goplexcli on your network, and if one has a
 newer cache than this machine, download and install it. Requires another
-machine to be serving (the GUI while open, or 'goplexcli sync serve').`,
+machine to be serving (the GUI while open, or 'goplexcli sync serve').
+
+If mDNS auto-discovery doesn't find the other machine (some networks block
+multicast), name it directly with --peer:
+
+  goplexcli sync pull --peer ghost-2.local
+  goplexcli sync pull --peer 192.168.1.20:47820`,
 		RunE: runSyncPull,
 	}
+	syncPullCmd.Flags().StringVar(&syncPullPeer, "peer", "", "Pull directly from this host[:port], bypassing mDNS discovery")
 	syncCmd.AddCommand(syncServeCmd, syncPullCmd)
 
 	rootCmd.AddCommand(loginCmd, browseCmd, cacheCmd, configCmd, streamCmd, serverCmd, webdavCmd, outplayerCmd, sortCmd, versionCmd, updateCmd, syncCmd, previewCmd)
@@ -3240,7 +3255,7 @@ func runServerRemove(cmd *cobra.Command, args []string) error {
 func runSyncServe(cmd *cobra.Command, args []string) error {
 	// Freshness is reported from the sidecar so we never parse the large cache.
 	srv := lansync.NewServer(lansync.CacheMetaFunc())
-	if err := srv.Start(); err != nil {
+	if err := srv.StartOn(syncServePort); err != nil {
 		return fmt.Errorf("failed to start sync server: %w", err)
 	}
 	defer srv.Close(context.Background())
@@ -3252,7 +3267,8 @@ func runSyncServe(cmd *cobra.Command, args []string) error {
 		fmt.Println(warningStyle.Render("  " + err.Error()))
 	}
 	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Serving cache as %q on port %d", host, srv.Port())))
-	fmt.Println(infoStyle.Render("Other computers can now run 'goplexcli sync pull' or use the GUI's Sync button."))
+	fmt.Println(infoStyle.Render("Other computers can pull it with the GUI's Sync button, 'goplexcli sync pull',"))
+	fmt.Println(infoStyle.Render(fmt.Sprintf("or directly:  goplexcli sync pull --peer %s", peerHint(host, srv.Port()))))
 	fmt.Println(infoStyle.Render("Press Ctrl+C to stop.\n"))
 
 	sigChan := make(chan os.Signal, 1)
@@ -3262,17 +3278,47 @@ func runSyncServe(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// peerHint formats the address to hand to `sync pull --peer`, omitting the port
+// when it's the default (which pull assumes).
+func peerHint(host string, port int) string {
+	if host == "" {
+		host = "<this-host>"
+	}
+	if port == lansync.DefaultPort {
+		return host
+	}
+	return fmt.Sprintf("%s:%d", host, port)
+}
+
 func runSyncPull(cmd *cobra.Command, args []string) error {
 	fmt.Println(titleStyle.Render("Sync Cache from LAN"))
 
 	local, _ := cache.LoadMeta()
-	res, err := lansync.SyncFromLAN(
-		context.Background(),
-		"", // no local server to exclude
-		lansync.Meta{Count: local.Count, LastUpdated: local.LastUpdated},
-		func(msg string) { fmt.Println(infoStyle.Render(msg)) },
-	)
+	localMeta := lansync.Meta{Count: local.Count, LastUpdated: local.LastUpdated}
+	progress := func(msg string) { fmt.Println(infoStyle.Render(msg)) }
+	ctx := context.Background()
+
+	// The --peer flag overrides the configured sync peer; if neither is set,
+	// fall back to mDNS auto-discovery.
+	peer := syncPullPeer
+	if peer == "" {
+		if cfg, err := config.Load(); err == nil {
+			peer = strings.TrimSpace(cfg.SyncPeer)
+		}
+	}
+
+	var res lansync.Result
+	var err error
+	if peer != "" {
+		res, err = lansync.SyncFromPeer(ctx, lansync.NormalizePeerAddr(peer), localMeta, progress)
+	} else {
+		res, err = lansync.SyncFromLAN(ctx, "", localMeta, progress)
+	}
 	if err != nil {
+		if peer == "" {
+			fmt.Println(infoStyle.Render("Tip: if the other computer is running but wasn't found, some networks block"))
+			fmt.Println(infoStyle.Render("mDNS. Name it directly, e.g.  goplexcli sync pull --peer ghost-2.local"))
+		}
 		return err
 	}
 	if res.UpToDate {
