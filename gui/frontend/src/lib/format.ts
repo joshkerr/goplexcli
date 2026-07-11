@@ -26,3 +26,9 @@ export function formatBytes(bytes: number): string {
   );
   return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
+
+/** Formats a transfer rate in bytes/sec as e.g. "10.5 MB/s", or "" when absent. */
+export function formatSpeed(bytesPerSec: number): string {
+  if (!bytesPerSec || bytesPerSec <= 0) return "";
+  return `${formatBytes(bytesPerSec)}/s`;
+}

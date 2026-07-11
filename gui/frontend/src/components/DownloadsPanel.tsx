@@ -1,5 +1,5 @@
 import type { DownloadProgress } from "../lib/types";
-import { formatBytes } from "../lib/format";
+import { formatBytes, formatSpeed } from "../lib/format";
 import { DownloadIcon } from "./icons";
 
 interface Props {
@@ -45,6 +45,9 @@ export function DownloadsPanel({ downloads }: Props) {
                     {" · "}
                     {formatBytes(d.bytes)} / {formatBytes(d.total)}
                   </>
+                )}
+                {d.status === "in_progress" && d.speed > 0 && (
+                  <span className="text-white/60"> · {formatSpeed(d.speed)}</span>
                 )}
                 {d.error && <span className="text-red-400"> · {d.error}</span>}
               </div>

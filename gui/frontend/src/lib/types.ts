@@ -95,6 +95,7 @@ export interface DownloadProgress {
   status: "pending" | "in_progress" | "completed" | "failed";
   bytes: number;
   total: number;
+  speed: number; // bytes/sec (0 if unknown)
   error: string;
 }
 

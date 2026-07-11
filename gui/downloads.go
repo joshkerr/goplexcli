@@ -22,6 +22,7 @@ type DownloadProgress struct {
 	Status  string  `json:"status"` // pending | in_progress | completed | failed
 	Bytes   int64   `json:"bytes"`
 	Total   int64   `json:"total"`
+	Speed   int64   `json:"speed"` // bytes/sec, as reported by rclone (0 if unknown)
 	Error   string  `json:"error"`
 }
 
@@ -114,7 +115,9 @@ func (a *App) Download(keys []string, destOverride string) error {
 
 // statsRegex matches rclone's "Transferred:" progress lines (printed to stderr
 // with -v), e.g. "Transferred: 1.234 GiB / 5.678 GiB, 22%, 10 MiB/s, ETA 1m30s".
-var statsRegex = regexp.MustCompile(`Transferred:\s+([0-9.]+)\s*([kKMGTP]i?[Bb]?)\s*/\s*([0-9.]+)\s*([kKMGTP]i?[Bb]?),\s*([0-9]+)%`)
+// The trailing rate (group 6/7) is optional — rclone may omit it early on or
+// print a non-numeric placeholder.
+var statsRegex = regexp.MustCompile(`Transferred:\s+([0-9.]+)\s*([kKMGTP]i?[Bb]?)\s*/\s*([0-9.]+)\s*([kKMGTP]i?[Bb]?),\s*([0-9]+)%(?:,\s*([0-9.]+)\s*([kKMGTP]?i?[Bb])/s)?`)
 
 // runRclone executes a single transfer, parsing progress from stderr and
 // emitting events. The rclone subprocess is started with the OS-specific
@@ -148,9 +151,13 @@ func (a *App) runRclone(bin string, j downloadJob) error {
 			pct, _ := strconv.ParseFloat(m[5], 64)
 			lastBytes = parseSize(m[1], m[2])
 			lastTotal = parseSize(m[3], m[4])
+			var speed int64
+			if len(m) >= 8 && m[6] != "" {
+				speed = parseSize(m[6], m[7])
+			}
 			a.emitDownload(DownloadProgress{
 				ID: j.id, Name: j.name, Status: "in_progress",
-				Percent: pct, Bytes: lastBytes, Total: lastTotal,
+				Percent: pct, Bytes: lastBytes, Total: lastTotal, Speed: speed,
 			})
 			continue
 		}
