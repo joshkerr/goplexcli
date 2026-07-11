@@ -24,6 +24,11 @@ import (
 const (
 	posterCacheMaxBytes = int64(256 << 20)
 	posterMaxImageBytes = int64(12 << 20)
+	// warmConcurrency bounds how many posters are pre-fetched from Plex in
+	// parallel. It sits a little above the browser's ~6-connections-per-origin
+	// cap so warming outpaces on-demand image requests, without flooding Plex
+	// with transcode work.
+	warmConcurrency = 8
 )
 
 type posterSource struct {
@@ -39,15 +44,26 @@ type posterCache struct {
 	mu      sync.RWMutex
 	sources map[string]posterSource
 	group   singleflight.Group
+	warmSem chan struct{}
 	server  *http.Server
 	baseURL string
 }
 
 func newPosterCache(client *http.Client) *posterCache {
 	if client == nil || client == http.DefaultClient {
-		client = &http.Client{Timeout: 20 * time.Second}
+		// A dedicated transport with a larger idle-connection pool so the warm
+		// worker pool reuses connections to Plex instead of re-handshaking on
+		// every parallel transcode request.
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.MaxIdleConns = 100
+		transport.MaxIdleConnsPerHost = warmConcurrency + 4
+		client = &http.Client{Timeout: 20 * time.Second, Transport: transport}
 	}
-	return &posterCache{client: client, sources: make(map[string]posterSource)}
+	return &posterCache{
+		client:  client,
+		sources: make(map[string]posterSource),
+		warmSem: make(chan struct{}, warmConcurrency),
+	}
 }
 
 func (p *posterCache) register(source posterSource) string {
@@ -110,35 +126,88 @@ func (p *posterCache) serve(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	p.mu.RLock()
-	source, ok := p.sources[id]
-	p.mu.RUnlock()
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-
-	path, err := p.cachedPath(id)
+	path, err := p.ensureCached(id)
 	if err != nil {
-		http.Error(w, "poster cache unavailable", http.StatusInternalServerError)
-		return
-	}
-	if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
-		_, err, _ = p.group.Do(id, func() (any, error) {
-			if _, statErr := os.Stat(path); statErr == nil {
-				return nil, nil
-			}
-			return nil, p.fetch(path, source)
-		})
-	} else if statErr != nil {
-		err = statErr
-	}
-	if err != nil {
+		if err == errUnknownPoster {
+			http.NotFound(w, r)
+			return
+		}
 		http.Error(w, "poster unavailable", http.StatusBadGateway)
 		return
 	}
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	http.ServeFile(w, r, path)
+}
+
+var errUnknownPoster = fmt.Errorf("unknown poster id")
+
+// ensureCached guarantees the poster for id is present on disk, fetching it
+// from Plex at most once concurrently (singleflight dedupes overlapping serve
+// and warm requests for the same poster). It returns the cached file path.
+func (p *posterCache) ensureCached(id string) (string, error) {
+	p.mu.RLock()
+	source, ok := p.sources[id]
+	p.mu.RUnlock()
+	if !ok {
+		return "", errUnknownPoster
+	}
+	path, err := p.cachedPath(id)
+	if err != nil {
+		return "", err
+	}
+	if info, statErr := os.Stat(path); statErr == nil {
+		if info.Size() > 0 {
+			return path, nil
+		}
+	} else if !os.IsNotExist(statErr) {
+		return "", statErr
+	}
+	_, err, _ = p.group.Do(id, func() (any, error) {
+		if info, statErr := os.Stat(path); statErr == nil && info.Size() > 0 {
+			return nil, nil
+		}
+		return nil, p.fetch(path, source)
+	})
+	if err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// warm pre-fetches the posters behind the given loopback URLs into the disk
+// cache using a bounded worker pool. Call it (in a goroutine) when a screen of
+// results is computed so images are already cached — a fast file serve — by the
+// time the browser, capped at ~6 connections per origin, requests them.
+func (p *posterCache) warm(urls []string) {
+	var wg sync.WaitGroup
+	for _, u := range urls {
+		id := posterIDFromURL(u)
+		if id == "" {
+			continue
+		}
+		p.warmSem <- struct{}{}
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			defer func() { <-p.warmSem }()
+			_, _ = p.ensureCached(id)
+		}(id)
+	}
+	wg.Wait()
+}
+
+// posterIDFromURL extracts the 64-char cache id from a registered poster URL
+// (either "/posters/<id>" or "http://host/posters/<id>").
+func posterIDFromURL(u string) string {
+	i := strings.LastIndex(u, "/posters/")
+	if i < 0 {
+		return ""
+	}
+	id := u[i+len("/posters/"):]
+	if len(id) != 64 || strings.Contains(id, "/") {
+		return ""
+	}
+	return id
 }
 
 func (p *posterCache) cachedPath(id string) (string, error) {

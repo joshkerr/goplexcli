@@ -197,16 +197,16 @@ func (a *App) ListCategory(category string) []MediaCardDTO {
 			}
 		}
 		sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i].Title) < strings.ToLower(out[j].Title) })
-		return nonNilCards(out)
+		return a.warmedCards(out)
 
 	case "tv-shows":
-		return nonNilCards(a.groupShowCards(c))
+		return a.warmedCards(a.groupShowCards(c))
 
 	case "recently-added-movies":
-		return nonNilCards(recentlyAddedCards(a, c, "movie", 60))
+		return a.warmedCards(recentlyAddedCards(a, c, "movie", 60))
 
 	case "recently-added-tv":
-		return nonNilCards(recentlyAddedCards(a, c, "episode", 60))
+		return a.warmedCards(recentlyAddedCards(a, c, "episode", 60))
 
 	case "continue-watching":
 		var items []*plex.MediaItem
@@ -220,7 +220,7 @@ func (a *App) ListCategory(category string) []MediaCardDTO {
 		for _, it := range items {
 			out = append(out, a.toCard(it))
 		}
-		return nonNilCards(out)
+		return a.warmedCards(out)
 	}
 
 	return []MediaCardDTO{}
@@ -412,6 +412,7 @@ func (a *App) Search(query string) []MediaCardDTO {
 			break
 		}
 	}
+	a.warmCards(out)
 	return nonNilCards(out)
 }
 
@@ -422,4 +423,37 @@ func nonNilCards(in []MediaCardDTO) []MediaCardDTO {
 		return []MediaCardDTO{}
 	}
 	return in
+}
+
+// warmPosterCount is how many of a result set's posters are pre-fetched into
+// the disk cache when the set is computed — enough to cover the first few
+// scrolls of a virtualized grid without transcoding the whole library.
+const warmPosterCount = 60
+
+// warmedCards warms the first posters of a result set and returns it as a
+// guaranteed non-nil slice — a convenience for the many category branches.
+func (a *App) warmedCards(cards []MediaCardDTO) []MediaCardDTO {
+	a.warmCards(cards)
+	return nonNilCards(cards)
+}
+
+// warmCards kicks off a background warm of the first posters in a result set so
+// they're cached before the browser requests them. It's a no-op once the
+// posters are already on disk (the warmer stats before fetching).
+func (a *App) warmCards(cards []MediaCardDTO) {
+	if a.posters == nil {
+		return
+	}
+	urls := make([]string, 0, warmPosterCount)
+	for i := range cards {
+		if len(urls) >= warmPosterCount {
+			break
+		}
+		if cards[i].ThumbURL != "" {
+			urls = append(urls, cards[i].ThumbURL)
+		}
+	}
+	if len(urls) > 0 {
+		go a.posters.warm(urls)
+	}
 }
