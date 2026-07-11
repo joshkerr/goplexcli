@@ -15,7 +15,7 @@ export function Settings({ status, onReindexed, onToast }: Props) {
     rclonePath: "",
   });
   const [saving, setSaving] = useState(false);
-  const [indexing, setIndexing] = useState(false);
+  const [indexing, setIndexing] = useState<null | "reindex" | "update">(null);
   const [progress, setProgress] = useState<ReindexProgress | null>(null);
 
   useEffect(() => {
@@ -24,17 +24,27 @@ export function Settings({ status, onReindexed, onToast }: Props) {
 
   useEffect(() => {
     const off = onEvent<ReindexProgress>("reindex:progress", setProgress);
-    const offDone = onEvent<{ count: number; error?: string }>(
-      "reindex:done",
-      (d) => {
-        setIndexing(false);
-        if (d.error) onToast(d.error, "error");
-        else {
+    const offDone = onEvent<{
+      mode?: "reindex" | "update";
+      count: number;
+      added?: number;
+      error?: string;
+    }>("reindex:done", (d) => {
+      setIndexing(null);
+      if (d.error) onToast(d.error, "error");
+      else {
+        if (d.mode === "update") {
+          onToast(
+            d.added
+              ? `Added ${d.added} new item${d.added === 1 ? "" : "s"}`
+              : "Library already up to date"
+          );
+        } else {
           onToast(`Indexed ${d.count} items`);
-          onReindexed();
         }
+        onReindexed();
       }
-    );
+    });
     return () => {
       off();
       offDone();
@@ -54,12 +64,23 @@ export function Settings({ status, onReindexed, onToast }: Props) {
   };
 
   const reindex = async () => {
-    setIndexing(true);
+    setIndexing("reindex");
     setProgress(null);
     try {
       await api.reindex();
     } catch (e: any) {
-      setIndexing(false);
+      setIndexing(null);
+      onToast(String(e?.message ?? e), "error");
+    }
+  };
+
+  const update = async () => {
+    setIndexing("update");
+    setProgress(null);
+    try {
+      await api.update();
+    } catch (e: any) {
+      setIndexing(null);
       onToast(String(e?.message ?? e), "error");
     }
   };
@@ -109,13 +130,26 @@ export function Settings({ status, onReindexed, onToast }: Props) {
           </div>
         )}
 
-        <button
-          onClick={reindex}
-          disabled={indexing}
-          className="rounded-lg bg-white/10 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-white/20 disabled:opacity-50"
-        >
-          {indexing ? "Reindexing…" : "Reindex library"}
-        </button>
+        <div className="flex flex-wrap gap-3">
+          <button
+            onClick={update}
+            disabled={!!indexing}
+            className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-ink-900 transition-colors hover:bg-accent-soft disabled:opacity-50"
+          >
+            {indexing === "update" ? "Updating…" : "Update library"}
+          </button>
+          <button
+            onClick={reindex}
+            disabled={!!indexing}
+            className="rounded-lg bg-white/10 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-white/20 disabled:opacity-50"
+          >
+            {indexing === "reindex" ? "Reindexing…" : "Reindex library"}
+          </button>
+        </div>
+        <p className="text-xs text-white/30">
+          Update fetches only newly added titles. Reindex rebuilds the whole
+          library from scratch.
+        </p>
       </section>
 
       <section className="space-y-4 rounded-2xl border border-white/5 bg-ink-700/50 p-6">

@@ -21,6 +21,7 @@ type WailsApp = {
   GetConfig(): Promise<AppConfig>;
   SaveConfig(cfg: AppConfig): Promise<void>;
   Reindex(): Promise<void>;
+  Update(): Promise<void>;
   ListCategory(category: string): Promise<MediaCard[]>;
   Search(query: string): Promise<MediaCard[]>;
   GetItem(key: string): Promise<Media>;
@@ -72,6 +73,7 @@ export const api = {
   getConfig: () => app().GetConfig(),
   saveConfig: (c: AppConfig) => app().SaveConfig(c),
   reindex: () => app().Reindex(),
+  update: () => app().Update(),
   listCategory: (c: Category) => app().ListCategory(c),
   search: (q: string) => app().Search(q),
   getItem: (key: string) => app().GetItem(key),
