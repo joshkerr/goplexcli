@@ -14,6 +14,7 @@ A powerful, fast, and elegant command-line interface for browsing and streaming 
 - **Stream with MPV** — Watch movies and TV shows directly with MPV player
 - **Download with Rclone** — Download media files with a real-time progress bar UI
 - **Remote Streaming** — Publish streams for playback on other devices via mDNS discovery and a web UI
+- **LAN Cache Sync** — Copy the media cache between your computers over the local network instead of reindexing each one from Plex
 - **Transfer to WebDAV** — Push media to gowebdav servers discovered on your LAN via mDNS
 - **Transfer to Outplayer** — Upload media to the Outplayer iOS app over Wi-Fi to multiple configurable targets
 - **SenPlayer Integration** — Play or download media in SenPlayer via deep links (macOS)
@@ -116,15 +117,20 @@ icon-enabled executable is installed under
 1. **Sign in** with your Plex account and pick the servers to index.
 2. **Build library** to populate the local cache (shows live progress).
 3. **Browse** Movies, TV Shows, Recently Added, and Continue Watching from the
-   sidebar; **search** filters the grid instantly.
+   sidebar; **search** filters the grid instantly. On the Movies grid, filter by
+   **genre** and **sort** by title, year, date added, rating, or duration
+   (ascending or descending).
 4. Open any title for details, then **Play**/**Resume** (MPV) or **Download**
    (rclone, with live progress in the Downloads panel). TV shows drill into
    Season → Episode with multi-select for playlist playback or batch downloads.
+5. Keep the library fresh from **Settings → Library**: **Update** (fetch only
+   newly-added titles), **Reindex** (rebuild from scratch), or **Sync from LAN**
+   (pull the cache from another computer running GoplexCLI — see below).
 
 Poster grids request compact Plex-generated renditions and keep them in a
 bounded local cache under the GoplexCLI cache directory. Visible posters are
-prioritized and upcoming rows are prefetched while the GUI is idle, so repeat
-browsing does not need to download the artwork again.
+prioritized and the on-screen window is warmed via the backend so jumping
+around a large library fills in quickly without re-downloading artwork.
 
 ## Quick Start
 
@@ -277,6 +283,46 @@ left intact afterwards. The **Transfer to Outplayer** action only appears when a
 least one target is enabled, so disabling all targets hides it. Uploads default
 to the device root; Outplayer's built-in folders (e.g. `Inbox`) are not writable.
 
+### LAN Cache Sync
+
+If you run GoplexCLI on more than one computer, you can copy an already-built
+media cache between them over your local network instead of reindexing each one
+from Plex — for a large library this takes seconds rather than minutes.
+
+One machine **serves** its cache; the other **pulls** it (only if the served
+cache is newer):
+
+```bash
+# On the source machine — advertise and serve its cache (runs until Ctrl-C):
+goplexcli sync serve
+#   --port N               serve on a specific port (default 47820)
+#   --update-interval 30m  refresh this cache from Plex on an interval so peers
+#                          stay current (default 1h; 0 disables)
+
+# On another machine — pull the newest cache found on the LAN:
+goplexcli sync pull
+#   --peer ghost-2.local        pull directly from a host, bypassing discovery
+#   --peer 192.168.1.20:47820   ...or an explicit host:port
+```
+
+Machines are found automatically via mDNS. Some networks block mDNS (Windows
+firewall, VPNs, Wi-Fi client isolation); if auto-discovery doesn't find the
+other computer, set the peer directly — either with `--peer`, or persistently in
+config so the GUI's **Sync from LAN** button and `sync pull` both use it:
+
+```json
+{ "sync_peer": "ghost-2.local" }
+```
+
+In the desktop GUI this is **Settings → Preferences → Sync from computer (LAN)**,
+and the **Sync from LAN** button on the Library tab performs the pull. The GUI
+also serves its cache automatically while it is open, so it can be the source for
+other machines without running `sync serve`.
+
+The transferred cache carries the source machine's Plex server URLs and rclone
+path mappings, so it works as-is only when those match on both machines. It never
+contains Plex tokens (those live in config, not the cache).
+
 ### Other Commands
 
 ```bash
@@ -312,6 +358,7 @@ Configuration is stored in a platform-specific directory:
   "rclone_path": "rclone",
   "fzf_path": "fzf",
   "download_dir": "~/Downloads/Plex",
+  "sync_peer": "ghost-2.local",
   "path_mappings": [
     { "prefix": "/mnt/media/tv/", "remote": "gdrive:Media/TV/" },
     { "prefix": "/mnt/media/", "remote": "gdrive:Media/" }
@@ -328,6 +375,7 @@ Configuration is stored in a platform-specific directory:
 - **servers** — One or more Plex servers, individually enabled/disabled
 - **mpv_path**, **rclone_path**, **fzf_path** — Override tool paths if not in PATH
 - **download_dir** — Default download destination (`~` is expanded). Override per-run with `--dest`.
+- **sync_peer** — Hostname/IP (optionally `host:port`) of another computer to pull the cache from with LAN Cache Sync. Blank falls back to mDNS auto-discovery.
 - **path_mappings** — Translate Plex file paths to rclone remotes. Longest matching prefix wins. Run `cache reindex` after changing.
 - **webdav_user**, **webdav_pass**, **webdav_dir** — Shared credentials and optional subdirectory for gowebdav transfers (set via `goplexcli webdav set-creds`)
 - **outplayer_targets** — Outplayer Wi-Fi transfer destinations, each with a `name`, `url`, optional `dir`, and `enabled` flag (managed via `goplexcli outplayer add/list/enable/disable/remove`)

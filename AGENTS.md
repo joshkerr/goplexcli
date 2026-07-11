@@ -136,6 +136,8 @@ goplexcli/
 │   │   └── config.go        # Platform-specific paths, validation
 │   ├── download/            # Download functionality
 │   │   └── download.go      # rclone integration with TUI progress
+│   ├── lansync/             # LAN cache sync (mDNS advertise + serve/pull)
+│   │   └── lansync.go       # shared by the GUI and `sync serve`/`sync pull`
 │   ├── player/              # Media playback
 │   │   └── player.go        # MPV player wrapper
 │   ├── plex/                # Plex API client
