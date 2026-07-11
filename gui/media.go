@@ -165,15 +165,22 @@ func (a *App) toDTO(item *plex.MediaItem) MediaDTO {
 	}
 }
 
-// toCard converts a cached MediaItem into the lightweight grid shape.
+// toCard converts a cached MediaItem into the lightweight grid shape. Episode
+// cards (e.g. "New Episodes") use the show poster rather than the episode still,
+// which is a 16:9 screenshot that is often missing and doesn't suit the tall
+// poster grid.
 func (a *App) toCard(item *plex.MediaItem) MediaCardDTO {
+	thumb := a.thumbURL(item, 320, 480)
+	if item.Type == "episode" {
+		thumb = a.showThumbURL(item, 320, 480)
+	}
 	return MediaCardDTO{
 		Key:          item.Key,
 		Type:         item.Type,
 		Title:        item.Title,
 		Year:         item.Year,
 		DisplayTitle: item.FormatMediaTitle(),
-		ThumbURL:     a.thumbURL(item, 320, 480),
+		ThumbURL:     thumb,
 		ProgressPct:  progressPct(item),
 		ViewCount:    item.ViewCount,
 	}
@@ -195,15 +202,26 @@ func isInProgress(item *plex.MediaItem) bool {
 	return item.ViewOffset > 0 && pct > 0 && pct < 95
 }
 
+// BrowseOptions carries the genre filter and sort order the frontend applies to
+// the Movies grid. It's ignored for every other category. An empty value
+// (Genre "", SortField "") yields the historical default (all movies, A-Z).
+type BrowseOptions struct {
+	Genre     string `json:"genre"`     // "" = all genres
+	SortField string `json:"sortField"` // title | year | added | rating | duration
+	Desc      bool   `json:"desc"`
+}
+
 // ListCategory returns the poster-grid rows for a sidebar category as
-// lightweight cards, read from the in-memory cache.
+// lightweight cards, read from the in-memory cache. opts (genre filter + sort)
+// is honored only for the "movies" category; other categories keep their fixed
+// ordering.
 //
-//	movies                  — all movies, A-Z
+//	movies                  — all movies, filtered/sorted per opts (default A-Z)
 //	tv-shows                — distinct shows (grouped from episodes), A-Z
 //	recently-added-movies   — newest movies by AddedAt
 //	recently-added-tv       — newest episodes by AddedAt
 //	continue-watching       — in-progress items, most recently viewed first
-func (a *App) ListCategory(category string) []MediaCardDTO {
+func (a *App) ListCategory(category string, opts BrowseOptions) []MediaCardDTO {
 	c := a.media()
 	if c == nil {
 		return []MediaCardDTO{}
@@ -211,13 +229,11 @@ func (a *App) ListCategory(category string) []MediaCardDTO {
 
 	switch category {
 	case "movies":
-		out := make([]MediaCardDTO, 0, len(c.Media))
-		for i := range c.Media {
-			if c.Media[i].Type == "movie" {
-				out = append(out, a.toCard(&c.Media[i]))
-			}
+		items := sortMovieItems(c, opts)
+		out := make([]MediaCardDTO, 0, len(items))
+		for _, it := range items {
+			out = append(out, a.toCard(it))
 		}
-		sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i].Title) < strings.ToLower(out[j].Title) })
 		return a.warmedCards(out)
 
 	case "tv-shows":
@@ -292,6 +308,116 @@ func (a *App) showDTO(c *cache.Cache, title string) (MediaDTO, error) {
 		return MediaDTO{}, fmt.Errorf("show not found")
 	}
 	return dto, nil
+}
+
+// movieGenreLimit caps how many genres the movie genre filter offers. The
+// library's genre tags have a long tail (niche tags like "News" or "Short"); we
+// surface only the most common ones, which map to Plex's primary genres.
+const movieGenreLimit = 12
+
+// sortMovieItems returns the movie items matching opts.Genre, ordered by
+// opts.SortField / opts.Desc. An empty opts yields all movies sorted A-Z by
+// title, matching the historical default. Title is the tiebreaker for every
+// field so equal values keep a stable, readable order.
+func sortMovieItems(c *cache.Cache, opts BrowseOptions) []*plex.MediaItem {
+	var items []*plex.MediaItem
+	for i := range c.Media {
+		if c.Media[i].Type != "movie" {
+			continue
+		}
+		if opts.Genre != "" && !hasGenre(c.Media[i].Genre, opts.Genre) {
+			continue
+		}
+		items = append(items, &c.Media[i])
+	}
+
+	byTitle := func(i, j int) bool {
+		return strings.ToLower(items[i].Title) < strings.ToLower(items[j].Title)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		a, b := items[i], items[j]
+		switch opts.SortField {
+		case "year":
+			if a.Year != b.Year {
+				return less(a.Year < b.Year, a.Year > b.Year, opts.Desc)
+			}
+		case "added":
+			if a.AddedAt != b.AddedAt {
+				return less(a.AddedAt < b.AddedAt, a.AddedAt > b.AddedAt, opts.Desc)
+			}
+		case "rating":
+			if a.Rating != b.Rating {
+				return less(a.Rating < b.Rating, a.Rating > b.Rating, opts.Desc)
+			}
+		case "duration":
+			if a.Duration != b.Duration {
+				return less(a.Duration < b.Duration, a.Duration > b.Duration, opts.Desc)
+			}
+		default: // "title" and unknown fields
+			la, lb := strings.ToLower(a.Title), strings.ToLower(b.Title)
+			if la != lb {
+				return less(la < lb, la > lb, opts.Desc)
+			}
+		}
+		return byTitle(i, j)
+	})
+	return items
+}
+
+// less picks the ascending or descending comparison result based on desc.
+func less(asc, desc, wantDesc bool) bool {
+	if wantDesc {
+		return desc
+	}
+	return asc
+}
+
+// hasGenre reports whether a comma-separated genre field ("Romance, Comedy")
+// contains want, compared case-insensitively as a whole token.
+func hasGenre(genreField, want string) bool {
+	want = strings.ToLower(strings.TrimSpace(want))
+	for _, g := range strings.Split(genreField, ",") {
+		if strings.ToLower(strings.TrimSpace(g)) == want {
+			return true
+		}
+	}
+	return false
+}
+
+// MovieGenres returns the most common movie genres (up to movieGenreLimit),
+// most frequent first, for the genre filter dropdown. Ties are broken
+// alphabetically so the list is stable across calls.
+func (a *App) MovieGenres() []string {
+	c := a.media()
+	if c == nil {
+		return []string{}
+	}
+	counts := map[string]int{}
+	for i := range c.Media {
+		if c.Media[i].Type != "movie" {
+			continue
+		}
+		for _, g := range strings.Split(c.Media[i].Genre, ",") {
+			g = strings.TrimSpace(g)
+			if g != "" {
+				counts[g]++
+			}
+		}
+	}
+	genres := make([]string, 0, len(counts))
+	for g := range counts {
+		genres = append(genres, g)
+	}
+	sort.Slice(genres, func(i, j int) bool {
+		if counts[genres[i]] != counts[genres[j]] {
+			return counts[genres[i]] > counts[genres[j]]
+		}
+		return genres[i] < genres[j]
+	})
+	if len(genres) > movieGenreLimit {
+		genres = genres[:movieGenreLimit]
+	}
+	return genres
 }
 
 // recentlyAddedCards returns the newest items of a given type, newest first.
@@ -456,6 +582,20 @@ const warmPosterCount = 60
 func (a *App) warmedCards(cards []MediaCardDTO) []MediaCardDTO {
 	a.warmCards(cards)
 	return nonNilCards(cards)
+}
+
+// WarmPosters pre-fetches the given poster URLs into the disk cache off the UI
+// thread. The frontend calls it as the visible grid window settles (notably
+// after a far jump-scroll) so the backend transcodes that window in parallel on
+// its own connection pool — independent of the browser's ~6-connections-per-
+// origin cap — turning the browser's subsequent image requests into fast file
+// serves. Already-cached posters are skipped cheaply (a stat). Returns
+// immediately; warming continues in the background.
+func (a *App) WarmPosters(urls []string) {
+	if a.posters == nil || len(urls) == 0 {
+		return
+	}
+	go a.posters.warm(urls)
 }
 
 // warmCards kicks off a background warm of the first posters in a result set so

@@ -25,6 +25,7 @@ import (
 	"github.com/joshkerr/goplexcli/internal/config"
 	"github.com/joshkerr/goplexcli/internal/download"
 	apperrors "github.com/joshkerr/goplexcli/internal/errors"
+	"github.com/joshkerr/goplexcli/internal/lansync"
 	"github.com/joshkerr/goplexcli/internal/logging"
 	"github.com/joshkerr/goplexcli/internal/outplayer"
 	"github.com/joshkerr/goplexcli/internal/player"
@@ -99,7 +100,7 @@ Pass a search term to find matching media:
 Download a batch of items: queue them up while browsing, then run
 'goplexcli browse' again — when the queue is non-empty the top of the
 media-type picker offers "View Queue (N items)" → "Download All".`,
-		Args:  cobra.ArbitraryArgs,
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
 				return runSearch(cmd, args)
@@ -351,7 +352,38 @@ installing it.`,
 		},
 	}
 
-	rootCmd.AddCommand(loginCmd, browseCmd, cacheCmd, configCmd, streamCmd, serverCmd, webdavCmd, outplayerCmd, sortCmd, versionCmd, updateCmd, previewCmd)
+	// Sync command: share and pull the media cache across the LAN.
+	syncCmd := &cobra.Command{
+		Use:   "sync",
+		Short: "Share and sync the media cache across your LAN",
+		Long: `Share this computer's media cache with other computers on your local
+network, and pull the newest cache from one of them.
+
+For a large library, pulling an already-built cache from another running
+goplexcli is dramatically faster than a full 'cache reindex' from Plex.
+
+  goplexcli sync serve   # advertise this cache so others can pull it (runs until Ctrl-C)
+  goplexcli sync pull    # pull the newest cache found on the network`,
+	}
+	syncServeCmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Advertise this cache on the LAN so other computers can pull it",
+		Long: `Advertise this computer's media cache on the local network and serve it to
+peers until interrupted (Ctrl-C). The GUI already does this automatically while
+it's open; use this on a headless or CLI-only machine.`,
+		RunE: runSyncServe,
+	}
+	syncPullCmd := &cobra.Command{
+		Use:   "pull",
+		Short: "Pull the newest cache from another computer on the LAN",
+		Long: `Find other computers running goplexcli on your network, and if one has a
+newer cache than this machine, download and install it. Requires another
+machine to be serving (the GUI while open, or 'goplexcli sync serve').`,
+		RunE: runSyncPull,
+	}
+	syncCmd.AddCommand(syncServeCmd, syncPullCmd)
+
+	rootCmd.AddCommand(loginCmd, browseCmd, cacheCmd, configCmd, streamCmd, serverCmd, webdavCmd, outplayerCmd, sortCmd, versionCmd, updateCmd, syncCmd, previewCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(errorStyle.Render("Error: " + err.Error()))
@@ -1197,17 +1229,17 @@ browseLoop:
 			return fmt.Errorf("no media selected")
 		}
 
-	// Handle user action
-	err = handleMediaAction(cfg, q, selectedMediaItems)
-	if err != nil {
-		if errors.Is(err, errAddedToQueue) {
-			// Items were added to queue, continue browsing
-			continue browseLoop
+		// Handle user action
+		err = handleMediaAction(cfg, q, selectedMediaItems)
+		if err != nil {
+			if errors.Is(err, errAddedToQueue) {
+				// Items were added to queue, continue browsing
+				continue browseLoop
+			}
+			return err
 		}
-		return err
-	}
-	// Action completed successfully, continue browsing
-	continue browseLoop
+		// Action completed successfully, continue browsing
+		continue browseLoop
 	}
 }
 
@@ -3202,6 +3234,52 @@ func runServerRemove(cmd *cobra.Command, args []string) error {
 	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Removed server '%s'", serverName)))
 	fmt.Println(warningStyle.Render("Note: Cached items from this server will remain until next reindex"))
 
+	return nil
+}
+
+func runSyncServe(cmd *cobra.Command, args []string) error {
+	// Freshness is reported from the sidecar so we never parse the large cache.
+	srv := lansync.NewServer(lansync.CacheMetaFunc())
+	if err := srv.Start(); err != nil {
+		return fmt.Errorf("failed to start sync server: %w", err)
+	}
+	defer srv.Close(context.Background())
+
+	host, _ := os.Hostname()
+	fmt.Println(titleStyle.Render("Cache Sync Server"))
+	if err := srv.AdvertiseError(); err != nil {
+		fmt.Println(warningStyle.Render("Warning: mDNS advertising failed — peers may not auto-discover this machine:"))
+		fmt.Println(warningStyle.Render("  " + err.Error()))
+	}
+	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Serving cache as %q on port %d", host, srv.Port())))
+	fmt.Println(infoStyle.Render("Other computers can now run 'goplexcli sync pull' or use the GUI's Sync button."))
+	fmt.Println(infoStyle.Render("Press Ctrl+C to stop.\n"))
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	<-sigChan
+	fmt.Println(infoStyle.Render("\nStopping sync server..."))
+	return nil
+}
+
+func runSyncPull(cmd *cobra.Command, args []string) error {
+	fmt.Println(titleStyle.Render("Sync Cache from LAN"))
+
+	local, _ := cache.LoadMeta()
+	res, err := lansync.SyncFromLAN(
+		context.Background(),
+		"", // no local server to exclude
+		lansync.Meta{Count: local.Count, LastUpdated: local.LastUpdated},
+		func(msg string) { fmt.Println(infoStyle.Render(msg)) },
+	)
+	if err != nil {
+		return err
+	}
+	if res.UpToDate {
+		fmt.Println(successStyle.Render("✓ Already up to date — no newer cache found on the network"))
+		return nil
+	}
+	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Synced %d items from %s", len(res.Cache.Media), res.Source)))
 	return nil
 }
 

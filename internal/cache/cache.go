@@ -39,7 +39,7 @@ func Load() (*Cache, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	data, err := os.ReadFile(cachePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -47,12 +47,12 @@ func Load() (*Cache, error) {
 		}
 		return nil, err
 	}
-	
+
 	var cache Cache
 	if err := json.Unmarshal(data, &cache); err != nil {
 		return nil, err
 	}
-	
+
 	return &cache, nil
 }
 
@@ -62,17 +62,17 @@ func (c *Cache) Save() error {
 	if err != nil {
 		return err
 	}
-	
+
 	// Create cache directory if it doesn't exist
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
 		return err
 	}
-	
+
 	cachePath, err := GetCachePath()
 	if err != nil {
 		return err
 	}
-	
+
 	c.LastUpdated = time.Now()
 
 	// Compact JSON: the cache is machine-read only, and for large libraries
@@ -109,7 +109,88 @@ func (c *Cache) Save() error {
 		cleanup()
 		return err
 	}
+
+	// Best-effort freshness sidecar so LAN peers can report cache size/age
+	// without parsing the (large) media.json. A failure here must not fail the
+	// save — the sidecar is an optimization, not the source of truth.
+	_ = SaveMeta(CacheMeta{Count: len(c.Media), LastUpdated: c.LastUpdated})
 	return nil
+}
+
+// CacheMeta is a tiny freshness summary written alongside media.json (meta.json)
+// so a process can report how big and how fresh its cache is without reading the
+// whole file. It powers the LAN cache-sync freshness comparison.
+type CacheMeta struct {
+	Count       int       `json:"count"`
+	LastUpdated time.Time `json:"last_updated"`
+}
+
+// GetMetaPath returns the path to the freshness sidecar file.
+func GetMetaPath() (string, error) {
+	cacheDir, err := config.GetCacheDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(cacheDir, "meta.json"), nil
+}
+
+// LoadMeta reads the freshness sidecar. A missing sidecar is not an error: it
+// returns a zero CacheMeta (count 0, zero time), which compares as "older than
+// anything" for sync purposes.
+func LoadMeta() (CacheMeta, error) {
+	path, err := GetMetaPath()
+	if err != nil {
+		return CacheMeta{}, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return CacheMeta{}, nil
+		}
+		return CacheMeta{}, err
+	}
+	var m CacheMeta
+	if err := json.Unmarshal(data, &m); err != nil {
+		return CacheMeta{}, err
+	}
+	return m, nil
+}
+
+// SaveMeta atomically writes the freshness sidecar. It's called by Save and by
+// the LAN sync pull (which writes media.json directly, bypassing Save) so the
+// sidecar always matches the cache on disk — preserving the original
+// LastUpdated stamp rather than resetting it.
+func SaveMeta(m CacheMeta) error {
+	cacheDir, err := config.GetCacheDir()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		return err
+	}
+	path, err := GetMetaPath()
+	if err != nil {
+		return err
+	}
+	data, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(cacheDir, ".meta-*.json.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 // IsStale checks if the cache is older than the given duration

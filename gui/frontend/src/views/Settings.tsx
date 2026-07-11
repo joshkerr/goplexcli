@@ -15,8 +15,11 @@ export function Settings({ status, onReindexed, onToast }: Props) {
     rclonePath: "",
   });
   const [saving, setSaving] = useState(false);
-  const [indexing, setIndexing] = useState<null | "reindex" | "update">(null);
+  const [indexing, setIndexing] = useState<
+    null | "reindex" | "update" | "sync"
+  >(null);
   const [progress, setProgress] = useState<ReindexProgress | null>(null);
+  const [syncMsg, setSyncMsg] = useState("");
 
   useEffect(() => {
     api.getConfig().then(setCfg).catch(() => {});
@@ -42,6 +45,36 @@ export function Settings({ status, onReindexed, onToast }: Props) {
         } else {
           onToast(`Indexed ${d.count} items`);
         }
+        onReindexed();
+      }
+    });
+    return () => {
+      off();
+      offDone();
+    };
+  }, [onReindexed, onToast]);
+
+  useEffect(() => {
+    const off = onEvent<{ message: string }>("sync:progress", (d) =>
+      setSyncMsg(d.message)
+    );
+    const offDone = onEvent<{
+      updated?: boolean;
+      upToDate?: boolean;
+      count?: number;
+      source?: string;
+      error?: string;
+    }>("sync:done", (d) => {
+      setIndexing(null);
+      setSyncMsg("");
+      if (d.error) onToast(d.error, "error");
+      else if (d.upToDate) onToast("Already up to date — no newer cache found");
+      else {
+        onToast(
+          `Synced ${d.count?.toLocaleString() ?? ""} items${
+            d.source ? ` from ${d.source}` : ""
+          }`
+        );
         onReindexed();
       }
     });
@@ -85,6 +118,19 @@ export function Settings({ status, onReindexed, onToast }: Props) {
     }
   };
 
+  const sync = async () => {
+    setIndexing("sync");
+    setProgress(null);
+    setSyncMsg("Looking for other computers…");
+    try {
+      await api.syncFromLAN();
+    } catch (e: any) {
+      setIndexing(null);
+      setSyncMsg("");
+      onToast(String(e?.message ?? e), "error");
+    }
+  };
+
   const field = (
     label: string,
     key: keyof AppConfig,
@@ -124,7 +170,9 @@ export function Settings({ status, onReindexed, onToast }: Props) {
         {indexing && (
           <div className="rounded-lg bg-ink-800 p-3 text-xs text-white/60">
             <span className="mr-2 inline-block h-2 w-2 animate-pulse rounded-full bg-accent align-middle" />
-            {progress
+            {indexing === "sync"
+              ? syncMsg || "Syncing…"
+              : progress
               ? `${progress.server} · ${progress.library} · ${progress.items.toLocaleString()} items`
               : "Connecting…"}
           </div>
@@ -139,6 +187,13 @@ export function Settings({ status, onReindexed, onToast }: Props) {
             {indexing === "update" ? "Updating…" : "Update library"}
           </button>
           <button
+            onClick={sync}
+            disabled={!!indexing}
+            className="rounded-lg bg-white/10 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-white/20 disabled:opacity-50"
+          >
+            {indexing === "sync" ? "Syncing…" : "Sync from LAN"}
+          </button>
+          <button
             onClick={reindex}
             disabled={!!indexing}
             className="rounded-lg bg-white/10 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-white/20 disabled:opacity-50"
@@ -147,8 +202,9 @@ export function Settings({ status, onReindexed, onToast }: Props) {
           </button>
         </div>
         <p className="text-xs text-white/30">
-          Update fetches only newly added titles. Reindex rebuilds the whole
-          library from scratch.
+          Update fetches only newly added titles. Sync from LAN pulls the newest
+          cache from another computer running GoplexCLI on your network. Reindex
+          rebuilds the whole library from scratch.
         </p>
       </section>
 

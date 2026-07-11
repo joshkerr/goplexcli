@@ -5,6 +5,7 @@
 
 import type {
   AppConfig,
+  BrowseOptions,
   Category,
   Media,
   MediaCard,
@@ -22,7 +23,10 @@ type WailsApp = {
   SaveConfig(cfg: AppConfig): Promise<void>;
   Reindex(): Promise<void>;
   Update(): Promise<void>;
-  ListCategory(category: string): Promise<MediaCard[]>;
+  ListCategory(category: string, opts: BrowseOptions): Promise<MediaCard[]>;
+  MovieGenres(): Promise<string[]>;
+  WarmPosters(urls: string[]): Promise<void>;
+  SyncFromLAN(): Promise<void>;
   Search(query: string): Promise<MediaCard[]>;
   GetItem(key: string): Promise<Media>;
   GetSeasons(showTitle: string): Promise<Season[]>;
@@ -74,7 +78,11 @@ export const api = {
   saveConfig: (c: AppConfig) => app().SaveConfig(c),
   reindex: () => app().Reindex(),
   update: () => app().Update(),
-  listCategory: (c: Category) => app().ListCategory(c),
+  listCategory: (c: Category, opts: BrowseOptions) =>
+    app().ListCategory(c, opts),
+  movieGenres: () => app().MovieGenres(),
+  warmPosters: (urls: string[]) => app().WarmPosters(urls),
+  syncFromLAN: () => app().SyncFromLAN(),
   search: (q: string) => app().Search(q),
   getItem: (key: string) => app().GetItem(key),
   getSeasons: (show: string) => app().GetSeasons(show),

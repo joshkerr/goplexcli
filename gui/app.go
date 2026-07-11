@@ -10,6 +10,7 @@ import (
 	"github.com/joshkerr/goplexcli/internal/cache"
 	"github.com/joshkerr/goplexcli/internal/config"
 	"github.com/joshkerr/goplexcli/internal/download"
+	"github.com/joshkerr/goplexcli/internal/lansync"
 	"github.com/joshkerr/goplexcli/internal/player"
 	"github.com/joshkerr/goplexcli/internal/plex"
 )
@@ -51,17 +52,28 @@ type App struct {
 	mediaCache *cache.Cache
 
 	posters *posterCache
+
+	// lan advertises this instance's media cache on the LAN and pulls a newer
+	// cache from a peer (the "Sync from LAN" action).
+	lan *lansync.Server
 }
 
 // NewApp creates a new App. Config is loaded lazily in startup.
 func NewApp() *App {
-	return &App{posters: newPosterCache(http.DefaultClient)}
+	a := &App{posters: newPosterCache(http.DefaultClient)}
+	a.lan = a.newSyncServer()
+	return a
 }
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	if err := a.posters.start(); err != nil {
 		fmt.Printf("poster cache server unavailable: %v\n", err)
+	}
+	if err := a.lan.Start(); err != nil {
+		fmt.Printf("lan cache sync unavailable: %v\n", err)
+	} else if err := a.lan.AdvertiseError(); err != nil {
+		fmt.Printf("lan cache sync discovery disabled: %v\n", err)
 	}
 	if cfg, err := config.Load(); err == nil {
 		a.mu.Lock()
@@ -73,6 +85,7 @@ func (a *App) startup(ctx context.Context) {
 
 func (a *App) shutdown(ctx context.Context) {
 	a.posters.close(ctx)
+	a.lan.Close(ctx)
 }
 
 // config returns the in-memory config, loading it from disk if needed.

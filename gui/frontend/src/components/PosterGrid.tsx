@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { api } from "../lib/api";
 import type { MediaCard } from "../lib/types";
 import { PosterCard } from "./PosterCard";
 
@@ -52,13 +53,14 @@ export function PosterGrid({ items, loading, emptyMessage, onSelect }: Props) {
     return () => ro.disconnect();
   }, [scrollEl]);
 
-  // Throttle scroll updates to one per animation frame.
-  const onScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    const top = e.currentTarget.scrollTop;
-    if (rafRef.current != null) return;
+  // Throttle scroll updates to one per animation frame. Read scrollTop when the
+  // frame fires (not when scheduled) so a fast drag lands on the latest
+  // position instead of a frame-stale one.
+  const onScroll = () => {
+    if (!scrollEl || rafRef.current != null) return;
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = null;
-      setScrollTop(top);
+      setScrollTop(scrollEl.scrollTop);
     });
   };
   useEffect(
@@ -99,30 +101,29 @@ export function PosterGrid({ items, loading, emptyMessage, onSelect }: Props) {
     Math.floor((scrollTop - PAD_Y + dims.height) / rowH)
   );
 
-  // Warm a small number of posters immediately after the rendered window.
-  // The persistent backend cache makes this useful across app launches, while
-  // requestIdleCallback avoids competing with visible, high-priority images.
+  // Once scrolling settles, warm the posters across the rendered window (plus a
+  // couple of rows ahead) via the backend pool. Because the backend transcodes
+  // on its own connection pool — not the browser's ~6-per-origin cap — a far
+  // jump-scroll fills the whole window in parallel instead of six at a time, and
+  // singleflight dedupes against the browser's own image requests. The effect
+  // re-runs as the window changes; the 120ms debounce means a fast drag only
+  // warms where it lands, not every position swept through.
   useEffect(() => {
     if (!ready) return;
-    const from = Math.min(items.length, endIdx + 1);
-    const to = Math.min(items.length, from + cols * PREFETCH_ROWS);
-    const run = () => {
+    const from = startIdx;
+    const to = Math.min(items.length, endIdx + 1 + cols * PREFETCH_ROWS);
+    const id = window.setTimeout(() => {
+      const urls: string[] = [];
       for (let i = from; i < to; i++) {
         const src = items[i]?.thumbURL;
         if (!src || prefetchedPosters.has(src)) continue;
         prefetchedPosters.add(src);
-        const image = new Image();
-        image.decoding = "async";
-        image.src = src;
+        urls.push(src);
       }
-    };
-    if ("requestIdleCallback" in window) {
-      const id = window.requestIdleCallback(run, { timeout: 1000 });
-      return () => window.cancelIdleCallback(id);
-    }
-    const id = window.setTimeout(run, 150);
+      if (urls.length > 0) api.warmPosters(urls).catch(() => {});
+    }, 120);
     return () => window.clearTimeout(id);
-  }, [ready, items, endIdx, cols]);
+  }, [ready, items, startIdx, endIdx, cols]);
 
   // Spacer heights above/below the rendered window.
   const topPad = PAD_Y + firstRow * rowH;

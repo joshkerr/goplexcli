@@ -75,6 +75,59 @@ func TestRecentlyAdded(t *testing.T) {
 	}
 }
 
+func TestSortMovieItems(t *testing.T) {
+	c := &cache.Cache{Media: []plex.MediaItem{
+		{Key: "b", Type: "movie", Title: "Beta", Year: 2001, AddedAt: 100, Rating: 7, Genre: "Action, Comedy"},
+		{Key: "a", Type: "movie", Title: "Alpha", Year: 1999, AddedAt: 300, Rating: 9, Genre: "Drama"},
+		{Key: "c", Type: "movie", Title: "Gamma", Year: 2010, AddedAt: 200, Rating: 5, Genre: "Comedy"},
+		{Key: "ep", Type: "episode", Title: "Nope", Genre: "Comedy"},
+	}}
+
+	keys := func(items []*plex.MediaItem) []string {
+		out := make([]string, len(items))
+		for i, it := range items {
+			out[i] = it.Key
+		}
+		return out
+	}
+	eq := func(t *testing.T, got, want []string) {
+		t.Helper()
+		if len(got) != len(want) {
+			t.Fatalf("len = %d (%v), want %d (%v)", len(got), got, len(want), want)
+		}
+		for i := range got {
+			if got[i] != want[i] {
+				t.Fatalf("order = %v, want %v", got, want)
+			}
+		}
+	}
+
+	// Default (empty opts): all movies A-Z by title, episodes excluded.
+	eq(t, keys(sortMovieItems(c, BrowseOptions{})), []string{"a", "b", "c"})
+	// Sort by date added, descending.
+	eq(t, keys(sortMovieItems(c, BrowseOptions{SortField: "added", Desc: true})), []string{"a", "c", "b"})
+	// Sort by year ascending.
+	eq(t, keys(sortMovieItems(c, BrowseOptions{SortField: "year"})), []string{"a", "b", "c"})
+	// Genre filter matches a token within a comma-separated field.
+	eq(t, keys(sortMovieItems(c, BrowseOptions{Genre: "Comedy"})), []string{"b", "c"})
+}
+
+func TestMovieGenres(t *testing.T) {
+	a := NewApp()
+	a.setMedia(&cache.Cache{Media: []plex.MediaItem{
+		{Type: "movie", Genre: "Drama, Comedy"},
+		{Type: "movie", Genre: "Drama"},
+		{Type: "movie", Genre: "Comedy"},
+		{Type: "movie", Genre: "Action"},
+		{Type: "episode", Genre: "Documentary"}, // ignored: not a movie
+	}})
+	got := a.MovieGenres()
+	// Drama (2) and Comedy (2) outrank Action (1); ties broken alphabetically.
+	if len(got) != 3 || got[0] != "Comedy" || got[1] != "Drama" || got[2] != "Action" {
+		t.Errorf("MovieGenres = %v, want [Comedy Drama Action]", got)
+	}
+}
+
 func TestGetItem(t *testing.T) {
 	a := NewApp()
 	a.setMedia(&cache.Cache{Media: []plex.MediaItem{

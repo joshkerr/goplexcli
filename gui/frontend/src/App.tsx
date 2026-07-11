@@ -5,6 +5,7 @@ import type {
   DownloadProgress,
   Media,
   MediaCard,
+  SortField,
   Status,
 } from "./lib/types";
 import { Sidebar, type NavKey } from "./components/Sidebar";
@@ -43,6 +44,13 @@ export default function App() {
   const [items, setItems] = useState<MediaCard[]>([]);
   const [loadingGrid, setLoadingGrid] = useState(false);
   const [selected, setSelected] = useState<Media | null>(null);
+
+  // Movies-grid controls (genre filter + sort). Honored only for the Movies
+  // category; other grids ignore them.
+  const [genre, setGenre] = useState("");
+  const [sortField, setSortField] = useState<SortField>("title");
+  const [desc, setDesc] = useState(false);
+  const [movieGenres, setMovieGenres] = useState<string[]>([]);
 
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<MediaCard[] | null>(null);
@@ -95,7 +103,11 @@ export default function App() {
       if (cat === "downloads" || cat === "settings") return;
       setLoadingGrid(true);
       try {
-        const data = await api.listCategory(cat as Category);
+        const data = await api.listCategory(cat as Category, {
+          genre,
+          sortField,
+          desc,
+        });
         setItems(data);
       } catch (e: any) {
         toast(String(e?.message ?? e), "error");
@@ -104,7 +116,7 @@ export default function App() {
         setLoadingGrid(false);
       }
     },
-    [toast]
+    [toast, genre, sortField, desc]
   );
 
   useEffect(() => {
@@ -113,6 +125,12 @@ export default function App() {
     if (searchResults !== null) return;
     loadCategory(active);
   }, [active, needsSetup, loadCategory, searchResults]);
+
+  // Populate the movie genre filter once the library is ready.
+  useEffect(() => {
+    if (needsSetup) return;
+    api.movieGenres().then(setMovieGenres).catch(() => {});
+  }, [needsSetup]);
 
   // Debounced search.
   useEffect(() => {
@@ -216,6 +234,47 @@ export default function App() {
           <h1 className="text-lg font-semibold tracking-tight text-white">
             {showSearch ? `Search: “${query}”` : CATEGORY_TITLES[active]}
           </h1>
+
+          {active === "movies" && !showSearch && (
+            <div
+              className="flex items-center gap-2"
+              style={{ ["--wails-draggable" as any]: "no-drag" }}
+            >
+              <select
+                value={genre}
+                onChange={(e) => setGenre(e.target.value)}
+                className="rounded-lg border border-white/10 bg-ink-700 px-2.5 py-2 text-sm text-white outline-none focus:border-accent/60"
+                title="Filter by genre"
+              >
+                <option value="">All Genres</option>
+                {movieGenres.map((g) => (
+                  <option key={g} value={g}>
+                    {g}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={sortField}
+                onChange={(e) => setSortField(e.target.value as SortField)}
+                className="rounded-lg border border-white/10 bg-ink-700 px-2.5 py-2 text-sm text-white outline-none focus:border-accent/60"
+                title="Sort by"
+              >
+                <option value="title">Title</option>
+                <option value="year">Year</option>
+                <option value="added">Date Added</option>
+                <option value="rating">Rating</option>
+                <option value="duration">Duration</option>
+              </select>
+              <button
+                onClick={() => setDesc((d) => !d)}
+                className="rounded-lg border border-white/10 bg-ink-700 px-3 py-2 text-sm text-white outline-none hover:border-accent/60"
+                title={desc ? "Descending" : "Ascending"}
+              >
+                {desc ? "↓" : "↑"}
+              </button>
+            </div>
+          )}
+
           <div className="flex-1" />
           <div
             className="relative w-72"

@@ -1,0 +1,398 @@
+// Package lansync shares a goplexcli media cache between machines on the same
+// LAN. Each participating process advertises itself via mDNS and serves its
+// cache over HTTP; a peer can discover the others, find whichever has the
+// freshest cache, and pull it — far faster than a full reindex from Plex for a
+// large library.
+//
+// The HTTP endpoint is intentionally unauthenticated (LAN-only, user opt-in):
+// it exposes library metadata (titles, file paths, server URLs) but never Plex
+// tokens, which live in config rather than the cache.
+//
+// It is GUI-agnostic: the Wails GUI, the `goplexcli sync serve` daemon, and the
+// `goplexcli sync pull` command all use it. Progress is reported through a
+// caller-supplied callback rather than any UI framework.
+package lansync
+
+import (
+	"compress/gzip"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/grandcat/zeroconf"
+	"github.com/joshkerr/goplexcli/internal/cache"
+)
+
+const (
+	// ServiceType is the mDNS service goplexcli instances advertise for cache sync.
+	ServiceType = "_goplexcli-sync._tcp"
+	// Domain is the mDNS domain used for discovery.
+	Domain = "local."
+
+	metaTimeout = 4 * time.Second
+	pullTimeout = 10 * time.Minute
+	discoverFor = 3 * time.Second
+)
+
+// httpClient is shared by the client-side probes and pulls. Timeouts are bound
+// per-request via context, so no client-level Timeout (which would cap a large
+// legitimate download).
+var httpClient = &http.Client{}
+
+// Meta is a peer's cache freshness summary, returned by /cache/meta.
+type Meta struct {
+	Instance    string    `json:"instance"`
+	Count       int       `json:"count"`
+	LastUpdated time.Time `json:"lastUpdated"`
+}
+
+// MetaFunc supplies the local cache freshness (Count + LastUpdated). The server
+// stamps Instance itself, so implementations can leave it zero.
+type MetaFunc func() Meta
+
+// CacheMetaFunc adapts internal/cache's LoadMeta into a MetaFunc — the freshness
+// source for headless servers (the CLI daemon) that don't hold an in-memory
+// cache. A missing sidecar reports as empty (older than anything).
+func CacheMetaFunc() MetaFunc {
+	return func() Meta {
+		m, _ := cache.LoadMeta()
+		return Meta{Count: m.Count, LastUpdated: m.LastUpdated}
+	}
+}
+
+// Server advertises this machine's cache on the LAN and serves it to peers.
+type Server struct {
+	metaFn MetaFunc
+
+	mu       sync.Mutex
+	server   *http.Server
+	zc       *zeroconf.Server
+	instance string
+	port     int
+	advErr   error // non-nil if mDNS advertising failed (serving still works)
+}
+
+// NewServer creates a Server that reports freshness via metaFn.
+func NewServer(metaFn MetaFunc) *Server {
+	return &Server{metaFn: metaFn}
+}
+
+// Instance returns this server's unique mDNS instance name (empty until Start).
+func (s *Server) Instance() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.instance
+}
+
+// Port returns the bound TCP port (0 until Start succeeds).
+func (s *Server) Port() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.port
+}
+
+// AdvertiseError returns the mDNS registration error, if any. A non-nil value
+// means the server is reachable but won't be auto-discovered, so peers would
+// need another way to learn its address.
+func (s *Server) AdvertiseError() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.advErr
+}
+
+// Start binds a LAN-reachable HTTP server and advertises it via mDNS. It returns
+// an error only when serving cannot start (the port can't be bound); a failure
+// to advertise is recorded in AdvertiseError and does not stop serving.
+func (s *Server) Start() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.server != nil {
+		return nil
+	}
+
+	listener, err := net.Listen("tcp", ":0")
+	if err != nil {
+		return fmt.Errorf("lan sync listen: %w", err)
+	}
+	s.port = listener.Addr().(*net.TCPAddr).Port
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/cache/meta", s.serveMeta)
+	mux.HandleFunc("/cache", s.serveCache)
+	s.server = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	go func() { _ = s.server.Serve(listener) }()
+
+	host, _ := os.Hostname()
+	if host == "" {
+		host = "goplexcli"
+	}
+	// Append the PID so two machines that share a hostname still get distinct
+	// instance names (and neither mistakes the other for itself in Discover).
+	s.instance = fmt.Sprintf("%s-%d", host, os.Getpid())
+
+	zc, err := zeroconf.Register(s.instance, ServiceType, Domain, s.port, nil, nil)
+	if err != nil {
+		s.advErr = err // non-fatal: keep serving
+		return nil
+	}
+	s.zc = zc
+	return nil
+}
+
+// Close stops advertising and shuts the server down.
+func (s *Server) Close(ctx context.Context) {
+	s.mu.Lock()
+	server, zc := s.server, s.zc
+	s.server, s.zc = nil, nil
+	s.mu.Unlock()
+
+	if zc != nil {
+		zc.Shutdown()
+	}
+	if server != nil {
+		if err := server.Shutdown(ctx); err != nil {
+			_ = server.Close()
+		}
+	}
+}
+
+func (s *Server) serveMeta(w http.ResponseWriter, r *http.Request) {
+	var m Meta
+	if s.metaFn != nil {
+		m = s.metaFn()
+	}
+	m.Instance = s.Instance()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(m)
+}
+
+// serveCache streams the on-disk media.json gzipped. Serving the raw file (vs.
+// re-marshaling) preserves the exact LastUpdated stamp so freshness comparisons
+// stay meaningful as a cache hops between machines.
+func (s *Server) serveCache(w http.ResponseWriter, r *http.Request) {
+	path, err := cache.GetCachePath()
+	if err != nil {
+		http.Error(w, "cache unavailable", http.StatusInternalServerError)
+		return
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		http.Error(w, "no cache", http.StatusNotFound)
+		return
+	}
+	defer f.Close()
+
+	w.Header().Set("Content-Type", "application/gzip")
+	gz := gzip.NewWriter(w)
+	defer gz.Close()
+	_, _ = io.Copy(gz, f)
+}
+
+// Peer is a discovered instance we can query and pull from.
+type Peer struct {
+	Instance string
+	Addr     string // "host:port" using the first IPv4 address
+}
+
+func (p Peer) baseURL() string { return "http://" + p.Addr }
+
+// Host returns a friendly machine name for the peer (the hostname without the
+// PID suffix baked into the instance name).
+func (p Peer) Host() string { return hostFromInstance(p.Instance) }
+
+func hostFromInstance(instance string) string {
+	if i := strings.LastIndex(instance, "-"); i > 0 {
+		return instance[:i]
+	}
+	return instance
+}
+
+// Discover browses the LAN for peers, excluding excludeInstance (pass the local
+// server's instance so a process that also serves doesn't pull from itself; pass
+// "" for a pull-only process). It blocks up to discoverFor.
+func Discover(ctx context.Context, excludeInstance string) ([]Peer, error) {
+	resolver, err := zeroconf.NewResolver(nil)
+	if err != nil {
+		return nil, fmt.Errorf("resolver: %w", err)
+	}
+
+	entries := make(chan *zeroconf.ServiceEntry, 16)
+	var peers []Peer
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for entry := range entries {
+			if entry.Instance == excludeInstance {
+				continue
+			}
+			if len(entry.AddrIPv4) == 0 {
+				continue
+			}
+			mu.Lock()
+			peers = append(peers, Peer{
+				Instance: entry.Instance,
+				Addr:     fmt.Sprintf("%s:%d", entry.AddrIPv4[0].String(), entry.Port),
+			})
+			mu.Unlock()
+		}
+	}()
+
+	dctx, cancel := context.WithTimeout(ctx, discoverFor)
+	defer cancel()
+	if err := resolver.Browse(dctx, ServiceType, Domain, entries); err != nil {
+		close(entries)
+		wg.Wait()
+		return nil, fmt.Errorf("browse: %w", err)
+	}
+	<-dctx.Done()
+	wg.Wait()
+	return peers, nil
+}
+
+// FetchMeta fetches a peer's freshness summary.
+func FetchMeta(ctx context.Context, p Peer) (Meta, error) {
+	rctx, cancel := context.WithTimeout(ctx, metaTimeout)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(rctx, http.MethodGet, p.baseURL()+"/cache/meta", nil)
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return Meta{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return Meta{}, fmt.Errorf("meta %s", resp.Status)
+	}
+	var m Meta
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&m); err != nil {
+		return Meta{}, err
+	}
+	if m.Instance == "" {
+		m.Instance = p.Instance
+	}
+	return m, nil
+}
+
+// Pull downloads a peer's gzipped cache, decompresses it, atomically replaces
+// the local media.json, refreshes the freshness sidecar to match, and returns
+// the loaded cache.
+func Pull(ctx context.Context, p Peer) (*cache.Cache, error) {
+	path, err := cache.GetCachePath()
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return nil, err
+	}
+
+	rctx, cancel := context.WithTimeout(ctx, pullTimeout)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(rctx, http.MethodGet, p.baseURL()+"/cache", nil)
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("cache %s", resp.Status)
+	}
+
+	gz, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("decompress: %w", err)
+	}
+	defer gz.Close()
+
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".media-sync-*.json.tmp")
+	if err != nil {
+		return nil, err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := io.Copy(tmp, gz); err != nil {
+		tmp.Close()
+		return nil, err
+	}
+	if err := tmp.Close(); err != nil {
+		return nil, err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return nil, err
+	}
+
+	loaded, err := cache.Load()
+	if err != nil {
+		return nil, fmt.Errorf("reload synced cache: %w", err)
+	}
+	// Keep the sidecar consistent with the file we just wrote (preserving the
+	// source's LastUpdated, not resetting it), so this machine reports accurate
+	// freshness if it in turn serves the cache.
+	_ = cache.SaveMeta(cache.CacheMeta{Count: len(loaded.Media), LastUpdated: loaded.LastUpdated})
+	return loaded, nil
+}
+
+// Result reports the outcome of SyncFromLAN.
+type Result struct {
+	Updated  bool         // a newer cache was pulled
+	UpToDate bool         // peers found, but none newer than local
+	Source   string       // friendly hostname the cache came from (when Updated)
+	Cache    *cache.Cache // the pulled cache (non-nil when Updated)
+}
+
+// SyncFromLAN discovers peers (excluding excludeInstance), finds the one whose
+// cache is newest and strictly newer than local, and pulls it. progress, if
+// non-nil, is called with human-readable status lines. Errors are returned with
+// user-facing messages.
+func SyncFromLAN(ctx context.Context, excludeInstance string, local Meta, progress func(string)) (Result, error) {
+	report := func(msg string) {
+		if progress != nil {
+			progress(msg)
+		}
+	}
+
+	report("Looking for other computers…")
+	peers, err := Discover(ctx, excludeInstance)
+	if err != nil {
+		return Result{}, err
+	}
+	if len(peers) == 0 {
+		return Result{}, fmt.Errorf("no other running goplexcli found on the network")
+	}
+
+	report(fmt.Sprintf("Comparing %d computer(s)…", len(peers)))
+	var best *Peer
+	var bestMeta Meta
+	for i := range peers {
+		m, err := FetchMeta(ctx, peers[i])
+		if err != nil {
+			continue // skip unreachable peers
+		}
+		if best == nil || m.LastUpdated.After(bestMeta.LastUpdated) {
+			best = &peers[i]
+			bestMeta = m
+		}
+	}
+	if best == nil {
+		return Result{}, fmt.Errorf("found computers, but none could share their cache")
+	}
+	if !bestMeta.LastUpdated.After(local.LastUpdated) {
+		return Result{UpToDate: true}, nil
+	}
+
+	source := best.Host()
+	report(fmt.Sprintf("Downloading cache from %s…", source))
+	c, err := Pull(ctx, *best)
+	if err != nil {
+		return Result{}, err
+	}
+	return Result{Updated: true, Source: source, Cache: c}, nil
+}

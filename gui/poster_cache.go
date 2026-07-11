@@ -25,10 +25,11 @@ const (
 	posterCacheMaxBytes = int64(256 << 20)
 	posterMaxImageBytes = int64(12 << 20)
 	// warmConcurrency bounds how many posters are pre-fetched from Plex in
-	// parallel. It sits a little above the browser's ~6-connections-per-origin
-	// cap so warming outpaces on-demand image requests, without flooding Plex
-	// with transcode work.
-	warmConcurrency = 8
+	// parallel. Warming runs on the Go client's own connection pool, independent
+	// of the browser's ~6-connections-per-origin cap, so a comfortably higher
+	// value lets a jump-scrolled window fill in parallel instead of trickling in
+	// six at a time — while staying gentle enough not to flood Plex's transcoder.
+	warmConcurrency = 12
 )
 
 type posterSource struct {
