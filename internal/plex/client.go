@@ -74,32 +74,33 @@ func (c *Client) SetPathMappings(mappings []PathMapping) {
 }
 
 type MediaItem struct {
-	Key           string
-	Title         string
-	Year          int
-	Type          string // movie, show, season, episode
-	Summary       string
-	Rating        float64
-	Duration      int
-	FilePath      string
-	RclonePath    string
-	ParentTitle   string // For episodes: show name
-	GrandTitle    string // For episodes: season name
-	Index         int64  // Episode or season number
-	ParentIndex   int64  // Season number for episodes
-	Thumb         string // Poster/thumbnail URL path
-	ServerName    string // Name of the Plex server this item belongs to
-	ServerURL     string // URL of the Plex server this item belongs to
-	ViewOffset    int    // Playback position in milliseconds (0 if not started)
-	ViewCount     int    // Number of times fully watched
-	LastViewedAt  int64  // Unix timestamp of last playback (0 if never viewed)
-	ContentRating string // e.g., "PG-13", "TV-MA"
-	Studio        string // Production studio
-	Director      string // Director name(s)
-	Genre         string // Genre(s), comma-separated
-	Cast          string // Cast members, comma-separated
-	AddedAt       int64  // Unix timestamp when added to library
-	OriginallyAired string // Original air date for episodes
+	Key              string
+	Title            string
+	Year             int
+	Type             string // movie, show, season, episode
+	Summary          string
+	Rating           float64
+	Duration         int
+	FilePath         string
+	RclonePath       string
+	ParentTitle      string // For episodes: show name
+	GrandTitle       string // For episodes: season name
+	Index            int64  // Episode or season number
+	ParentIndex      int64  // Season number for episodes
+	Thumb            string // Poster/thumbnail URL path (episode still for episodes)
+	GrandparentThumb string // For episodes: the show poster path (grandparentThumb)
+	ServerName       string // Name of the Plex server this item belongs to
+	ServerURL        string // URL of the Plex server this item belongs to
+	ViewOffset       int    // Playback position in milliseconds (0 if not started)
+	ViewCount        int    // Number of times fully watched
+	LastViewedAt     int64  // Unix timestamp of last playback (0 if never viewed)
+	ContentRating    string // e.g., "PG-13", "TV-MA"
+	Studio           string // Production studio
+	Director         string // Director name(s)
+	Genre            string // Genre(s), comma-separated
+	Cast             string // Cast members, comma-separated
+	AddedAt          int64  // Unix timestamp when added to library
+	OriginallyAired  string // Original air date for episodes
 }
 
 // New creates a new Plex client
@@ -458,25 +459,26 @@ const pageNetRetries = 2
 
 // sectionMetadata mirrors a single item in a library section's Metadata array.
 type sectionMetadata struct {
-	Key                   string   `json:"key"`
-	RatingKey             string   `json:"ratingKey"`
-	Title                 string   `json:"title"`
-	Year                  *int     `json:"year"`
-	Summary               *string  `json:"summary"`
-	Rating                *float32 `json:"rating"`
-	Duration              *int     `json:"duration"`
-	Thumb                 *string  `json:"thumb"`
-	GrandparentTitle      *string  `json:"grandparentTitle"`
-	ParentTitle           *string  `json:"parentTitle"`
-	Index                 *int     `json:"index"`
-	ParentIndex           *int     `json:"parentIndex"`
-	ViewOffset            *int     `json:"viewOffset"`
-	ViewCount             *int     `json:"viewCount"`
-	LastViewedAt          *int64   `json:"lastViewedAt"`
-	ContentRating         *string  `json:"contentRating"`
-	Studio                *string  `json:"studio"`
-	AddedAt               *int64   `json:"addedAt"`
-	OriginallyAvailableAt *string  `json:"originallyAvailableAt"`
+	Key                   string       `json:"key"`
+	RatingKey             string       `json:"ratingKey"`
+	Title                 string       `json:"title"`
+	Year                  *int         `json:"year"`
+	Summary               *string      `json:"summary"`
+	Rating                *float32     `json:"rating"`
+	Duration              *int         `json:"duration"`
+	Thumb                 *string      `json:"thumb"`
+	GrandparentThumb      *string      `json:"grandparentThumb"`
+	GrandparentTitle      *string      `json:"grandparentTitle"`
+	ParentTitle           *string      `json:"parentTitle"`
+	Index                 *int         `json:"index"`
+	ParentIndex           *int         `json:"parentIndex"`
+	ViewOffset            *int         `json:"viewOffset"`
+	ViewCount             *int         `json:"viewCount"`
+	LastViewedAt          *int64       `json:"lastViewedAt"`
+	ContentRating         *string      `json:"contentRating"`
+	Studio                *string      `json:"studio"`
+	AddedAt               *int64       `json:"addedAt"`
+	OriginallyAvailableAt *string      `json:"originallyAvailableAt"`
 	Director              []taggedItem `json:"Director"`
 	Genre                 []taggedItem `json:"Genre"`
 	Role                  []taggedItem `json:"Role"`
@@ -598,30 +600,31 @@ func (c *Client) getMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 			}
 
 			item := MediaItem{
-				Key:             metadata.Key,
-				Title:           metadata.Title,
-				Year:            valueOrZeroInt(metadata.Year),
-				Type:            "episode",
-				Summary:         valueOrEmpty(metadata.Summary),
-				Rating:          float64(valueOrZeroFloat32(metadata.Rating)),
-				Duration:        valueOrZeroInt(metadata.Duration),
-				Thumb:           valueOrEmpty(metadata.Thumb),
-				ParentTitle:     valueOrEmpty(metadata.GrandparentTitle),
-				GrandTitle:      valueOrEmpty(metadata.ParentTitle),
-				Index:           int64(valueOrZeroInt(metadata.Index)),
-				ParentIndex:     int64(valueOrZeroInt(metadata.ParentIndex)),
-				ServerName:      c.serverName,
-				ServerURL:       c.serverURL,
-				ViewOffset:      valueOrZeroInt(metadata.ViewOffset),
-				ViewCount:       valueOrZeroInt(metadata.ViewCount),
-				LastViewedAt:    valueOrZeroInt64(metadata.LastViewedAt),
-				ContentRating:   valueOrEmpty(metadata.ContentRating),
-				Studio:          valueOrEmpty(metadata.Studio),
-				Director:        strings.Join(extractTags(metadata.Director, 0), ", "),
-				Genre:           strings.Join(extractTags(metadata.Genre, 0), ", "),
-				Cast:            strings.Join(extractTags(metadata.Role, 5), ", "),
-				AddedAt:         valueOrZeroInt64(metadata.AddedAt),
-				OriginallyAired: valueOrEmpty(metadata.OriginallyAvailableAt),
+				Key:              metadata.Key,
+				Title:            metadata.Title,
+				Year:             valueOrZeroInt(metadata.Year),
+				Type:             "episode",
+				Summary:          valueOrEmpty(metadata.Summary),
+				Rating:           float64(valueOrZeroFloat32(metadata.Rating)),
+				Duration:         valueOrZeroInt(metadata.Duration),
+				Thumb:            valueOrEmpty(metadata.Thumb),
+				GrandparentThumb: valueOrEmpty(metadata.GrandparentThumb),
+				ParentTitle:      valueOrEmpty(metadata.GrandparentTitle),
+				GrandTitle:       valueOrEmpty(metadata.ParentTitle),
+				Index:            int64(valueOrZeroInt(metadata.Index)),
+				ParentIndex:      int64(valueOrZeroInt(metadata.ParentIndex)),
+				ServerName:       c.serverName,
+				ServerURL:        c.serverURL,
+				ViewOffset:       valueOrZeroInt(metadata.ViewOffset),
+				ViewCount:        valueOrZeroInt(metadata.ViewCount),
+				LastViewedAt:     valueOrZeroInt64(metadata.LastViewedAt),
+				ContentRating:    valueOrEmpty(metadata.ContentRating),
+				Studio:           valueOrEmpty(metadata.Studio),
+				Director:         strings.Join(extractTags(metadata.Director, 0), ", "),
+				Genre:            strings.Join(extractTags(metadata.Genre, 0), ", "),
+				Cast:             strings.Join(extractTags(metadata.Role, 5), ", "),
+				AddedAt:          valueOrZeroInt64(metadata.AddedAt),
+				OriginallyAired:  valueOrEmpty(metadata.OriginallyAvailableAt),
 			}
 
 			// Get file path

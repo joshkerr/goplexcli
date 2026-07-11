@@ -116,6 +116,27 @@ func (a *App) thumbURL(item *plex.MediaItem, width, height int) string {
 	})
 }
 
+// showThumbURL builds a poster URL for a show card derived from one of its
+// episodes. It prefers the show poster (the episode's grandparentThumb) over the
+// episode still (Thumb), which is only a screenshot from that episode. Older
+// caches indexed before grandparentThumb was captured fall back to the still.
+func (a *App) showThumbURL(episode *plex.MediaItem, width, height int) string {
+	if episode.GrandparentThumb == "" {
+		return a.thumbURL(episode, width, height)
+	}
+	base := episode.ServerURL
+	if base == "" {
+		return ""
+	}
+	return a.posters.register(posterSource{
+		ServerURL: strings.TrimRight(base, "/"),
+		ThumbPath: episode.GrandparentThumb,
+		Token:     a.config().TokenForURL(base),
+		Width:     width,
+		Height:    height,
+	})
+}
+
 // toDTO converts a cached MediaItem into its frontend shape.
 func (a *App) toDTO(item *plex.MediaItem) MediaDTO {
 	return MediaDTO{
@@ -261,7 +282,7 @@ func (a *App) showDTO(c *cache.Cache, title string) (MediaDTO, error) {
 			dto.Year = item.Year
 			dto.Summary = item.Summary
 			dto.Genre = item.Genre
-			dto.ThumbURL = a.thumbURL(item, 500, 750)
+			dto.ThumbURL = a.showThumbURL(item, 500, 750)
 			dto.ServerName = item.ServerName
 			found = true
 		}
@@ -310,7 +331,7 @@ func (a *App) groupShowCards(c *cache.Cache) []MediaCardDTO {
 				Title:        item.ParentTitle,
 				DisplayTitle: item.ParentTitle,
 				Year:         item.Year,
-				ThumbURL:     a.thumbURL(item, 320, 480),
+				ThumbURL:     a.showThumbURL(item, 320, 480),
 			}
 			byShow[item.ParentTitle] = &card
 			order = append(order, item.ParentTitle)
