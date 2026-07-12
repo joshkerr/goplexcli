@@ -93,6 +93,9 @@ func tokenCandidates() []string {
 		// token — which is already a candidate above.
 		cmd := exec.Command(path, "auth", "token")
 		cmd.Env = envWithout(os.Environ(), "GH_TOKEN", "GITHUB_TOKEN")
+		// Suppress the console window Windows would otherwise flash when the GUI
+		// (a windowed process) spawns the console-mode `gh` here.
+		hideConsoleWindow(cmd)
 		if out, oerr := cmd.Output(); oerr == nil {
 			add(string(out))
 		}
