@@ -122,3 +122,105 @@ jobs:
         prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Build and publish the desktop GUI bundles. These run on native runners
+  # (Wails apps can't be cross-compiled) and attach to the same release. They
+  # depend on `release` so the release exists first; a failure here never blocks
+  # the CLI binaries, which are already published by that job.
+  gui-macos:
+    name: Build & publish macOS GUI
+    needs: release
+    runs-on: macos-latest
+    env:
+      # Set the "Developer ID Application: … (TEAMID)" identity as a repo secret
+      # to enable signing + notarization. Left empty, the app is still published
+      # but unsigned (Gatekeeper will warn on first open).
+      APPLE_SIGN_IDENTITY: ${{ secrets.APPLE_SIGN_IDENTITY }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.24'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+      - name: Build GUI (universal)
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd gui
+          wails build -platform darwin/universal -ldflags "-X main.version=${VERSION}"
+      - name: Import signing certificate
+        if: env.APPLE_SIGN_IDENTITY != ''
+        env:
+          APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/build.keychain"
+          KEYCHAIN_PWD="$(openssl rand -base64 24)"
+          security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
+          echo "$APPLE_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PWD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+      - name: Codesign
+        if: env.APPLE_SIGN_IDENTITY != ''
+        run: |
+          codesign --deep --force --timestamp --options runtime \
+            --sign "$APPLE_SIGN_IDENTITY" gui/build/bin/goplexcli-gui.app
+          codesign --verify --strict --verbose=2 gui/build/bin/goplexcli-gui.app
+      - name: Notarize
+        if: env.APPLE_SIGN_IDENTITY != ''
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          ditto -c -k --keepParent gui/build/bin/goplexcli-gui.app "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+            --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple gui/build/bin/goplexcli-gui.app
+      - name: Package
+        run: |
+          cd gui/build/bin
+          ditto -c -k --keepParent goplexcli-gui.app goplexcli-gui-darwin-universal.zip
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: gui/build/bin/goplexcli-gui-darwin-universal.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  gui-windows:
+    name: Build & publish Windows GUI
+    needs: release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.24'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+      - name: Build GUI
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd gui
+          wails build -platform windows/amd64 -ldflags "-X main.version=${VERSION}"
+      - name: Package
+        shell: pwsh
+        run: |
+          Compress-Archive -Path gui/build/bin/goplexcli-gui.exe -DestinationPath gui/build/bin/goplexcli-gui-windows-amd64.zip -Force
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: gui/build/bin/goplexcli-gui-windows-amd64.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -131,8 +131,8 @@ gui-dev:
 
 # Build the native GUI binary for the current platform.
 gui-build:
-	@echo "Building GoplexCLI desktop app..."
-	@cd gui && wails build -m -nosyncgomod
+	@echo "Building GoplexCLI desktop app v$(VERSION)..."
+	@cd gui && wails build -m -nosyncgomod -ldflags "-X main.version=$(VERSION)"
 	@echo "Build complete: ./gui/build/bin/"
 
 # Install the icon-enabled desktop GUI. On Windows this installs per-user under

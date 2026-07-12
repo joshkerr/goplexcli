@@ -1,6 +1,11 @@
 import { useEffect, useState } from "react";
 import { api, onEvent } from "../lib/api";
-import type { AppConfig, ReindexProgress, Status } from "../lib/types";
+import type {
+  AppConfig,
+  ReindexProgress,
+  Status,
+  UpdateInfo,
+} from "../lib/types";
 
 interface Props {
   status: Status;
@@ -22,8 +27,27 @@ export function Settings({ status, onReindexed, onToast }: Props) {
   const [progress, setProgress] = useState<ReindexProgress | null>(null);
   const [syncMsg, setSyncMsg] = useState("");
 
+  // App version + self-update state.
+  const [appVersion, setAppVersion] = useState("");
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [updateMsg, setUpdateMsg] = useState("");
+
   useEffect(() => {
     api.getConfig().then(setCfg).catch(() => {});
+    api.appVersion().then(setAppVersion).catch(() => {});
+    // Check for a newer GUI release in the background on open.
+    api
+      .checkUpdate()
+      .then(setUpdateInfo)
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    return onEvent<{ message: string }>("gui-update:progress", (d) =>
+      setUpdateMsg(d.message)
+    );
   }, []);
 
   useEffect(() => {
@@ -128,6 +152,33 @@ export function Settings({ status, onReindexed, onToast }: Props) {
     } catch (e: any) {
       setIndexing(null);
       setSyncMsg("");
+      onToast(String(e?.message ?? e), "error");
+    }
+  };
+
+  const checkForUpdate = async () => {
+    setChecking(true);
+    try {
+      const info = await api.checkUpdate();
+      setUpdateInfo(info);
+      if (info.error) onToast(info.error, "error");
+      else if (!info.available) onToast(`You're up to date (v${info.current})`);
+    } catch (e: any) {
+      onToast(String(e?.message ?? e), "error");
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const installUpdate = async () => {
+    setUpdating(true);
+    setUpdateMsg("Starting update…");
+    try {
+      // On success the backend relaunches the app, so this call may not return.
+      await api.applyUpdate();
+    } catch (e: any) {
+      setUpdating(false);
+      setUpdateMsg("");
       onToast(String(e?.message ?? e), "error");
     }
   };
@@ -241,6 +292,61 @@ export function Settings({ status, onReindexed, onToast }: Props) {
         >
           {saving ? "Saving…" : "Save settings"}
         </button>
+      </section>
+
+      <section className="space-y-4 rounded-2xl border border-white/5 bg-ink-700/50 p-6">
+        <h2 className="text-base font-semibold text-white">About</h2>
+        <p className="text-sm text-white/50">
+          GoplexCLI{" "}
+          <span className="font-medium text-white/80">
+            {appVersion ? `v${appVersion}` : "…"}
+          </span>
+        </p>
+
+        {appVersion === "dev" ? (
+          <p className="text-xs text-white/30">
+            Development build — in-app updates are disabled.
+          </p>
+        ) : (
+          <>
+            {updateInfo?.available && (
+              <div className="rounded-lg bg-ink-800 p-3 text-sm text-white/70">
+                <div>
+                  Update available:{" "}
+                  <span className="font-semibold text-accent">
+                    v{updateInfo.latest}
+                  </span>
+                </div>
+                {updating && updateMsg && (
+                  <div className="mt-1 text-xs text-white/50">
+                    <span className="mr-2 inline-block h-2 w-2 animate-pulse rounded-full bg-accent align-middle" />
+                    {updateMsg}
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="flex flex-wrap items-center gap-3">
+              {updateInfo?.available && (
+                <button
+                  onClick={installUpdate}
+                  disabled={updating}
+                  className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-ink-900 transition-colors hover:bg-accent-soft disabled:opacity-50"
+                >
+                  {updating
+                    ? "Updating…"
+                    : `Download & install v${updateInfo.latest}`}
+                </button>
+              )}
+              <button
+                onClick={checkForUpdate}
+                disabled={checking || updating}
+                className="rounded-lg bg-white/10 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-white/20 disabled:opacity-50"
+              >
+                {checking ? "Checking…" : "Check for updates"}
+              </button>
+            </div>
+          </>
+        )}
       </section>
     </div>
   );

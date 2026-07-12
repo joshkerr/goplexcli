@@ -13,6 +13,7 @@ import type {
   Server,
   ServerSelection,
   Status,
+  UpdateInfo,
 } from "./types";
 
 type WailsApp = {
@@ -27,6 +28,9 @@ type WailsApp = {
   MovieGenres(): Promise<string[]>;
   WarmPosters(urls: string[]): Promise<void>;
   SyncFromLAN(): Promise<void>;
+  AppVersion(): Promise<string>;
+  CheckUpdate(): Promise<UpdateInfo>;
+  ApplyUpdate(): Promise<void>;
   Search(query: string): Promise<MediaCard[]>;
   GetItem(key: string): Promise<Media>;
   GetSeasons(showTitle: string): Promise<Season[]>;
@@ -83,6 +87,9 @@ export const api = {
   movieGenres: () => app().MovieGenres(),
   warmPosters: (urls: string[]) => app().WarmPosters(urls),
   syncFromLAN: () => app().SyncFromLAN(),
+  appVersion: () => app().AppVersion(),
+  checkUpdate: () => app().CheckUpdate(),
+  applyUpdate: () => app().ApplyUpdate(),
   search: (q: string) => app().Search(q),
   getItem: (key: string) => app().GetItem(key),
   getSeasons: (show: string) => app().GetSeasons(show),

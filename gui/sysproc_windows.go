@@ -18,3 +18,16 @@ func configureSysProc(cmd *exec.Cmd) {
 		CreationFlags: createNoWindow,
 	}
 }
+
+// createNewProcessGroup lets a spawned process outlive its parent's process
+// group, so the update helper keeps running after the GUI quits.
+const createNewProcessGroup = 0x00000200
+
+// detachSysProc configures cmd so it survives this process exiting (used to
+// launch the self-update helper before the GUI quits), with no console window.
+func detachSysProc(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		HideWindow:    true,
+		CreationFlags: createNoWindow | createNewProcessGroup,
+	}
+}

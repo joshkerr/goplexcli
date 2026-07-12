@@ -118,6 +118,24 @@ func envWithout(env []string, keys ...string) []string {
 	return out
 }
 
+// ResolveLatest fetches the latest release for repo, trying each GitHub token
+// candidate in turn (env vars, the gh CLI, then unauthenticated) until one
+// succeeds. It returns the release and the token that worked (empty when the
+// unauthenticated attempt succeeded), so the caller can reuse that same token to
+// download the release's assets. This tolerates a stale env token by falling
+// back to the gh CLI and finally to a public request.
+func ResolveLatest(ctx context.Context, repo string) (*Release, string, error) {
+	var lastErr error
+	for _, cand := range tokenCandidates() {
+		r, err := LatestRelease(ctx, repo, cand)
+		if err == nil {
+			return r, cand, nil
+		}
+		lastErr = err
+	}
+	return nil, "", lastErr
+}
+
 // LatestRelease fetches the most recent published release for repo
 // ("owner/name"). If token is non-empty it is sent as a bearer credential,
 // which is required for private repositories.
@@ -207,6 +225,55 @@ func splitVersion(v string) []int {
 		}
 	}
 	return out
+}
+
+// DownloadAsset downloads asset to destPath, authenticating with token when set
+// (required for private repos). It uses the API asset endpoint with
+// Accept: application/octet-stream so GitHub redirects to a signed URL. The
+// caller controls timeouts via ctx (pass a generous deadline — GUI bundles are
+// larger than the CLI binary). It verifies the byte count against asset.Size
+// when known. Used by the GUI self-updater, which downloads a zip bundle rather
+// than swapping a bare binary.
+func DownloadAsset(ctx context.Context, asset *Asset, token, destPath string) error {
+	downloadURL := asset.URL
+	if downloadURL == "" {
+		downloadURL = asset.BrowserDownloadURL
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/octet-stream")
+	req.Header.Set("User-Agent", binaryName+"-selfupdate")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := (&http.Client{}).Do(req) // ctx bounds the transfer
+	if err != nil {
+		return fmt.Errorf("failed to download: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download returned status %s", resp.Status)
+	}
+
+	f, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+	written, copyErr := io.Copy(f, resp.Body)
+	closeErr := f.Close()
+	if copyErr != nil {
+		return fmt.Errorf("failed to write download: %w", copyErr)
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if asset.Size > 0 && written != asset.Size {
+		return fmt.Errorf("downloaded %d bytes, expected %d", written, asset.Size)
+	}
+	return nil
 }
 
 // Apply downloads asset and replaces the executable at exePath with it. The
@@ -309,21 +376,9 @@ func Run(ctx context.Context, repo, currentVersion string, checkOnly bool, out i
 	}
 
 	fmt.Fprintln(out, "Checking for updates...")
-	// Try each token candidate until one resolves the release; this tolerates a
-	// bad env token by falling back to the gh CLI, then to unauthenticated.
-	var rel *Release
-	var token string
-	var lastErr error
-	for _, cand := range tokenCandidates() {
-		r, rerr := LatestRelease(ctx, repo, cand)
-		if rerr == nil {
-			rel, token = r, cand
-			break
-		}
-		lastErr = rerr
-	}
-	if rel == nil {
-		return lastErr
+	rel, token, err := ResolveLatest(ctx, repo)
+	if err != nil {
+		return err
 	}
 
 	cmp := CompareVersions(currentVersion, rel.TagName)

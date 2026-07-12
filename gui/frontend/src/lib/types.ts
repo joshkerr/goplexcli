@@ -117,3 +117,12 @@ export interface BrowseOptions {
   sortField: SortField;
   desc: boolean;
 }
+
+// UpdateInfo reports whether a newer GUI release is available (see CheckUpdate).
+export interface UpdateInfo {
+  current: string;
+  latest: string;
+  available: boolean;
+  notesURL: string;
+  error: string;
+}
