@@ -35,12 +35,21 @@ const EMPTY_MESSAGES: Partial<Record<NavKey, string>> = {
   "recently-added-tv": "No episodes indexed yet.",
 };
 
+// Category nav keys (everything except the Downloads/Settings panels).
+function isCategory(k: NavKey): k is Category {
+  return k !== "downloads" && k !== "settings";
+}
+
 export default function App() {
   const [status, setStatus] = useState<Status | null>(null);
   const [startupError, setStartupError] = useState("");
   const [setupDone, setSetupDone] = useState(false);
 
   const [active, setActive] = useState<NavKey>("movies");
+  // browseCategory tracks the last real content category, so opening the
+  // Downloads/Settings panels (which overlay the grid rather than replace it)
+  // doesn't unmount the grid or reload it — the scroll position is preserved.
+  const [browseCategory, setBrowseCategory] = useState<Category>("movies");
   const [items, setItems] = useState<MediaCard[]>([]);
   const [loadingGrid, setLoadingGrid] = useState(false);
   const [selected, setSelected] = useState<Media | null>(null);
@@ -97,17 +106,18 @@ export default function App() {
   const needsSetup =
     status && (!status.configured || (!status.hasCache && !setupDone));
 
-  // Load the active category whenever it changes (when not searching).
+  // Remember the last content category so the Downloads/Settings overlays don't
+  // change what the grid is showing.
+  useEffect(() => {
+    if (isCategory(active)) setBrowseCategory(active);
+  }, [active]);
+
+  // Load the browse category whenever it (or its genre/sort options) changes.
   const loadCategory = useCallback(
-    async (cat: NavKey) => {
-      if (cat === "downloads" || cat === "settings") return;
+    async (cat: Category) => {
       setLoadingGrid(true);
       try {
-        const data = await api.listCategory(cat as Category, {
-          genre,
-          sortField,
-          desc,
-        });
+        const data = await api.listCategory(cat, { genre, sortField, desc });
         setItems(data);
       } catch (e: any) {
         toast(String(e?.message ?? e), "error");
@@ -121,10 +131,9 @@ export default function App() {
 
   useEffect(() => {
     if (needsSetup) return;
-    if (active === "downloads" || active === "settings") return;
     if (searchResults !== null) return;
-    loadCategory(active);
-  }, [active, needsSetup, loadCategory, searchResults]);
+    loadCategory(browseCategory);
+  }, [browseCategory, needsSetup, loadCategory, searchResults]);
 
   // Populate the movie genre filter once the library is ready.
   useEffect(() => {
@@ -170,6 +179,14 @@ export default function App() {
     const s = await refreshStatus();
     if (s) loadCategory("movies");
   }, [refreshStatus, loadCategory]);
+
+  // After a reindex/update/sync the cache changed, so refresh both the status
+  // counts and the grid data (the grid stays mounted now, so it won't reload on
+  // its own when returning from the Settings overlay).
+  const onLibraryChanged = useCallback(async () => {
+    await refreshStatus();
+    loadCategory(browseCategory);
+  }, [refreshStatus, loadCategory, browseCategory]);
 
   if (!status) {
     return (
@@ -294,33 +311,34 @@ export default function App() {
           </div>
         </header>
 
-        {/* Content. The poster grid owns its own scroll (it's virtualized);
-            Settings and Downloads scroll in a padded wrapper. */}
-        <div className="min-h-0 flex-1">
-          {active === "settings" && !showSearch ? (
-            <div className="h-full overflow-y-auto px-8 py-6">
+        {/* Content. The poster grid owns its own scroll (it's virtualized) and
+            stays mounted underneath the Downloads/Settings panels, which overlay
+            it — so returning to the library preserves the scroll position. */}
+        <div className="relative min-h-0 flex-1">
+          <PosterGrid
+            key={showSearch ? "search" : browseCategory}
+            items={gridItems}
+            loading={loadingGrid && !showSearch}
+            emptyMessage={
+              showSearch
+                ? "No matches found."
+                : EMPTY_MESSAGES[browseCategory] ?? "Nothing here yet."
+            }
+            onSelect={handleSelect}
+          />
+          {active === "settings" && !showSearch && (
+            <div className="absolute inset-0 overflow-y-auto bg-ink-900 px-8 py-6">
               <Settings
                 status={status}
-                onReindexed={refreshStatus}
+                onReindexed={onLibraryChanged}
                 onToast={toast}
               />
             </div>
-          ) : active === "downloads" && !showSearch ? (
-            <div className="h-full overflow-y-auto px-8 py-6">
+          )}
+          {active === "downloads" && !showSearch && (
+            <div className="absolute inset-0 overflow-y-auto bg-ink-900 px-8 py-6">
               <DownloadsPanel downloads={downloadList} />
             </div>
-          ) : (
-            <PosterGrid
-              key={showSearch ? "search" : active}
-              items={gridItems}
-              loading={loadingGrid && !showSearch}
-              emptyMessage={
-                showSearch
-                  ? "No matches found."
-                  : EMPTY_MESSAGES[active] ?? "Nothing here yet."
-              }
-              onSelect={handleSelect}
-            />
           )}
         </div>
       </main>
