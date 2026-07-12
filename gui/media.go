@@ -440,10 +440,12 @@ func recentlyAddedCards(a *App, c *cache.Cache, mediaType string, limit int) []M
 }
 
 // groupShowCards collapses cached episodes into one card per show, keyed by show
-// title (ParentTitle). The first episode encountered supplies a poster.
+// title (ParentTitle). The first episode encountered supplies a poster. Shows are
+// ordered by their most recently added episode, newest first.
 func (a *App) groupShowCards(c *cache.Cache) []MediaCardDTO {
 	order := []string{}
 	byShow := map[string]*MediaCardDTO{}
+	latestAdded := map[string]int64{}
 	for i := range c.Media {
 		item := &c.Media[i]
 		if item.Type != "episode" || item.ParentTitle == "" {
@@ -464,12 +466,21 @@ func (a *App) groupShowCards(c *cache.Cache) []MediaCardDTO {
 			show = &card
 		}
 		show.EpisodeCount++
+		if item.AddedAt > latestAdded[item.ParentTitle] {
+			latestAdded[item.ParentTitle] = item.AddedAt
+		}
 	}
 	out := make([]MediaCardDTO, 0, len(order))
 	for _, name := range order {
 		out = append(out, *byShow[name])
 	}
-	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i].Title) < strings.ToLower(out[j].Title) })
+	sort.Slice(out, func(i, j int) bool {
+		ai, aj := latestAdded[out[i].Title], latestAdded[out[j].Title]
+		if ai != aj {
+			return ai > aj
+		}
+		return strings.ToLower(out[i].Title) < strings.ToLower(out[j].Title)
+	})
 	return out
 }
 

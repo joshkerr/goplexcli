@@ -36,23 +36,23 @@ func TestGroupShows(t *testing.T) {
 	a := NewApp()
 	c := &cache.Cache{Media: []plex.MediaItem{
 		{Key: "m1", Type: "movie", Title: "A Movie"},
-		{Key: "e1", Type: "episode", Title: "Pilot", ParentTitle: "Show Z", ParentIndex: 1, Index: 1},
-		{Key: "e2", Type: "episode", Title: "Ep2", ParentTitle: "Show Z", ParentIndex: 1, Index: 2},
-		{Key: "e3", Type: "episode", Title: "Ep1", ParentTitle: "Show A", ParentIndex: 2, Index: 1},
+		{Key: "e1", Type: "episode", Title: "Pilot", ParentTitle: "Show Z", ParentIndex: 1, Index: 1, AddedAt: 100},
+		{Key: "e2", Type: "episode", Title: "Ep2", ParentTitle: "Show Z", ParentIndex: 1, Index: 2, AddedAt: 500},
+		{Key: "e3", Type: "episode", Title: "Ep1", ParentTitle: "Show A", ParentIndex: 2, Index: 1, AddedAt: 300},
 	}}
 
 	shows := a.groupShowCards(c)
 	if len(shows) != 2 {
 		t.Fatalf("expected 2 shows, got %d", len(shows))
 	}
-	// Sorted alphabetically: "Show A" before "Show Z".
-	if shows[0].Title != "Show A" || shows[1].Title != "Show Z" {
-		t.Errorf("shows not sorted: %q, %q", shows[0].Title, shows[1].Title)
+	// Sorted by most recently added episode: Show Z (500) before Show A (300).
+	if shows[0].Title != "Show Z" || shows[1].Title != "Show A" {
+		t.Errorf("shows not sorted by latest episode: %q, %q", shows[0].Title, shows[1].Title)
 	}
-	if shows[1].EpisodeCount != 2 {
-		t.Errorf("Show Z episode count = %d, want 2", shows[1].EpisodeCount)
+	if shows[0].EpisodeCount != 2 {
+		t.Errorf("Show Z episode count = %d, want 2", shows[0].EpisodeCount)
 	}
-	if shows[0].Type != "show" || shows[0].Key != "show:Show A" {
+	if shows[0].Type != "show" || shows[0].Key != "show:Show Z" {
 		t.Errorf("unexpected show row: type=%q key=%q", shows[0].Type, shows[0].Key)
 	}
 }
