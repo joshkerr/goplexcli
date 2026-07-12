@@ -15,7 +15,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -72,9 +71,12 @@ func (r *Release) FindAsset(name string) (*Asset, bool) {
 }
 
 // tokenCandidates returns GitHub tokens to try, in order: $GH_TOKEN,
-// $GITHUB_TOKEN, the `gh` CLI's token, and finally "" (unauthenticated, which
-// works for public repos). Trying several makes the updater resilient to a
-// stale or invalid env token shadowing a working `gh` login.
+// $GITHUB_TOKEN, and finally "" (unauthenticated). goplexcli's releases are
+// public, so the unauthenticated attempt always works and no token is required;
+// the env vars are honored only to raise the GitHub API rate limit (or in case
+// the repo ever goes private). We deliberately do NOT shell out to the `gh` CLI
+// — it isn't needed for a public repo and spawning it flashed a console window
+// on Windows when launched from the GUI.
 func tokenCandidates() []string {
 	seen := map[string]bool{}
 	var cands []string
@@ -87,38 +89,7 @@ func tokenCandidates() []string {
 	}
 	add(os.Getenv("GH_TOKEN"))
 	add(os.Getenv("GITHUB_TOKEN"))
-	if path, err := exec.LookPath("gh"); err == nil {
-		// Strip GH_TOKEN/GITHUB_TOKEN from gh's environment so it returns its
-		// stored (keyring) login instead of echoing back a possibly-invalid env
-		// token — which is already a candidate above.
-		cmd := exec.Command(path, "auth", "token")
-		cmd.Env = envWithout(os.Environ(), "GH_TOKEN", "GITHUB_TOKEN")
-		// Suppress the console window Windows would otherwise flash when the GUI
-		// (a windowed process) spawns the console-mode `gh` here.
-		hideConsoleWindow(cmd)
-		if out, oerr := cmd.Output(); oerr == nil {
-			add(string(out))
-		}
-	}
 	return append(cands, "") // final unauthenticated attempt (public repos)
-}
-
-// envWithout returns env with any KEY=... entries for the given keys removed.
-func envWithout(env []string, keys ...string) []string {
-	out := make([]string, 0, len(env))
-	for _, kv := range env {
-		drop := false
-		for _, k := range keys {
-			if strings.HasPrefix(kv, k+"=") {
-				drop = true
-				break
-			}
-		}
-		if !drop {
-			out = append(out, kv)
-		}
-	}
-	return out
 }
 
 // ResolveLatest fetches the latest release for repo, trying each GitHub token
