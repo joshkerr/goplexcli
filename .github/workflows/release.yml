@@ -119,7 +119,10 @@ jobs:
           **Windows**
           Extract the zip file and add the directory to your PATH.
         draft: false
-        prerelease: false
+        # Tags with a pre-release suffix (e.g. v0.4.0-rc1) publish as
+        # prereleases, so GitHub excludes them from /releases/latest and the
+        # self-updater won't offer them to everyone.
+        prerelease: ${{ contains(github.ref_name, '-') }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
