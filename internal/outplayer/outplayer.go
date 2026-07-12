@@ -21,16 +21,22 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
-	"os"
 	"os/exec"
 	"path"
 	"strings"
 	"sync"
 	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	rclone "github.com/joshkerr/rclone-golib"
 )
 
 // reachableTimeout bounds the pre-flight connectivity check.
 const reachableTimeout = 10 * time.Second
+
+// teaOptions lets tests override Bubble Tea program options (e.g. disable TTY
+// input in headless runs, where the blocking console read cannot be canceled).
+var teaOptions []tea.ProgramOption
 
 // Reachable verifies that an Outplayer target is responding by requesting a
 // directory listing. It returns a descriptive error when the target cannot be
@@ -67,9 +73,11 @@ func NormalizeDir(dir string) string {
 }
 
 // Upload streams each rclone remote file to the Outplayer target sequentially,
-// printing progress as it goes. baseURL is the target root (e.g.
-// "http://192.168.0.34"), dir is the destination folder ("" = root), and
-// rcloneBinary defaults to "rclone". It returns the first error encountered.
+// displaying the same Bubble Tea progress UI used by downloads and WebDAV
+// uploads. baseURL is the target root (e.g. "http://192.168.0.34"), dir is the
+// destination folder ("" = root), and rcloneBinary defaults to "rclone". A
+// failed file does not stop the remaining uploads; the first error encountered
+// is returned.
 func Upload(ctx context.Context, rclonePaths []string, baseURL, dir, rcloneBinary string) error {
 	if len(rclonePaths) == 0 {
 		return fmt.Errorf("no files to upload")
@@ -87,20 +95,66 @@ func Upload(ctx context.Context, rclonePaths []string, baseURL, dir, rcloneBinar
 	uploadURL := strings.TrimRight(baseURL, "/") + "/upload"
 	uploadPath := NormalizeDir(dir)
 
+	// The transfer manager is fed manually from the byte counter (the rclone
+	// executor is not used here since the source is piped through an HTTP POST).
+	manager := rclone.NewManager()
+	type job struct {
+		id   string
+		src  string
+		name string
+	}
+	jobs := make([]job, 0, len(rclonePaths))
 	for i, src := range rclonePaths {
 		name := path.Base(src)
-		total := remoteSize(ctx, rcloneBinary, src) // best-effort; 0 = unknown
-		label := fmt.Sprintf("(%d/%d) %s", i+1, len(rclonePaths), name)
-		if err := uploadOne(ctx, uploadURL, uploadPath, src, name, rcloneBinary, label, total); err != nil {
-			return fmt.Errorf("%s: %w", name, err)
+		id := fmt.Sprintf("outplayer_%d_%s", i, name)
+		jobs = append(jobs, job{id: id, src: src, name: name})
+		manager.Add(id, src, uploadPath+name)
+	}
+
+	// Start the Bubble Tea progress UI in a goroutine (same pattern as
+	// download.DownloadMultiple).
+	var wg sync.WaitGroup
+	var uiErr error
+	uiReady := make(chan struct{})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		p := tea.NewProgram(rclone.NewModel(manager), teaOptions...)
+		close(uiReady)
+		if _, err := p.Run(); err != nil {
+			uiErr = err
+		}
+	}()
+	<-uiReady
+
+	// The UI only exits once no transfer is pending or in progress, so every
+	// job must reach Complete or Fail even after an earlier error.
+	var firstErr error
+	for _, j := range jobs {
+		total := remoteSize(ctx, rcloneBinary, j.src) // best-effort; 0 = unknown
+		manager.Start(j.id)
+		if err := uploadOne(ctx, uploadURL, uploadPath, j.src, j.name, rcloneBinary, manager, j.id, total); err != nil {
+			manager.Fail(j.id, err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s: %w", j.name, err)
+			}
+		} else {
+			manager.Complete(j.id)
 		}
 	}
-	return nil
+
+	wg.Wait()
+
+	if uiErr != nil {
+		return fmt.Errorf("UI error: %w", uiErr)
+	}
+	return firstErr
 }
 
-// uploadOne streams a single rclone remote file into a multipart POST, driving
-// a progress line from the bytes read out of rclone.
-func uploadOne(ctx context.Context, uploadURL, uploadPath, src, filename, rcloneBinary, label string, total int64) error {
+// uploadOne streams a single rclone remote file into a multipart POST, feeding
+// the transfer manager (and thus the Bubble Tea UI) from the bytes read out of
+// rclone.
+func uploadOne(ctx context.Context, uploadURL, uploadPath, src, filename, rcloneBinary string, manager *rclone.Manager, transferID string, total int64) error {
 	cmd := exec.CommandContext(ctx, rcloneBinary, "cat", src)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -118,7 +172,7 @@ func uploadOne(ctx context.Context, uploadURL, uploadPath, src, filename, rclone
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		reportProgress(label, counter, total, stop)
+		reportProgress(manager, transferID, counter, total, stop)
 	}()
 
 	status, respBody, postErr := postFile(ctx, uploadURL, uploadPath, filename, io.TeeReader(stdout, counter))
@@ -237,74 +291,35 @@ func (w *countingWriter) count() int64 {
 	return w.n
 }
 
-// reportProgress renders an in-place progress line on stderr until stopped. When
-// total is known it shows a percentage bar; otherwise it shows a spinner with
-// the running byte count. The final state is rendered once more on stop.
-func reportProgress(label string, c *countingWriter, total int64, stop <-chan struct{}) {
-	start := time.Now()
+// reportProgress feeds the transfer manager from the byte counter until
+// stopped, pushing a final update on stop. When total is unknown (0) the
+// percentage stays at 0 and the UI shows its "initializing" state, but the
+// byte count is still recorded.
+func reportProgress(manager *rclone.Manager, transferID string, c *countingWriter, total int64, stop <-chan struct{}) {
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 
-	spinner := []rune{'|', '/', '-', '\\'}
-	tick := 0
-
-	render := func() {
+	update := func() {
 		sent := c.count()
-		elapsed := time.Since(start).Seconds()
-		var rate int64
-		if elapsed > 0 {
-			rate = int64(float64(sent) / elapsed)
-		}
+		var pct float64
 		if total > 0 {
-			pct := float64(sent) / float64(total)
-			if pct > 1 {
-				pct = 1
+			pct = float64(sent) / float64(total) * 100
+			if pct > 100 {
+				pct = 100
 			}
-			fmt.Fprintf(os.Stderr, "\r  %s %s %3.0f%%  %s / %s  %s/s   ",
-				label, bar(pct, 24), pct*100, formatBytes(sent), formatBytes(total), formatBytes(rate))
-		} else {
-			fmt.Fprintf(os.Stderr, "\r  %s %c  %s  %s/s   ",
-				label, spinner[tick%len(spinner)], formatBytes(sent), formatBytes(rate))
-			tick++
 		}
+		manager.UpdateProgress(transferID, pct, sent, total)
 	}
 
 	for {
 		select {
 		case <-stop:
-			render()
-			fmt.Fprintln(os.Stderr)
+			update()
 			return
 		case <-ticker.C:
-			render()
+			update()
 		}
 	}
-}
-
-// bar renders a fixed-width [====    ] progress bar for the given fraction.
-func bar(pct float64, width int) string {
-	if pct < 0 {
-		pct = 0
-	}
-	filled := int(pct * float64(width))
-	if filled > width {
-		filled = width
-	}
-	return "[" + strings.Repeat("=", filled) + strings.Repeat(" ", width-filled) + "]"
-}
-
-// formatBytes renders a byte count in human-readable units.
-func formatBytes(b int64) string {
-	const unit = 1024
-	if b < unit {
-		return fmt.Sprintf("%d B", b)
-	}
-	div, exp := int64(unit), 0
-	for n := b / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 }
 
 // extractError pulls a human-readable message out of a GCDWebUploader HTML error

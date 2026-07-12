@@ -27,22 +27,6 @@ func TestNormalizeDir(t *testing.T) {
 	}
 }
 
-func TestFormatBytes(t *testing.T) {
-	cases := map[int64]string{
-		0:          "0 B",
-		512:        "512 B",
-		1024:       "1.0 KB",
-		1536:       "1.5 KB",
-		1048576:    "1.0 MB",
-		7755082578: "7.2 GB",
-	}
-	for in, want := range cases {
-		if got := formatBytes(in); got != want {
-			t.Errorf("formatBytes(%d) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 func TestExtractError(t *testing.T) {
 	html := `<!DOCTYPE html><html><head><title>HTTP Error 500</title></head><body>` +
 		`<h1>HTTP Error 500: Failed moving uploaded file to &quot;/Inbox/&quot;</h1>` +
