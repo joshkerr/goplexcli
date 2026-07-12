@@ -380,6 +380,87 @@ Configuration is stored in a platform-specific directory:
 - **webdav_user**, **webdav_pass**, **webdav_dir** — Shared credentials and optional subdirectory for gowebdav transfers (set via `goplexcli webdav set-creds`)
 - **outplayer_targets** — Outplayer Wi-Fi transfer destinations, each with a `name`, `url`, optional `dir`, and `enabled` flag (managed via `goplexcli outplayer add/list/enable/disable/remove`)
 
+### Setting Up rclone
+
+Downloads pull the **original media file** directly from wherever your Plex
+library is stored (a cloud drive, a remote server, a NAS, …) using
+[rclone](https://rclone.org) — not by re-streaming from Plex. Plex reports each
+item's on-disk file path; GoplexCLI rewrites that path into an rclone remote
+path and runs `rclone copyto`. So there are two things to configure: an rclone
+**remote** that can reach your media, and a **path mapping** that points Plex's
+file paths at that remote.
+
+**1. Install rclone** (see [Prerequisites](#prerequisites)) and confirm it's on
+your PATH:
+
+```bash
+rclone version
+```
+
+**2. Create a remote** for the storage your Plex library lives on:
+
+```bash
+rclone config
+```
+
+Follow the prompts to add a remote (Google Drive, S3, SFTP, WebDAV, …). Give it
+a memorable name — that name is what you reference in the mapping below. rclone
+saves this in its own config (`~/.config/rclone/rclone.conf`); GoplexCLI only
+references the remote by name, never its credentials. Verify it can see your
+media:
+
+```bash
+rclone lsd myremote:
+```
+
+**3. Find your Plex file paths.** Check what path Plex reports for an item — via
+`goplexcli cache search "title"`, Plex's own **Get Info → file path**, or by
+looking on the Plex server. You'll see something like:
+
+```
+/mnt/media/tv/The Show/Season 01/episode.mkv
+```
+
+**4. Map the Plex path prefix to the rclone remote** with `path_mappings` in
+your [config file](#config-file). Each mapping replaces a leading `prefix` with
+`remote`:
+
+```json
+"path_mappings": [
+  { "prefix": "/mnt/media/tv/", "remote": "myremote:Media/TV/" },
+  { "prefix": "/mnt/media/",    "remote": "myremote:Media/" }
+]
+```
+
+With the mapping above, the example path becomes
+`myremote:Media/TV/The Show/Season 01/episode.mkv`. The **longest matching
+prefix wins**, so list more specific prefixes first. The text after the colon is
+the location *inside* the remote — adjust it so it matches where those files
+actually live (the prefix and remote roots often line up, but they don't have
+to).
+
+**5. Re-index and test.** Path mappings are applied when the cache is built, so
+re-index after changing them, then download something:
+
+```bash
+goplexcli cache reindex
+goplexcli browse            # pick an item → Download
+```
+
+If a download fails with an "object/directory not found" error, the mapped path
+doesn't match the remote's layout — check it with `rclone ls "myremote:Media/TV/…"`
+and adjust the mapping.
+
+**Tips**
+
+- Set **`download_dir`** to control where files land (GUI: **Settings → Download
+  directory**; CLI: `--dest`). It defaults to the current directory.
+- If rclone isn't on your PATH, set **`rclone_path`** to its full path (GUI:
+  **Settings → rclone path**).
+- With **no** `path_mappings`, a legacy fallback strips a `/home/joshkerr/`
+  prefix and infers the remote from the first path segment. That only fits the
+  original author's setup, so configure your own `path_mappings`.
+
 ## How It Works
 
 ### Playback Progress
@@ -398,7 +479,7 @@ The queue is persistent between sessions and concurrent-safe (uses file locking)
 
 ### Rclone Path Conversion
 
-GoplexCLI translates Plex on-disk file paths to rclone remote paths for downloads. Configure `path_mappings` in your config for explicit control, or the legacy heuristic strips a prefix and infers the remote name from the first path component.
+GoplexCLI translates Plex on-disk file paths to rclone remote paths for downloads, then runs `rclone copyto` to fetch the original file. See [Setting Up rclone](#setting-up-rclone) for the full walkthrough; in short, `path_mappings` rewrites a Plex path prefix into a `remote:path` (longest prefix wins), with a legacy `/home/joshkerr/` fallback when none is configured.
 
 ## Troubleshooting
 
