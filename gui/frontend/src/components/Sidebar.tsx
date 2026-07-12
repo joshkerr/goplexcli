@@ -1,4 +1,5 @@
 import type { Category } from "../lib/types";
+import { isMac } from "../lib/api";
 import {
   DownloadIcon,
   FilmIcon,
@@ -38,7 +39,9 @@ export function Sidebar({ active, onSelect, downloadCount }: Props) {
   let lastGroup = "";
   return (
     <aside className="flex h-full w-60 shrink-0 flex-col border-r border-white/5 bg-ink-800/80">
-      <div className="flex items-center gap-2.5 px-5 py-5">
+      <div
+        className={`flex items-center gap-2.5 px-5 pb-5 ${isMac ? "pt-9" : "pt-5"}`}
+      >
         <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-accent to-accent-dark text-ink-900 shadow-glow">
           <FilmIcon width={20} height={20} />
         </div>

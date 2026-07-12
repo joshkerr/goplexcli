@@ -51,6 +51,16 @@ declare global {
   }
 }
 
+/**
+ * True when running on macOS. The GUI only ever runs inside the Wails webview
+ * (WKWebView on macOS, WebView2 on Windows), so the user-agent platform string
+ * is a reliable signal. Used to reserve space for the inset traffic-light
+ * window controls, which overlay the top-left of the content.
+ */
+export const isMac =
+  typeof navigator !== "undefined" &&
+  /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
+
 function app(): WailsApp {
   const a = window.go?.main?.App;
   if (!a) {
