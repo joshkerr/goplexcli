@@ -175,7 +175,18 @@ func (s *Server) Close(ctx context.Context) {
 	s.mu.Unlock()
 
 	if zc != nil {
-		zc.Shutdown()
+		// zeroconf's Shutdown takes no context and can block indefinitely in
+		// its network teardown (observed hanging on macOS), so run it aside
+		// and cap the wait even for callers with a background ctx — the
+		// goroutine is abandoned, but callers close only when the process is
+		// exiting anyway.
+		zcDone := make(chan struct{})
+		go func() { zc.Shutdown(); close(zcDone) }()
+		select {
+		case <-zcDone:
+		case <-ctx.Done():
+		case <-time.After(2 * time.Second):
+		}
 	}
 	if server != nil {
 		if err := server.Shutdown(ctx); err != nil {

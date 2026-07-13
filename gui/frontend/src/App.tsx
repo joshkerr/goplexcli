@@ -314,7 +314,7 @@ export default function App() {
         {/* Content. The poster grid owns its own scroll (it's virtualized) and
             stays mounted underneath the Downloads/Settings panels, which overlay
             it — so returning to the library preserves the scroll position. */}
-        <div className="relative min-h-0 flex-1">
+        <div className="relative min-h-0 flex-1 bg-ink-750">
           <PosterGrid
             key={showSearch ? "search" : browseCategory}
             items={gridItems}
@@ -327,7 +327,7 @@ export default function App() {
             onSelect={handleSelect}
           />
           {active === "settings" && !showSearch && (
-            <div className="absolute inset-0 overflow-y-auto bg-ink-900 px-8 py-6">
+            <div className="absolute inset-0 overflow-y-auto bg-ink-750 px-8 py-6">
               <Settings
                 status={status}
                 onReindexed={onLibraryChanged}
@@ -336,7 +336,7 @@ export default function App() {
             </div>
           )}
           {active === "downloads" && !showSearch && (
-            <div className="absolute inset-0 overflow-y-auto bg-ink-900 px-8 py-6">
+            <div className="absolute inset-0 overflow-y-auto bg-ink-750 px-8 py-6">
               <DownloadsPanel downloads={downloadList} />
             </div>
           )}

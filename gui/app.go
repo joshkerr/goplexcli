@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/joshkerr/goplexcli/internal/cache"
 	"github.com/joshkerr/goplexcli/internal/config"
@@ -85,8 +86,26 @@ func (a *App) startup(ctx context.Context) {
 }
 
 func (a *App) shutdown(ctx context.Context) {
-	a.posters.close(ctx)
-	a.lan.Close(ctx)
+	// Bound the teardown: the app stays alive until this returns, so a stuck
+	// poster fetch or a wedged mDNS stack must not block quitting. The ctx
+	// Wails passes here is never cancelled, so impose our own deadline and
+	// give up on stragglers — the process is exiting anyway.
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); a.posters.close(ctx) }()
+		go func() { defer wg.Done(); a.lan.Close(ctx) }()
+		wg.Wait()
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
 }
 
 // config returns the in-memory config, loading it from disk if needed.
