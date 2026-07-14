@@ -1,9 +1,11 @@
 import type { DownloadProgress } from "../lib/types";
 import { formatBytes, formatSpeed } from "../lib/format";
-import { DownloadIcon } from "./icons";
+import { CloseIcon, DownloadIcon } from "./icons";
 
 interface Props {
   downloads: DownloadProgress[];
+  onCancel: (id: string) => void;
+  onClearHistory: () => void;
 }
 
 const STATUS_LABEL: Record<DownloadProgress["status"], string> = {
@@ -11,9 +13,14 @@ const STATUS_LABEL: Record<DownloadProgress["status"], string> = {
   in_progress: "Downloading",
   completed: "Completed",
   failed: "Failed",
+  cancelled: "Cancelled",
 };
 
-export function DownloadsPanel({ downloads }: Props) {
+function isActive(d: DownloadProgress) {
+  return d.status === "pending" || d.status === "in_progress";
+}
+
+export function DownloadsPanel({ downloads, onCancel, onClearHistory }: Props) {
   if (downloads.length === 0) {
     return (
       <div className="flex h-full min-h-[40vh] flex-col items-center justify-center text-center text-white/40">
@@ -26,8 +33,20 @@ export function DownloadsPanel({ downloads }: Props) {
     );
   }
 
+  const hasHistory = downloads.some((d) => !isActive(d));
+
   return (
     <div className="space-y-3 pb-8">
+      {hasHistory && (
+        <div className="flex justify-end">
+          <button
+            onClick={onClearHistory}
+            className="rounded-lg border border-white/10 bg-ink-700 px-3 py-1.5 text-xs font-semibold text-white/70 hover:border-accent/60 hover:text-white"
+          >
+            Clear History
+          </button>
+        </div>
+      )}
       {downloads.map((d) => (
         <div
           key={d.id}
@@ -55,12 +74,23 @@ export function DownloadsPanel({ downloads }: Props) {
             <div className="shrink-0 text-sm font-semibold tabular-nums text-white/70">
               {Math.round(d.percent)}%
             </div>
+            {isActive(d) && (
+              <button
+                onClick={() => onCancel(d.id)}
+                title="Cancel download"
+                className="shrink-0 rounded-lg border border-white/10 bg-ink-700 p-1.5 text-white/50 hover:border-red-400/60 hover:text-red-400"
+              >
+                <CloseIcon width={14} height={14} />
+              </button>
+            )}
           </div>
           <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-ink-500">
             <div
               className={`h-full rounded-full transition-all duration-300 ${
                 d.status === "failed"
                   ? "bg-red-500"
+                  : d.status === "cancelled"
+                  ? "bg-white/20"
                   : d.status === "completed"
                   ? "bg-emerald-500"
                   : "bg-accent"

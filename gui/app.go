@@ -41,9 +41,23 @@ type App struct {
 
 	// dlMu serializes rclone transfers so only one file downloads at a time,
 	// even across separate Download() calls; queued jobs report "pending" until
-	// their turn. dlSeq makes job IDs unique across calls.
+	// their turn. dlSeq makes job IDs unique across calls and orders the
+	// Downloads panel (newest first).
 	dlMu  sync.Mutex
 	dlSeq atomic.Int64
+
+	// dlStateMu guards dlHist and dlCancels. dlHist tracks every download
+	// (live and finished) for the Downloads panel; terminal entries persist to
+	// downloads.json in the cache dir so history survives relaunches.
+	// dlCancels holds the cancel func for the in-flight rclone transfer.
+	dlStateMu sync.Mutex
+	dlHist    map[string]*DownloadProgress
+	dlCancels map[string]context.CancelFunc
+
+	// quitting is set during shutdown so killed transfers keep their on-disk
+	// "in_progress"/"pending" state (and restart next launch) instead of
+	// being recorded as cancelled.
+	quitting atomic.Bool
 
 	// mediaMu/media memoize the parsed media cache in memory. The on-disk
 	// media.json can be tens of MB for large libraries (20k+ items), so loading
@@ -62,13 +76,20 @@ type App struct {
 
 // NewApp creates a new App. Config is loaded lazily in startup.
 func NewApp() *App {
-	a := &App{posters: newPosterCache(http.DefaultClient)}
+	a := &App{
+		posters:   newPosterCache(http.DefaultClient),
+		dlHist:    make(map[string]*DownloadProgress),
+		dlCancels: make(map[string]context.CancelFunc),
+	}
 	a.lan = a.newSyncServer()
 	return a
 }
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	if jobs := a.loadDownloadHistory(); len(jobs) > 0 {
+		go a.resumeDownloads(jobs)
+	}
 	if err := a.posters.start(); err != nil {
 		fmt.Printf("poster cache server unavailable: %v\n", err)
 	}
@@ -86,6 +107,16 @@ func (a *App) startup(ctx context.Context) {
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	// Kill any in-flight rclone transfer rather than orphaning it. quitting
+	// makes runRclone leave the job's persisted "in_progress" state alone, so
+	// the download restarts on the next launch.
+	a.quitting.Store(true)
+	a.dlStateMu.Lock()
+	for _, cancel := range a.dlCancels {
+		cancel()
+	}
+	a.dlStateMu.Unlock()
+
 	// Bound the teardown: the app stays alive until this returns, so a stuck
 	// poster fetch or a wedged mDNS stack must not block quitting. The ctx
 	// Wails passes here is never cancelled, so impose our own deadline and

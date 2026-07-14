@@ -103,6 +103,45 @@ export default function App() {
     return off;
   }, []);
 
+  // Restore persisted download history once the backend is reachable. Merge
+  // under any live events that may have already arrived.
+  const downloadsLoaded = useRef(false);
+  useEffect(() => {
+    if (!status || downloadsLoaded.current) return;
+    downloadsLoaded.current = true;
+    api
+      .listDownloads()
+      .then((list) => {
+        setDownloads((prev) => {
+          const merged: Record<string, DownloadProgress> = {};
+          for (const d of list) merged[d.id] = d;
+          return { ...merged, ...prev };
+        });
+      })
+      .catch(() => {});
+  }, [status]);
+
+  const cancelDownload = useCallback(
+    async (id: string) => {
+      try {
+        await api.cancelDownload(id);
+      } catch (e: any) {
+        toast(String(e?.message ?? e), "error");
+      }
+    },
+    [toast]
+  );
+
+  const clearDownloadHistory = useCallback(async () => {
+    try {
+      await api.clearDownloadHistory();
+      const list = await api.listDownloads();
+      setDownloads(Object.fromEntries(list.map((d) => [d.id, d])));
+    } catch (e: any) {
+      toast(String(e?.message ?? e), "error");
+    }
+  }, [toast]);
+
   const needsSetup =
     status && (!status.configured || (!status.hasCache && !setupDone));
 
@@ -220,9 +259,8 @@ export default function App() {
     );
   }
 
-  const downloadList = Object.values(downloads).sort((a, b) =>
-    a.id.localeCompare(b.id)
-  );
+  // Newest downloads first.
+  const downloadList = Object.values(downloads).sort((a, b) => b.seq - a.seq);
   const activeDownloads = downloadList.filter(
     (d) => d.status === "in_progress" || d.status === "pending"
   ).length;
@@ -337,7 +375,11 @@ export default function App() {
           )}
           {active === "downloads" && !showSearch && (
             <div className="absolute inset-0 overflow-y-auto bg-ink-750 px-8 py-6">
-              <DownloadsPanel downloads={downloadList} />
+              <DownloadsPanel
+                downloads={downloadList}
+                onCancel={cancelDownload}
+                onClearHistory={clearDownloadHistory}
+              />
             </div>
           )}
         </div>

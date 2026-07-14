@@ -7,6 +7,7 @@ import type {
   AppConfig,
   BrowseOptions,
   Category,
+  DownloadProgress,
   Media,
   MediaCard,
   Season,
@@ -37,6 +38,9 @@ type WailsApp = {
   GetEpisodes(showTitle: string, season: number): Promise<Media[]>;
   Play(keys: string[], resume: boolean): Promise<void>;
   Download(keys: string[], destOverride: string): Promise<void>;
+  ListDownloads(): Promise<DownloadProgress[] | null>;
+  CancelDownload(id: string): Promise<void>;
+  ClearDownloadHistory(): Promise<void>;
 };
 
 type WailsRuntime = {
@@ -107,6 +111,9 @@ export const api = {
     app().GetEpisodes(show, season),
   play: (keys: string[], resume: boolean) => app().Play(keys, resume),
   download: (keys: string[], dest: string) => app().Download(keys, dest),
+  listDownloads: async () => (await app().ListDownloads()) ?? [],
+  cancelDownload: (id: string) => app().CancelDownload(id),
+  clearDownloadHistory: () => app().ClearDownloadHistory(),
 };
 
 /** Subscribe to a backend event. Returns an unsubscribe function. */
