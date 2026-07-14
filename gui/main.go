@@ -20,6 +20,10 @@ import (
 var assets embed.FS
 
 func main() {
+	// Launched from Finder/Dock the process gets the minimal system PATH;
+	// widen it so mpv/rclone installed via Homebrew & co. are found.
+	augmentPath()
+
 	app := NewApp()
 
 	err := wails.Run(&options.App{
