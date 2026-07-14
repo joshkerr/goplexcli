@@ -266,7 +266,7 @@ export function Settings({ status, onReindexed, onToast }: Props) {
           "Download directory",
           "downloadDir",
           "~/Downloads/Plex",
-          "Where rclone saves downloaded media. ~ is expanded to your home directory."
+          "Where rclone saves downloaded media. ~ is expanded to your home directory. Defaults to ~/Downloads when empty."
         )}
         {field("mpv path", "mpvPath", "mpv", "Override if mpv is not on your PATH.")}
         {field(

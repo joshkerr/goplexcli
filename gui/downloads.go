@@ -69,6 +69,17 @@ func (a *App) Download(keys []string, destOverride string) error {
 		return err
 	}
 
+	// With nothing configured, ResolveDownloadDir falls back to the process
+	// working directory — which for a Finder-launched app is "/", the
+	// read-only system volume. Default to ~/Downloads instead.
+	if destOverride == "" && cfg.DownloadDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("no download directory configured and no home directory found: %w", err)
+		}
+		destOverride = filepath.Join(home, "Downloads")
+	}
+
 	destDir, err := cfg.ResolveDownloadDir(destOverride)
 	if err != nil {
 		return err
