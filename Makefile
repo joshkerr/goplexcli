@@ -143,8 +143,14 @@ gui-install: gui-build
 ifeq ($(OS),Windows_NT)
 	@powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-gui-windows.ps1 -Source "gui/build/bin/goplexcli-gui.exe" $(if $(filter 1,$(DESKTOP)),-DesktopShortcut,)
 else
-	@echo "Automatic GUI installation is currently available on Windows only."
-	@echo "Install the application from ./gui/build/bin/ using your platform's application directory."
+	@if [ "$$(uname)" = "Darwin" ]; then \
+		rm -rf /Applications/goplexcli-gui.app; \
+		ditto gui/build/bin/goplexcli-gui.app /Applications/goplexcli-gui.app; \
+		echo "Installed to /Applications/goplexcli-gui.app"; \
+	else \
+		echo "Automatic GUI installation is currently available on Windows and macOS only."; \
+		echo "Install the application from ./gui/build/bin/ using your platform's application directory."; \
+	fi
 endif
 
 # --- Release ---------------------------------------------------------------
