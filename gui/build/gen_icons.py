@@ -16,12 +16,16 @@ from PIL import Image, ImageDraw, ImageFilter
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
 
-# Brand gradient: light blue -> magenta/pink -> red, swept along the top-left ->
-# bottom-right diagonal (matching the Mediabox icon's palette).
-GRAD_BLUE = (60, 200, 255)    # #3CC8FF light blue
-GRAD_PINK = (228, 78, 208)    # #E44ED0 magenta/pink
-GRAD_RED = (255, 72, 84)      # #FF4854 pink-red
-GRAD_STOPS = [(0.0, GRAD_BLUE), (0.5, GRAD_PINK), (1.0, GRAD_RED)]
+# Brand gradient: cyan-blue -> blue-violet -> magenta/pink -> red, swept along
+# the top-left -> bottom-right diagonal. The extra blue/violet stops keep the
+# cool half of the glyph from being swamped by pink; the neon-glow bloom (see
+# render) gives it the luminous Apple Creator Studio look.
+GRAD_CYAN = (46, 202, 255)    # #2ECAFF bright cyan-blue
+GRAD_BLUE = (105, 118, 242)   # #6976F2 blue-violet
+GRAD_PINK = (226, 74, 205)    # #E24ACD magenta/pink
+GRAD_RED = (255, 74, 88)      # #FF4A58 pink-red
+GRAD_STOPS = [(0.0, GRAD_CYAN), (0.40, GRAD_BLUE),
+              (0.70, GRAD_PINK), (1.0, GRAD_RED)]
 
 DARK_TOP = (42, 47, 58)       # #2A2F3A
 DARK_BOT = (18, 21, 27)       # #12151B
@@ -30,6 +34,12 @@ GLYPH_DARK = (24, 27, 34)     # dark glyph for variant C
 
 def lerp(a, b, t):
     return tuple(round(a[i] + (b[i] - a[i]) * t) for i in range(3))
+
+
+def brighten(img_rgb, amt):
+    """Blend an RGB image toward white by amt in [0, 1] (for the glow colour)."""
+    white = Image.new("RGB", img_rgb.size, (255, 255, 255))
+    return Image.blend(img_rgb, white, amt)
 
 
 def vgrad(size, stops):
@@ -179,20 +189,36 @@ def render(size, variant="a"):
     gm = glyph_mask(S, variant, gscale)
     gm = Image.composite(gm, Image.new("L", (S, S), 0), bg_mask)  # clip to bg
 
-    # soft drop shadow (skip at tiny sizes)
-    if size >= 48:
-        sh = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-        black = Image.new("RGBA", (S, S), (0, 0, 0, 110 if dark_bg else 70))
-        sh.paste(black, (0, round(S * 0.018)), gm)
-        sh = sh.filter(ImageFilter.GaussianBlur(S * 0.02))
-        img = Image.alpha_composite(img, sh)
-
     if dark_bg:
         # Squeeze the gradient onto the glyph's diagonal extent (~0.23..0.77 of
-        # the canvas) so the whole blue -> pink -> red range shows on the glyph.
+        # the canvas) so the whole cyan -> pink -> red range shows on the glyph.
         fill = dgrad(S, GRAD_STOPS, 0.23, 0.77)
     else:
         fill = Image.new("RGB", (S, S), GLYPH_DARK)
+
+    if dark_bg:
+        # Neon bloom: fan the gradient-filled glyph outward in luminous colour,
+        # from a tight bright halo to a wide soft one, so the edges glow against
+        # the dark tile (Apple Creator Studio style). The glow is clipped to the
+        # squircle so it never bleeds past the tile.
+        glow_fill = brighten(fill, 0.4)
+        for rad, a in ((0.012, 205), (0.032, 150), (0.065, 110), (0.115, 72)):
+            bm = gm.filter(ImageFilter.GaussianBlur(S * rad))
+            bm = Image.composite(bm, Image.new("L", (S, S), 0), bg_mask)
+            if a != 255:
+                bm = bm.point(lambda v, a=a: v * a // 255)
+            layer = glow_fill.convert("RGBA")
+            layer.putalpha(bm)
+            img = Image.alpha_composite(img, layer)
+    elif size >= 48:
+        # Light variant keeps a soft dark drop shadow instead of a glow.
+        sh = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+        sh.paste(Image.new("RGBA", (S, S), (0, 0, 0, 70)),
+                 (0, round(S * 0.018)), gm)
+        sh = sh.filter(ImageFilter.GaussianBlur(S * 0.02))
+        img = Image.alpha_composite(img, sh)
+
+    # crisp glyph on top of its glow
     glyph = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     glyph.paste(fill, (0, 0), gm)
     img = Image.alpha_composite(img, glyph)

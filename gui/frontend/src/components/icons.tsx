@@ -23,6 +23,58 @@ export const FilmIcon = (p: IconProps) => (
   </svg>
 );
 
+// BrandMark is the app logo: a dark squircle tile with the play-triangle + tray
+// glyph, filled with the cyan -> violet -> pink -> red brand gradient and a
+// neon glow, mirroring the desktop app icon (see gui/build/gen_icons.py).
+export const BrandMark = (p: IconProps) => (
+  <svg width={60} height={60} viewBox="0 0 64 64" fill="none" {...p}>
+    <defs>
+      <linearGradient id="bmTile" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stopColor="#1b2230" />
+        <stop offset="1" stopColor="#0b0e15" />
+      </linearGradient>
+      <linearGradient
+        id="bmGlyph"
+        gradientUnits="userSpaceOnUse"
+        x1="15"
+        y1="15"
+        x2="49"
+        y2="49"
+      >
+        <stop offset="0" stopColor="#2ECAFF" />
+        <stop offset="0.4" stopColor="#6976F2" />
+        <stop offset="0.7" stopColor="#E24ACD" />
+        <stop offset="1" stopColor="#FF4A58" />
+      </linearGradient>
+      <filter id="bmGlow" x="-50%" y="-50%" width="200%" height="200%">
+        <feGaussianBlur stdDeviation="2.4" />
+      </filter>
+    </defs>
+    <rect
+      x="1"
+      y="1"
+      width="62"
+      height="62"
+      rx="15"
+      fill="url(#bmTile)"
+      stroke="rgba(255,255,255,0.08)"
+    />
+    <g
+      fill="url(#bmGlyph)"
+      stroke="url(#bmGlyph)"
+      strokeWidth="2.2"
+      strokeLinejoin="round"
+    >
+      <g filter="url(#bmGlow)" opacity="0.85">
+        <path d="M14.4 15 H49.6 L32 38.4 Z" />
+        <rect x="14.4" y="43.8" width="35.2" height="5.4" rx="2.7" />
+      </g>
+      <path d="M14.4 15 H49.6 L32 38.4 Z" />
+      <rect x="14.4" y="43.8" width="35.2" height="5.4" rx="2.7" />
+    </g>
+  </svg>
+);
+
 export const TvIcon = (p: IconProps) => (
   <svg {...base(p)}>
     <rect x="3" y="6" width="18" height="12" rx="2" />

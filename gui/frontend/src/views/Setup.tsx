@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, onEvent } from "../lib/api";
 import type { ReindexProgress, Server, Status } from "../lib/types";
-import { FilmIcon } from "../components/icons";
+import { BrandMark } from "../components/icons";
 
 interface Props {
   status: Status;
@@ -22,9 +22,11 @@ export function Setup({ status, onReady, onToast }: Props) {
     <div className="flex h-full w-full items-center justify-center bg-gradient-to-b from-ink-900 to-ink-800 p-6">
       <div className="w-full max-w-md">
         <div className="mb-8 flex flex-col items-center text-center">
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-accent to-accent-dark text-ink-900 shadow-glow">
-            <FilmIcon width={28} height={28} />
-          </div>
+          <BrandMark
+            width={60}
+            height={60}
+            className="drop-shadow-[0_8px_24px_rgba(120,90,240,0.4)]"
+          />
           <h1 className="mt-4 text-2xl font-semibold tracking-tight text-white">
             GoplexCLI
           </h1>

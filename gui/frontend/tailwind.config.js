@@ -32,7 +32,7 @@ export default {
       },
       boxShadow: {
         card: "0 10px 30px -12px rgba(0,0,0,0.6)",
-        glow: "0 0 0 1px rgba(229,160,13,0.4), 0 8px 24px -6px rgba(229,160,13,0.35)",
+        glow: "0 0 0 1px rgba(120,90,240,0.4), 0 8px 24px -6px rgba(226,74,205,0.35)",
       },
       keyframes: {
         "fade-in": {
