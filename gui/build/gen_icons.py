@@ -1,12 +1,13 @@
 """Generate goplexcli GUI app icons (3 variants) with PIL.
 
 Design goals: full-bleed rounded-square so the icon reads large in
-taskbar/dock; bold single glyph that survives 16px; Plex-gold palette.
+taskbar/dock; bold single glyph that survives 16px; a diagonal light-blue ->
+pink -> red gradient (echoing the Mediabox app icon).
 
-Variant A (recommended): dark squircle, gold downward play-triangle over a
+Variant A (recommended): dark squircle, gradient downward play-triangle over a
 tray bar -- reads as both "media" (play) and "download" (arrow into tray).
-Variant B: dark squircle, classic right-facing gold play triangle.
-Variant C: inverted -- gold squircle, dark glyph of A.
+Variant B: dark squircle, classic right-facing gradient play triangle.
+Variant C: inverted -- gradient squircle, dark glyph of A.
 """
 
 import math
@@ -15,9 +16,13 @@ from PIL import Image, ImageDraw, ImageFilter
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
 
-GOLD_TOP = (247, 199, 74)     # #F7C74A
-GOLD_MID = (229, 160, 13)     # #E5A00D (Plex gold)
-GOLD_BOT = (198, 128, 8)      # #C68008
+# Brand gradient: light blue -> magenta/pink -> red, swept along the top-left ->
+# bottom-right diagonal (matching the Mediabox icon's palette).
+GRAD_BLUE = (60, 200, 255)    # #3CC8FF light blue
+GRAD_PINK = (228, 78, 208)    # #E44ED0 magenta/pink
+GRAD_RED = (255, 72, 84)      # #FF4854 pink-red
+GRAD_STOPS = [(0.0, GRAD_BLUE), (0.5, GRAD_PINK), (1.0, GRAD_RED)]
+
 DARK_TOP = (42, 47, 58)       # #2A2F3A
 DARK_BOT = (18, 21, 27)       # #12151B
 GLYPH_DARK = (24, 27, 34)     # dark glyph for variant C
@@ -43,6 +48,28 @@ def vgrad(size, stops):
                 if t <= p1:
                     break
     return im.resize((size, size))
+
+
+def dgrad(size, stops, lo=0.0, hi=1.0):
+    """Diagonal top-left -> bottom-right gradient from vertical `stops`.
+
+    Built by rotating a square vertical gradient 45 degrees and center-cropping,
+    so a stop at position p lands on the canvas diagonal at fraction p (p=0 is
+    the top-left corner, p=1 the bottom-right). Pure PIL; fast at large sizes.
+
+    lo/hi squeeze the whole stop range into the diagonal band [lo, hi], holding
+    the end colors solid outside it. Use this to make a centered glyph show the
+    full gradient: map the stops onto the glyph's diagonal extent rather than
+    the canvas corners (where the ends would fall outside the glyph).
+    """
+    if (lo, hi) != (0.0, 1.0):
+        stops = ([(0.0, stops[0][1])]
+                 + [(lo + p * (hi - lo), c) for p, c in stops]
+                 + [(1.0, stops[-1][1])])
+    diag = int(math.ceil(size * math.sqrt(2))) + 2
+    g = vgrad(diag, stops).rotate(45, resample=Image.BICUBIC, expand=False)
+    left = (diag - size) // 2
+    return g.crop((left, left, left + size, left + size))
 
 
 def rounded_poly(points, radius, steps=24):
@@ -130,7 +157,7 @@ def render(size, variant="a"):
     if dark_bg:
         bg = vgrad(S, [(0.0, DARK_TOP), (1.0, DARK_BOT)])
     else:
-        bg = vgrad(S, [(0.0, GOLD_TOP), (0.55, GOLD_MID), (1.0, GOLD_BOT)])
+        bg = dgrad(S, GRAD_STOPS)
     img.paste(bg, (0, 0), bg_mask)
 
     # subtle top inner highlight
@@ -161,7 +188,9 @@ def render(size, variant="a"):
         img = Image.alpha_composite(img, sh)
 
     if dark_bg:
-        fill = vgrad(S, [(0.0, GOLD_TOP), (0.5, GOLD_MID), (1.0, GOLD_BOT)])
+        # Squeeze the gradient onto the glyph's diagonal extent (~0.23..0.77 of
+        # the canvas) so the whole blue -> pink -> red range shows on the glyph.
+        fill = dgrad(S, GRAD_STOPS, 0.23, 0.77)
     else:
         fill = Image.new("RGB", (S, S), GLYPH_DARK)
     glyph = Image.new("RGBA", (S, S), (0, 0, 0, 0))
