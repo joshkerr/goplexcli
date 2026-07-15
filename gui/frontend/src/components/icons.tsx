@@ -47,7 +47,7 @@ export const BrandMark = (p: IconProps) => (
         <stop offset="1" stopColor="#FF4A58" />
       </linearGradient>
       <filter id="bmGlow" x="-50%" y="-50%" width="200%" height="200%">
-        <feGaussianBlur stdDeviation="2.4" />
+        <feGaussianBlur stdDeviation="1.4" />
       </filter>
     </defs>
     <rect
@@ -65,7 +65,7 @@ export const BrandMark = (p: IconProps) => (
       strokeWidth="2.2"
       strokeLinejoin="round"
     >
-      <g filter="url(#bmGlow)" opacity="0.85">
+      <g filter="url(#bmGlow)" opacity="0.5">
         <path d="M14.4 15 H49.6 L32 38.4 Z" />
         <rect x="14.4" y="43.8" width="35.2" height="5.4" rx="2.7" />
       </g>

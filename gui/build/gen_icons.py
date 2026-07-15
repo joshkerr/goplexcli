@@ -12,7 +12,7 @@ Variant C: inverted -- gradient squircle, dark glyph of A.
 
 import math
 import os
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
 
@@ -196,21 +196,21 @@ def render(size, variant="a"):
     else:
         fill = Image.new("RGB", (S, S), GLYPH_DARK)
 
-    if dark_bg:
-        # Neon bloom: fan the gradient-filled glyph outward in luminous colour,
-        # from a tight bright halo to a wide soft one, so the edges glow against
-        # the dark tile (Apple Creator Studio style). The glow is clipped to the
-        # squircle so it never bleeds past the tile.
-        glow_fill = brighten(fill, 0.4)
-        for rad, a in ((0.012, 205), (0.032, 150), (0.065, 110), (0.115, 72)):
-            bm = gm.filter(ImageFilter.GaussianBlur(S * rad))
-            bm = Image.composite(bm, Image.new("L", (S, S), 0), bg_mask)
-            if a != 255:
-                bm = bm.point(lambda v, a=a: v * a // 255)
-            layer = glow_fill.convert("RGBA")
-            layer.putalpha(bm)
-            img = Image.alpha_composite(img, layer)
-    elif size >= 48:
+    if dark_bg and size >= 48:
+        # Subtle neon halo: a single soft, dim glow of the glyph's colour behind
+        # it -- like a coloured drop shadow with no offset. The crisp glyph is
+        # composited on top, so its edges stay sharp against the dark tile
+        # (Apple Creator Studio style) while the tile gains a luminous accent.
+        # The glow under the glyph is masked out so nothing bleeds at the edge.
+        glow_fill = brighten(fill, 0.15)
+        halo = gm.filter(ImageFilter.GaussianBlur(S * 0.05))
+        halo = Image.composite(halo, Image.new("L", (S, S), 0), bg_mask)
+        halo = ImageChops.subtract(halo, gm)  # only outside the crisp glyph
+        halo = halo.point(lambda v: v * 65 // 255)
+        layer = glow_fill.convert("RGBA")
+        layer.putalpha(halo)
+        img = Image.alpha_composite(img, layer)
+    elif not dark_bg and size >= 48:
         # Light variant keeps a soft dark drop shadow instead of a glow.
         sh = Image.new("RGBA", (S, S), (0, 0, 0, 0))
         sh.paste(Image.new("RGBA", (S, S), (0, 0, 0, 70)),
