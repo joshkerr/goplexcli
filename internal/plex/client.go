@@ -572,7 +572,7 @@ func (c *Client) getMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 				Studio:          valueOrEmpty(metadata.Studio),
 				Director:        strings.Join(extractTags(metadata.Director, 0), ", "),
 				Genre:           strings.Join(extractTags(metadata.Genre, 0), ", "),
-				Cast:            strings.Join(extractTags(metadata.Role, 5), ", "),
+				Cast:            strings.Join(extractTags(metadata.Role, castLimit), ", "),
 				AddedAt:         valueOrZeroInt64(metadata.AddedAt),
 				OriginallyAired: valueOrEmpty(metadata.OriginallyAvailableAt),
 			}
@@ -622,7 +622,7 @@ func (c *Client) getMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 				Studio:           valueOrEmpty(metadata.Studio),
 				Director:         strings.Join(extractTags(metadata.Director, 0), ", "),
 				Genre:            strings.Join(extractTags(metadata.Genre, 0), ", "),
-				Cast:             strings.Join(extractTags(metadata.Role, 5), ", "),
+				Cast:             strings.Join(extractTags(metadata.Role, castLimit), ", "),
 				AddedAt:          valueOrZeroInt64(metadata.AddedAt),
 				OriginallyAired:  valueOrEmpty(metadata.OriginallyAvailableAt),
 			}
@@ -1249,6 +1249,11 @@ func Authenticate(username, password string) (string, []Server, error) {
 
 	return token, servers, nil
 }
+
+// castLimit caps how many cast members (top-billed first) are stored per item.
+// The GUI makes each name clickable to find that actor's other movies, so we
+// keep a generous slice of the billing rather than just the headline few.
+const castLimit = 20
 
 // taggedItem represents an item with a Tag field (used for Director, Genre, Role)
 type taggedItem struct {

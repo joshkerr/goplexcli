@@ -18,6 +18,42 @@ interface Props {
   mpvAvailable: boolean;
   onClose: () => void;
   onToast: (msg: string, kind?: "info" | "error") => void;
+  // Run a field-scoped search (e.g. all movies by a director). Called when a
+  // director/cast/genre tag is clicked; the caller closes this modal.
+  onSearch: (query: string) => void;
+}
+
+// TagLinks splits a comma-separated tag field ("Tom Hardy, Cillian Murphy")
+// into individually clickable names. Clicking one runs a field-scoped search
+// (`field:"Name"`) so the grid shows every movie with that director/actor/genre.
+function TagLinks({
+  field,
+  value,
+  onSearch,
+}: {
+  field: "director" | "cast" | "genre";
+  value: string;
+  onSearch: (query: string) => void;
+}) {
+  const names = value
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return (
+    <>
+      {names.map((name, i) => (
+        <span key={i}>
+          <button
+            onClick={() => onSearch(`${field}:"${name}"`)}
+            className="rounded transition-colors hover:text-accent hover:underline focus:text-accent focus:outline-none"
+          >
+            {name}
+          </button>
+          {i < names.length - 1 ? ", " : ""}
+        </span>
+      ))}
+    </>
+  );
 }
 
 export function DetailModal(props: Props) {
@@ -85,7 +121,7 @@ function MetaRow({ media }: { media: Media }) {
 }
 
 function ItemDetail(props: Props) {
-  const { media, mpvAvailable, rcloneAvailable, onToast } = props;
+  const { media, mpvAvailable, rcloneAvailable, onToast, onSearch } = props;
   const [busy, setBusy] = useState(false);
   const canResume = media.viewOffset > 0 && media.progressPct < 95;
 
@@ -136,7 +172,9 @@ function ItemDetail(props: Props) {
         </div>
 
         {media.genre && (
-          <div className="mt-3 text-xs text-white/40">{media.genre}</div>
+          <div className="mt-3 text-xs text-white/40">
+            <TagLinks field="genre" value={media.genre} onSearch={onSearch} />
+          </div>
         )}
 
         {media.summary && (
@@ -148,13 +186,13 @@ function ItemDetail(props: Props) {
         {media.cast && (
           <div className="mt-4 text-xs text-white/40">
             <span className="font-semibold text-white/55">Cast: </span>
-            {media.cast}
+            <TagLinks field="cast" value={media.cast} onSearch={onSearch} />
           </div>
         )}
         {media.director && (
           <div className="mt-1 text-xs text-white/40">
             <span className="font-semibold text-white/55">Director: </span>
-            {media.director}
+            <TagLinks field="director" value={media.director} onSearch={onSearch} />
           </div>
         )}
 

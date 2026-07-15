@@ -112,6 +112,74 @@ func TestSortMovieItems(t *testing.T) {
 	eq(t, keys(sortMovieItems(c, BrowseOptions{Genre: "Comedy"})), []string{"b", "c"})
 }
 
+func TestParseFieldQuery(t *testing.T) {
+	cases := []struct {
+		query     string
+		wantField string
+		wantValue string
+		wantOK    bool
+	}{
+		{`director:"Christopher Nolan"`, "director", "Christopher Nolan", true},
+		{`cast:"Tom Hanks"`, "cast", "Tom Hanks", true},
+		{`genre:Comedy`, "genre", "Comedy", true},
+		{`DIRECTOR:"Nolan"`, "director", "Nolan", true}, // field is case-insensitive
+		{`cast:"  Spaced  "`, "cast", "Spaced", true},    // value trimmed
+		{`The Matrix`, "", "", false},                    // plain title
+		{`Aliens: Special Edition`, "", "", false},       // colon but unknown prefix
+		{`studio:"A24"`, "", "", false},                  // unsupported field
+		{`director:`, "", "", false},                     // empty value
+		{`director:""`, "", "", false},                   // empty quoted value
+	}
+	for _, tc := range cases {
+		t.Run(tc.query, func(t *testing.T) {
+			field, value, ok := parseFieldQuery(tc.query)
+			if ok != tc.wantOK || field != tc.wantField || value != tc.wantValue {
+				t.Errorf("parseFieldQuery(%q) = (%q, %q, %v), want (%q, %q, %v)",
+					tc.query, field, value, ok, tc.wantField, tc.wantValue, tc.wantOK)
+			}
+		})
+	}
+}
+
+func TestSearchByField(t *testing.T) {
+	a := NewApp()
+	a.setMedia(&cache.Cache{Media: []plex.MediaItem{
+		{Key: "inception", Type: "movie", Title: "Inception", Director: "Christopher Nolan", Cast: "Leonardo DiCaprio, Tom Hardy", Genre: "Sci-Fi, Action"},
+		{Key: "dunkirk", Type: "movie", Title: "Dunkirk", Director: "Christopher Nolan", Cast: "Tom Hardy, Fionn Whitehead", Genre: "War, Action"},
+		{Key: "forrest", Type: "movie", Title: "Forrest Gump", Director: "Robert Zemeckis", Cast: "Tom Hanks, Robin Wright", Genre: "Drama"},
+		{Key: "ep", Type: "episode", Title: "An Episode", Director: "Christopher Nolan", Genre: "Action"}, // excluded: not a movie
+	}})
+
+	keys := func(cards []MediaCardDTO) []string {
+		out := make([]string, len(cards))
+		for i, c := range cards {
+			out[i] = c.Key
+		}
+		return out
+	}
+
+	// Director match: both Nolan movies, sorted A-Z by title; episode excluded.
+	if got := keys(a.Search(`director:"Christopher Nolan"`)); len(got) != 2 || got[0] != "dunkirk" || got[1] != "inception" {
+		t.Errorf("director search = %v, want [dunkirk inception]", got)
+	}
+	// Cast match spans multiple movies.
+	if got := keys(a.Search(`cast:"Tom Hardy"`)); len(got) != 2 || got[0] != "dunkirk" || got[1] != "inception" {
+		t.Errorf("cast search = %v, want [dunkirk inception]", got)
+	}
+	// Cast match is a whole-token match, not a substring (Tom Hardy != Tom Hanks).
+	if got := keys(a.Search(`cast:"Tom Hanks"`)); len(got) != 1 || got[0] != "forrest" {
+		t.Errorf("cast search = %v, want [forrest]", got)
+	}
+	// Genre match.
+	if got := keys(a.Search(`genre:Action`)); len(got) != 2 || got[0] != "dunkirk" || got[1] != "inception" {
+		t.Errorf("genre search = %v, want [dunkirk inception]", got)
+	}
+	// No match returns an empty (non-nil) slice.
+	if got := a.Search(`director:"Nobody"`); got == nil || len(got) != 0 {
+		t.Errorf("no-match search = %v, want empty non-nil slice", got)
+	}
+}
+
 func TestMovieGenres(t *testing.T) {
 	a := NewApp()
 	a.setMedia(&cache.Cache{Media: []plex.MediaItem{

@@ -325,7 +325,7 @@ func sortMovieItems(c *cache.Cache, opts BrowseOptions) []*plex.MediaItem {
 		if c.Media[i].Type != "movie" {
 			continue
 		}
-		if opts.Genre != "" && !hasGenre(c.Media[i].Genre, opts.Genre) {
+		if opts.Genre != "" && !hasTag(c.Media[i].Genre, opts.Genre) {
 			continue
 		}
 		items = append(items, &c.Media[i])
@@ -372,11 +372,13 @@ func less(asc, desc, wantDesc bool) bool {
 	return asc
 }
 
-// hasGenre reports whether a comma-separated genre field ("Romance, Comedy")
-// contains want, compared case-insensitively as a whole token.
-func hasGenre(genreField, want string) bool {
+// hasTag reports whether a comma-separated tag field ("Romance, Comedy" or
+// "Tom Hardy, Cillian Murphy") contains want, compared case-insensitively as a
+// whole token. Used for the genre filter and for field-scoped searches over the
+// director/cast/genre fields.
+func hasTag(field, want string) bool {
 	want = strings.ToLower(strings.TrimSpace(want))
-	for _, g := range strings.Split(genreField, ",") {
+	for _, g := range strings.Split(field, ",") {
 		if strings.ToLower(strings.TrimSpace(g)) == want {
 			return true
 		}
@@ -536,8 +538,67 @@ func (a *App) GetEpisodes(showTitle string, season int) []MediaDTO {
 // relevant and the payload small.
 const searchLimit = 200
 
+// searchFields are the movie fields a field-scoped query can filter on. The
+// prefix (e.g. "director") maps to the MediaItem field it reads.
+var searchFields = map[string]func(*plex.MediaItem) string{
+	"director": func(m *plex.MediaItem) string { return m.Director },
+	"cast":     func(m *plex.MediaItem) string { return m.Cast },
+	"genre":    func(m *plex.MediaItem) string { return m.Genre },
+}
+
+// parseFieldQuery recognizes a field-scoped query of the form `field:value` or
+// `field:"value"` where field is one of searchFields (case-insensitive). It's
+// what a director/cast/genre click in the detail modal produces. Plain queries
+// (including titles that merely contain a colon, e.g. "Aliens: Special
+// Edition") return ok=false and fall through to the normal fuzzy title search.
+func parseFieldQuery(query string) (field, value string, ok bool) {
+	i := strings.IndexByte(query, ':')
+	if i <= 0 {
+		return "", "", false
+	}
+	field = strings.ToLower(query[:i])
+	if _, known := searchFields[field]; !known {
+		return "", "", false
+	}
+	value = strings.TrimSpace(strings.Trim(strings.TrimSpace(query[i+1:]), `"`))
+	if value == "" {
+		return "", "", false
+	}
+	return field, value, true
+}
+
+// filterMoviesByField returns the movies whose field (director/cast/genre)
+// contains value as a whole comma-separated token, sorted A-Z by title and
+// capped at searchLimit.
+func (a *App) filterMoviesByField(c *cache.Cache, field, value string) []MediaCardDTO {
+	get := searchFields[field]
+	var items []*plex.MediaItem
+	for i := range c.Media {
+		if c.Media[i].Type != "movie" {
+			continue
+		}
+		if hasTag(get(&c.Media[i]), value) {
+			items = append(items, &c.Media[i])
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return strings.ToLower(items[i].Title) < strings.ToLower(items[j].Title)
+	})
+	if len(items) > searchLimit {
+		items = items[:searchLimit]
+	}
+	out := make([]MediaCardDTO, 0, len(items))
+	for _, it := range items {
+		out = append(out, a.toCard(it))
+	}
+	a.warmCards(out)
+	return nonNilCards(out)
+}
+
 // Search fuzzy-matches the query against movie titles and show names, returning
-// lightweight cards (capped at searchLimit). An empty query returns nothing.
+// lightweight cards (capped at searchLimit). An empty query returns nothing. A
+// field-scoped query (e.g. `director:"Christopher Nolan"`, produced by clicking
+// a name in the detail modal) instead filters movies by that exact tag.
 func (a *App) Search(query string) []MediaCardDTO {
 	query = strings.TrimSpace(query)
 	if query == "" {
@@ -546,6 +607,10 @@ func (a *App) Search(query string) []MediaCardDTO {
 	c := a.media()
 	if c == nil {
 		return []MediaCardDTO{}
+	}
+
+	if field, value, ok := parseFieldQuery(query); ok {
+		return a.filterMoviesByField(c, field, value)
 	}
 
 	// Candidate set: all movies plus one card per show.

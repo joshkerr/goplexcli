@@ -40,6 +40,22 @@ function isCategory(k: NavKey): k is Category {
   return k !== "downloads" && k !== "settings";
 }
 
+// searchHeading turns a query into the header shown above the results. A
+// field-scoped query (director:"…" / cast:"…" / genre:"…", produced by clicking
+// a name in the detail modal) gets a friendly label; anything else falls back to
+// the raw search string.
+function searchHeading(query: string): string {
+  const m = /^(director|cast|genre):"?(.+?)"?$/i.exec(query.trim());
+  if (m) {
+    const field = m[1].toLowerCase();
+    const value = m[2];
+    if (field === "director") return `Directed by ${value}`;
+    if (field === "cast") return `Starring ${value}`;
+    return `${value} movies`; // genre
+  }
+  return `Search: “${query}”`;
+}
+
 export default function App() {
   const [status, setStatus] = useState<Status | null>(null);
   const [startupError, setStartupError] = useState("");
@@ -213,6 +229,15 @@ export default function App() {
     [toast]
   );
 
+  // Run a field-scoped search (director/cast/genre click in the detail modal).
+  // Setting the query drives the existing debounced search effect; closing the
+  // modal reveals the results grid underneath. The query string doubles as the
+  // search-box contents, so it's visible and clearable like any other search.
+  const runFieldSearch = useCallback((q: string) => {
+    setQuery(q);
+    setSelected(null);
+  }, []);
+
   const onSetupReady = useCallback(async () => {
     setSetupDone(true);
     const s = await refreshStatus();
@@ -287,7 +312,7 @@ export default function App() {
           style={{ ["--wails-draggable" as any]: "drag" }}
         >
           <h1 className="text-lg font-semibold tracking-tight text-white">
-            {showSearch ? `Search: “${query}”` : CATEGORY_TITLES[active]}
+            {showSearch ? searchHeading(query) : CATEGORY_TITLES[active]}
           </h1>
 
           {active === "movies" && !showSearch && (
@@ -392,6 +417,7 @@ export default function App() {
           rcloneAvailable={status.rcloneAvailable}
           onClose={() => setSelected(null)}
           onToast={toast}
+          onSearch={runFieldSearch}
         />
       )}
 
