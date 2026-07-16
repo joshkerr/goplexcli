@@ -408,6 +408,9 @@ func TestOutplayerTargetsRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("APPDATA", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	// On darwin GetConfigDir ignores the vars above and uses $HOME/.config —
+	// without this override, Save() clobbers the developer's real config.
+	t.Setenv("HOME", dir)
 
 	cfg := &Config{
 		PlexToken: "tok",
