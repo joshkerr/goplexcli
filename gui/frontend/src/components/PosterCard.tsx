@@ -56,8 +56,11 @@ export function PosterCard({ media, onClick, posterHeight, priority = false }: P
         {/* Hover overlay */}
         <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent opacity-0 transition-opacity duration-200 group-hover:opacity-100" />
 
-        {/* Watched check */}
-        {media.viewCount > 0 && media.progressPct >= 95 && (
+        {/* Watched check. Plex resets viewOffset (and so progressPct) to 0 once
+            an item is fully watched, only viewCount increments — so a
+            completed item must be recognized via progressPct === 0 here, not
+            just the near-100% case. */}
+        {media.viewCount > 0 && (media.progressPct >= 95 || media.progressPct === 0) && (
           <div className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-full bg-accent text-ink-900 shadow">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
               <path d="M5 12l5 5L20 7" />
