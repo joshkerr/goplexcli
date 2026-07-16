@@ -5,6 +5,7 @@ import type {
   DownloadProgress,
   Media,
   MediaCard,
+  PlaybackStatus,
   SortField,
   Status,
 } from "./lib/types";
@@ -118,6 +119,18 @@ export default function App() {
     });
     return off;
   }, []);
+
+  // Playback stage feedback. Errors are not events — they arrive as rejected
+  // Play() promises and are toasted by each play button's catch block.
+  useEffect(() => {
+    const off = onEvent<PlaybackStatus>("playback:status", (s) => {
+      const label = s.count > 1 ? `${s.title} (+${s.count - 1} more)` : s.title;
+      if (s.stage === "preparing") toast(`Preparing ${label}…`);
+      else if (s.stage === "playing") toast(`Playing ${label}`);
+      else if (s.stage === "warning") toast(s.detail, "error");
+    });
+    return off;
+  }, [toast]);
 
   // Restore persisted download history once the backend is reachable. Merge
   // under any live events that may have already arrived.

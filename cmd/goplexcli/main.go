@@ -1512,7 +1512,7 @@ func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error
 	// Start MPV in goroutine
 	errCh := make(chan error, 1)
 	go func() {
-		err := player.PlayMultipleWithOptions(streamURLs, cfg.MPVPath, opts)
+		_, err := player.PlayMultipleWithOptions(streamURLs, cfg.MPVPath, opts)
 		cancel() // Cancel context when MPV exits (stops Connect retries)
 		errCh <- err
 	}()

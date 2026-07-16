@@ -100,6 +100,13 @@ export interface DownloadProgress {
   error: string;
 }
 
+export interface PlaybackStatus {
+  stage: "preparing" | "starting" | "playing" | "warning" | "stopped";
+  title: string;
+  count: number;
+  detail: string; // warning message; empty for other stages
+}
+
 export type Category =
   | "movies"
   | "tv-shows"

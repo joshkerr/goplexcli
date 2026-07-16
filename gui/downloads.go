@@ -64,9 +64,12 @@ func (a *App) Download(keys []string, destOverride string) error {
 		return fmt.Errorf("media cache is empty")
 	}
 
-	items, err := resolveItems(c, keys)
+	items, missing, err := resolveItems(c, keys)
 	if err != nil {
 		return err
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%d of %d items not found in cache", len(missing), len(keys))
 	}
 
 	// With nothing configured, ResolveDownloadDir falls back to the process

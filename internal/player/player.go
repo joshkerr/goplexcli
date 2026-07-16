@@ -4,10 +4,112 @@ package player
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"runtime"
+	"strings"
+	"sync"
 )
+
+var plexTokenPattern = regexp.MustCompile(`(?i)(X-Plex-Token=)[^&\s]+`)
+
+// PlaybackError reports that mpv exited with one of its documented failure
+// codes (1 = fatal error, 2 = file could not be played, 3 = some files failed)
+// or was killed by a signal. A clean exit — including the user quitting — is
+// not a PlaybackError.
+type PlaybackError struct {
+	ExitCode int    // mpv's exit code; -1 when killed by a signal
+	Signal   string // signal name when killed by a signal, "" otherwise
+	Detail   string // most relevant stderr line, "" if mpv wrote nothing useful
+}
+
+func (e *PlaybackError) Error() string {
+	cause := fmt.Sprintf("mpv exited %d", e.ExitCode)
+	if e.Signal != "" {
+		cause = "mpv died: " + e.Signal
+	}
+	if e.Detail == "" {
+		return cause
+	}
+	return cause + ": " + e.Detail
+}
+
+// PlayOutcome describes how an mpv run ended, error or not, so callers can
+// spot streams that "played" without ever starting (e.g. an instant EOF that
+// exits 0).
+type PlayOutcome struct {
+	ExitCode  int    // 0 on clean exit; -1 when killed by a signal
+	Signal    string // signal name when killed by a signal, "" otherwise
+	ErrorLine string // most relevant stderr line, token-redacted
+}
+
+// stderrTailLines bounds how much of mpv's stderr is retained for error
+// reporting; mpv's status line churn would otherwise grow without limit.
+const stderrTailLines = 40
+
+// stderrTail is an io.Writer that keeps the last stderrTailLines lines written
+// to it. mpv redraws its status line with \r, so both \r and \n end a line.
+type stderrTail struct {
+	mu   sync.Mutex
+	line []byte
+	tail []string
+}
+
+func (t *stderrTail) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, b := range p {
+		if b == '\n' || b == '\r' {
+			t.push()
+			continue
+		}
+		t.line = append(t.line, b)
+	}
+	return len(p), nil
+}
+
+func (t *stderrTail) push() {
+	if len(t.line) > 0 {
+		t.tail = append(t.tail, string(t.line))
+		if len(t.tail) > stderrTailLines {
+			t.tail = t.tail[1:]
+		}
+	}
+	t.line = t.line[:0]
+}
+
+// Lines returns the retained stderr lines, including any unterminated final line.
+func (t *stderrTail) Lines() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.push()
+	return append([]string(nil), t.tail...)
+}
+
+// errorLineFromStderr picks the stderr line most likely to explain a playback
+// failure: the last line mentioning an error, or failing that the last
+// non-empty line.
+func errorLineFromStderr(lines []string) string {
+	for i := len(lines) - 1; i >= 0; i-- {
+		l := strings.ToLower(lines[i])
+		if strings.Contains(l, "error") || strings.Contains(l, "failed") ||
+			strings.Contains(l, "cannot") || strings.Contains(l, "unable") {
+			return redactPlexToken(lines[i])
+		}
+	}
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) != "" {
+			return redactPlexToken(lines[i])
+		}
+	}
+	return ""
+}
+
+func redactPlexToken(line string) string {
+	return plexTokenPattern.ReplaceAllString(line, "${1}[REDACTED]")
+}
 
 // PlaybackOptions configures MPV playback behavior.
 type PlaybackOptions struct {
@@ -39,7 +141,8 @@ func (p *MPVPlayer) PlayMultiple(ctx context.Context, urls []string) error {
 	if len(urls) == 0 {
 		return fmt.Errorf("no stream URLs provided")
 	}
-	return playWithMPV(p.getPath(), urls, PlaybackOptions{})
+	_, err := playWithMPV(p.getPath(), urls, PlaybackOptions{})
+	return err
 }
 
 // IsAvailable checks if mpv is available on the system.
@@ -80,15 +183,16 @@ func buildMPVArgs(urls []string, socketPath string, startPos int) []string {
 	return args
 }
 
-// playWithMPV is a helper function that executes mpv with the given arguments
-func playWithMPV(mpvPath string, streamURLs []string, opts PlaybackOptions) error {
+// playWithMPV executes mpv and reports how the run ended. The outcome is
+// non-nil whenever mpv actually ran, error or not.
+func playWithMPV(mpvPath string, streamURLs []string, opts PlaybackOptions) (*PlayOutcome, error) {
 	if mpvPath == "" {
 		mpvPath = "mpv"
 	}
 
 	// Check if mpv is available
 	if _, err := exec.LookPath(mpvPath); err != nil {
-		return fmt.Errorf("mpv not found in PATH. Please install mpv or specify the path in config")
+		return nil, fmt.Errorf("mpv not found in PATH. Please install mpv or specify the path in config")
 	}
 
 	// Build mpv command using buildMPVArgs
@@ -96,10 +200,11 @@ func playWithMPV(mpvPath string, streamURLs []string, opts PlaybackOptions) erro
 
 	cmd := exec.Command(mpvPath, args...)
 
-	// Inherit stdin, stdout, stderr for interactive playback
+	// Keep the tail of stderr so a failing mpv can explain itself.
+	tail := &stderrTail{}
 	cmd.Stdin = nil
 	cmd.Stdout = nil
-	cmd.Stderr = nil
+	cmd.Stderr = tail
 
 	// On Windows, prevent a stray console window from appearing when launched
 	// from a GUI app (or via a console-mode shim). No-op on other platforms.
@@ -108,23 +213,36 @@ func playWithMPV(mpvPath string, streamURLs []string, opts PlaybackOptions) erro
 
 	// Start mpv
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start mpv: %w", err)
+		return nil, fmt.Errorf("failed to start mpv: %w", err)
 	}
 
-	// Wait for mpv to finish
-	if err := cmd.Wait(); err != nil {
-		// mpv returns non-zero exit codes for various reasons (user quit, etc.)
-		// Don't treat this as an error
-		return nil
+	// Wait for mpv to finish. Exit codes 1-3 are mpv's documented failure
+	// modes and a signal death is a crash; any other exit counts as the user
+	// ending playback and is not an error — but the outcome still carries the
+	// diagnostics.
+	waitErr := cmd.Wait()
+	outcome := &PlayOutcome{ErrorLine: errorLineFromStderr(tail.Lines())}
+	if waitErr != nil {
+		var ee *exec.ExitError
+		if errors.As(waitErr, &ee) {
+			outcome.ExitCode = ee.ExitCode()
+			if sig := exitSignal(ee); sig != "" {
+				outcome.Signal = sig
+				return outcome, &PlaybackError{ExitCode: -1, Signal: sig, Detail: outcome.ErrorLine}
+			}
+			if code := ee.ExitCode(); code >= 1 && code <= 3 {
+				return outcome, &PlaybackError{ExitCode: code, Detail: outcome.ErrorLine}
+			}
+		}
 	}
-
-	return nil
+	return outcome, nil
 }
 
 // Play launches MPV to play the given URL.
 // This is a convenience function that uses the default player.
 func Play(streamURL, mpvPath string) error {
-	return playWithMPV(mpvPath, []string{streamURL}, PlaybackOptions{})
+	_, err := playWithMPV(mpvPath, []string{streamURL}, PlaybackOptions{})
+	return err
 }
 
 // PlayMultiple launches MPV to play multiple URLs sequentially.
@@ -134,13 +252,15 @@ func PlayMultiple(streamURLs []string, mpvPath string) error {
 		return fmt.Errorf("no stream URLs provided")
 	}
 
-	return playWithMPV(mpvPath, streamURLs, PlaybackOptions{})
+	_, err := playWithMPV(mpvPath, streamURLs, PlaybackOptions{})
+	return err
 }
 
-// PlayMultipleWithOptions launches MPV with custom options.
-func PlayMultipleWithOptions(streamURLs []string, mpvPath string, opts PlaybackOptions) error {
+// PlayMultipleWithOptions launches MPV with custom options and reports how the
+// run ended. The outcome is non-nil whenever mpv actually ran, error or not.
+func PlayMultipleWithOptions(streamURLs []string, mpvPath string, opts PlaybackOptions) (*PlayOutcome, error) {
 	if len(streamURLs) == 0 {
-		return fmt.Errorf("no stream URLs provided")
+		return nil, fmt.Errorf("no stream URLs provided")
 	}
 	return playWithMPV(mpvPath, streamURLs, opts)
 }

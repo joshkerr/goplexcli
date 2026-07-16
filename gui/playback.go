@@ -36,13 +36,19 @@ func (a *App) Play(keys []string, resume bool) error {
 	}
 
 	// Resolve items in the requested order.
-	items, err := resolveItems(c, keys)
+	items, missing, err := resolveItems(c, keys)
 	if err != nil {
 		return err
 	}
 
-	// All playlist items must share a server for stream-URL generation and
-	// progress reporting; use the first item's server.
+	a.emitPlaybackStatus("preparing", items, "")
+	if len(missing) > 0 {
+		a.emitPlaybackStatus("warning", items, fmt.Sprintf(
+			"%d of %d items not in cache — playing the rest", len(missing), len(keys)))
+	}
+
+	// Progress reporting uses the first item's server; items from other
+	// servers get their own client for stream-URL generation.
 	client, err := plex.NewWithName(items[0].ServerURL, cfg.TokenForURL(items[0].ServerURL), items[0].ServerName)
 	if err != nil {
 		return fmt.Errorf("failed to create Plex client: %w", err)
@@ -52,9 +58,12 @@ func (a *App) Play(keys []string, resume bool) error {
 	for _, it := range items {
 		itemClient := client
 		if it.ServerURL != items[0].ServerURL {
-			if c2, e := plex.NewWithName(it.ServerURL, cfg.TokenForURL(it.ServerURL), it.ServerName); e == nil {
-				itemClient = c2
+			c2, e := plex.NewWithName(it.ServerURL, cfg.TokenForURL(it.ServerURL), it.ServerName)
+			if e != nil {
+				return fmt.Errorf("failed to create Plex client for %s (server %s): %w",
+					it.FormatMediaTitle(), it.ServerName, e)
 			}
+			itemClient = c2
 		}
 		url, e := itemClient.GetStreamURL(it.Key)
 		if e != nil {
@@ -78,17 +87,21 @@ func (a *App) Play(keys []string, resume bool) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	a.emit("playback:started", map[string]interface{}{"count": len(items), "title": items[0].FormatMediaTitle()})
+	a.emitPlaybackStatus("starting", items, "")
 
+	started := time.Now()
+	var outcome *player.PlayOutcome
 	errCh := make(chan error, 1)
 	go func() {
-		err := player.PlayMultipleWithOptions(streamURLs, cfg.MPVPath, opts)
+		o, err := player.PlayMultipleWithOptions(streamURLs, cfg.MPVPath, opts)
+		outcome = o // synchronized by the errCh send below
 		cancel()
 		errCh <- err
 	}()
 
 	tracking := false
 	if err := mpvClient.ConnectWithContext(ctx); err == nil {
+		a.emitPlaybackStatus("playing", items, "")
 		tracker.Start(ctx, 10*time.Second)
 		tracking = true
 		defer func() { _ = mpvClient.Close() }()
@@ -104,7 +117,12 @@ func (a *App) Play(keys []string, resume bool) error {
 		a.invalidateMedia()
 	}
 
-	a.emit("playback:stopped", map[string]interface{}{})
+	if playbackErr == nil {
+		if w := silentExitWarning(tracking, time.Since(started), outcome); w != "" {
+			a.emitPlaybackStatus("warning", items, w)
+		}
+	}
+	a.emitPlaybackStatus("stopped", items, "")
 
 	if playbackErr != nil {
 		return fmt.Errorf("playback failed: %w", playbackErr)
@@ -112,22 +130,57 @@ func (a *App) Play(keys []string, resume bool) error {
 	return nil
 }
 
+// silentExitWarning returns a user-facing message when mpv exited "cleanly"
+// without playback ever starting: no IPC connection and a near-instant exit.
+// This catches streams mpv treats as played despite never showing a frame
+// (e.g. an instant EOF from a broken transcode). Empty means all is well.
+func silentExitWarning(tracked bool, ran time.Duration, outcome *player.PlayOutcome) string {
+	if tracked || ran > 10*time.Second || outcome == nil {
+		return ""
+	}
+	msg := fmt.Sprintf("mpv exited after %.1fs without starting playback (exit code %d)",
+		ran.Seconds(), outcome.ExitCode)
+	if outcome.ErrorLine != "" {
+		msg += ": " + outcome.ErrorLine
+	}
+	return msg
+}
+
+// emitPlaybackStatus emits a playback:status Wails event. Stages: preparing,
+// warning (detail holds the message), starting, playing, stopped. Errors are
+// not emitted — they flow through Play's returned error instead.
+func (a *App) emitPlaybackStatus(stage string, items []*plex.MediaItem, detail string) {
+	title := ""
+	if len(items) > 0 {
+		title = items[0].FormatMediaTitle()
+	}
+	a.emit("playback:status", map[string]interface{}{
+		"stage":  stage,
+		"title":  title,
+		"count":  len(items),
+		"detail": detail,
+	})
+}
+
 // resolveItems looks up cached items by key, preserving the requested order.
-func resolveItems(c *cache.Cache, keys []string) ([]*plex.MediaItem, error) {
+// Keys absent from the cache are returned in missing so the caller can warn
+// rather than dropping them silently; it is an error only when nothing resolves.
+func resolveItems(c *cache.Cache, keys []string) (items []*plex.MediaItem, missing []string, err error) {
 	index := map[string]*plex.MediaItem{}
 	for i := range c.Media {
 		index[c.Media[i].Key] = &c.Media[i]
 	}
-	var items []*plex.MediaItem
 	for _, k := range keys {
 		if it, ok := index[k]; ok {
 			items = append(items, it)
+		} else {
+			missing = append(missing, k)
 		}
 	}
 	if len(items) == 0 {
-		return nil, fmt.Errorf("none of the requested items were found in the cache")
+		return nil, missing, fmt.Errorf("none of the requested items were found in the cache")
 	}
-	return items, nil
+	return items, missing, nil
 }
 
 // persistProgress flushes tracked playback offsets into the local cache so

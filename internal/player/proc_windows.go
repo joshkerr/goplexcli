@@ -18,3 +18,8 @@ func configureMPVProc(cmd *exec.Cmd) {
 		CreationFlags: createNoWindow,
 	}
 }
+
+// exitSignal always returns "" on Windows, which has no POSIX signals.
+func exitSignal(ee *exec.ExitError) string {
+	return ""
+}
