@@ -30,8 +30,8 @@ func main() {
 		Title:     "GoplexCLI",
 		Width:     1320,
 		Height:    860,
-		MinWidth:  960,
-		MinHeight: 640,
+		MinWidth:  800,
+		MinHeight: 520,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
