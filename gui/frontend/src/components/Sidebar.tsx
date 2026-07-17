@@ -1,6 +1,7 @@
 import type { Category } from "../lib/types";
 import { isMac } from "../lib/api";
 import {
+  BrandMark,
   DownloadIcon,
   FilmIcon,
   ResumeIcon,
@@ -42,9 +43,7 @@ export function Sidebar({ active, onSelect, downloadCount }: Props) {
       <div
         className={`flex items-center gap-2.5 px-5 pb-5 ${isMac ? "pt-9" : "pt-5"}`}
       >
-        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-accent to-accent-dark text-ink-900 shadow-glow">
-          <FilmIcon width={20} height={20} />
-        </div>
+        <BrandMark width={36} height={36} />
         <div className="leading-tight">
           <div className="text-[15px] font-semibold tracking-tight text-white">
             Goplex
