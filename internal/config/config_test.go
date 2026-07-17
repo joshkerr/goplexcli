@@ -433,3 +433,84 @@ func TestOutplayerTargetsRoundTrip(t *testing.T) {
 		t.Errorf("round-trip mismatch: %+v", got)
 	}
 }
+
+func TestGetEnabledWebDAVTargets(t *testing.T) {
+	cfg := Config{
+		WebDAVTargets: []WebDAVTarget{
+			{Name: "office-nas", URL: "http://192.168.1.50:5005", Enabled: true},
+			{Name: "backup", URL: "http://192.168.1.51:8080", Enabled: false},
+			{Name: "media-box", URL: "https://media.local:443", Enabled: true},
+		},
+	}
+	enabled := cfg.GetEnabledWebDAVTargets()
+	if len(enabled) != 2 {
+		t.Fatalf("got %d enabled targets, want 2", len(enabled))
+	}
+	if enabled[0].Name != "office-nas" || enabled[1].Name != "media-box" {
+		t.Errorf("unexpected enabled targets: %+v", enabled)
+	}
+
+	if got := (&Config{}).GetEnabledWebDAVTargets(); len(got) != 0 {
+		t.Errorf("empty config returned %d targets, want 0", len(got))
+	}
+}
+
+func TestWebDAVTargetValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		target  WebDAVTarget
+		wantErr bool
+	}{
+		{"valid", WebDAVTarget{Name: "nas", URL: "http://192.168.1.50:5005"}, false},
+		{"valid https", WebDAVTarget{Name: "nas", URL: "https://nas.local:8443"}, false},
+		{"valid anonymous", WebDAVTarget{Name: "nas", URL: "http://192.168.1.50:5005"}, false},
+		{"missing name", WebDAVTarget{URL: "http://192.168.1.50:5005"}, true},
+		{"missing url", WebDAVTarget{Name: "nas"}, true},
+		{"bad scheme", WebDAVTarget{Name: "nas", URL: "ftp://192.168.1.50"}, true},
+		{"no host", WebDAVTarget{Name: "nas", URL: "http://"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.target.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestWebDAVTargetsRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("APPDATA", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	// On darwin GetConfigDir ignores the vars above and uses $HOME/.config —
+	// without this override, Save() clobbers the developer's real config.
+	t.Setenv("HOME", dir)
+
+	cfg := &Config{
+		PlexToken: "tok",
+		WebDAVTargets: []WebDAVTarget{
+			{
+				Name: "office-nas", URL: "http://192.168.1.50:5005",
+				User: "josh", Pass: "secret", Dir: "incoming",
+				Vendor: "nextcloud", Enabled: true,
+			},
+		},
+	}
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(loaded.WebDAVTargets) != 1 {
+		t.Fatalf("got %d targets after round-trip, want 1", len(loaded.WebDAVTargets))
+	}
+	got := loaded.WebDAVTargets[0]
+	if got.Name != "office-nas" || got.URL != "http://192.168.1.50:5005" ||
+		got.User != "josh" || got.Pass != "secret" || got.Dir != "incoming" ||
+		got.Vendor != "nextcloud" || !got.Enabled {
+		t.Errorf("round-trip mismatch: %+v", got)
+	}
+}

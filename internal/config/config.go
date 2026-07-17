@@ -79,6 +79,50 @@ type Config struct {
 	// configured explicitly with a base URL. Individually enabled or disabled;
 	// disabled targets are hidden from the transfer menu but kept in config.
 	OutplayerTargets []OutplayerTarget `json:"outplayer_targets,omitempty"`
+
+	// WebDAVTargets are user-defined WebDAV upload destinations with their own
+	// per-server credentials. Unlike gowebdav servers (discovered via mDNS and
+	// sharing WebDAVUser/WebDAVPass), each of these is configured explicitly
+	// with a full base URL (scheme, host, port) and its own username/password.
+	WebDAVTargets []WebDAVTarget `json:"webdav_targets,omitempty"`
+}
+
+// WebDAVTarget represents an explicitly configured WebDAV server used as a
+// transfer destination. Uploads go through rclone's WebDAV backend, so any
+// standard WebDAV server works.
+type WebDAVTarget struct {
+	// Name is a human-readable identifier for the target (e.g. "office-nas").
+	Name string `json:"name"`
+	// URL is the WebDAV base URL including scheme and port,
+	// e.g. "http://192.168.1.50:5005".
+	URL string `json:"url"`
+	// User and Pass are this server's Basic Auth credentials. Pass is stored
+	// in plaintext (same as the shared WebDAVPass); empty values connect
+	// anonymously.
+	User string `json:"user,omitempty"`
+	Pass string `json:"pass,omitempty"`
+	// Dir is an optional sub-path under the server root to upload into.
+	Dir string `json:"dir,omitempty"`
+	// Vendor is the rclone WebDAV vendor ("other", "nextcloud", "owncloud",
+	// "sharepoint", ...). Empty means "other", which suits generic servers.
+	Vendor string `json:"vendor,omitempty"`
+	// Enabled determines whether this target appears in the transfer menu.
+	Enabled bool `json:"enabled"`
+}
+
+// Validate checks that a WebDAV target has the required fields and a usable
+// URL. It is called when adding a target so misconfiguration is caught early.
+func (t WebDAVTarget) Validate() error {
+	if t.Name == "" {
+		return fmt.Errorf("name is required")
+	}
+	if t.URL == "" {
+		return fmt.Errorf("URL is required")
+	}
+	if err := validateServerURL(t.URL); err != nil {
+		return err
+	}
+	return nil
 }
 
 // OutplayerTarget represents an Outplayer "Wi-Fi transfer" destination.
@@ -317,6 +361,18 @@ func (c *Config) GetEnabledServers() []PlexServer {
 func (c *Config) GetEnabledOutplayerTargets() []OutplayerTarget {
 	var enabled []OutplayerTarget
 	for _, t := range c.OutplayerTargets {
+		if t.Enabled {
+			enabled = append(enabled, t)
+		}
+	}
+	return enabled
+}
+
+// GetEnabledWebDAVTargets returns all configured WebDAV targets that are
+// enabled and should be offered as transfer destinations.
+func (c *Config) GetEnabledWebDAVTargets() []WebDAVTarget {
+	var enabled []WebDAVTarget
+	for _, t := range c.WebDAVTargets {
 		if t.Enabled {
 			enabled = append(enabled, t)
 		}

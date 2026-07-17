@@ -238,7 +238,7 @@ Downloading queued items:
 	// the shared credentials used to reach them.
 	webdavCmd := &cobra.Command{
 		Use:   "webdav",
-		Short: "Discover gowebdav servers and manage transfer credentials",
+		Short: "Manage WebDAV transfer targets and discover gowebdav servers",
 	}
 
 	webdavDiscoverCmd := &cobra.Command{
@@ -247,13 +247,49 @@ Downloading queued items:
 		RunE:  runWebDAVDiscover,
 	}
 
+	webdavListCmd := &cobra.Command{
+		Use:   "list",
+		Short: "List configured WebDAV targets",
+		RunE:  runWebDAVList,
+	}
+
+	webdavAddCmd := &cobra.Command{
+		Use:   "add",
+		Short: "Add a WebDAV target (URL with port + its own username/password)",
+		RunE:  runWebDAVAdd,
+	}
+
+	webdavRemoveCmd := &cobra.Command{
+		Use:               "remove [name]",
+		Short:             "Remove a WebDAV target",
+		Args:              cobra.MinimumNArgs(1),
+		ValidArgsFunction: completeWebDAVTargetNames,
+		RunE:              runWebDAVRemove,
+	}
+
+	webdavEnableCmd := &cobra.Command{
+		Use:               "enable [name]",
+		Short:             "Enable a WebDAV target",
+		Args:              cobra.MinimumNArgs(1),
+		ValidArgsFunction: completeWebDAVTargetNames,
+		RunE:              runWebDAVEnable,
+	}
+
+	webdavDisableCmd := &cobra.Command{
+		Use:               "disable [name]",
+		Short:             "Disable a WebDAV target (hides it from the transfer menu)",
+		Args:              cobra.MinimumNArgs(1),
+		ValidArgsFunction: completeWebDAVTargetNames,
+		RunE:              runWebDAVDisable,
+	}
+
 	webdavSetCredsCmd := &cobra.Command{
 		Use:   "set-creds",
 		Short: "Set the shared username/password used for all gowebdav servers",
 		RunE:  runWebDAVSetCreds,
 	}
 
-	webdavCmd.AddCommand(webdavDiscoverCmd, webdavSetCredsCmd)
+	webdavCmd.AddCommand(webdavDiscoverCmd, webdavSetCredsCmd, webdavListCmd, webdavAddCmd, webdavRemoveCmd, webdavEnableCmd, webdavDisableCmd)
 
 	// Outplayer command: manage Outplayer "Wi-Fi transfer" targets, which are
 	// user-defined HTTP upload destinations (an iOS app feature) rather than
@@ -1635,9 +1671,24 @@ func handleDownloadMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) er
 	return nil
 }
 
-// handleTransferToWebDAV discovers gowebdav servers on the LAN via mDNS, lets
-// the user pick one, and pushes the selected media to it using rclone's WebDAV
-// backend. Credentials are the shared ones stored in config (WebDAVUser/Pass).
+// webdavDest is a unified WebDAV transfer destination: either an explicitly
+// configured target (its own credentials) or a gowebdav server discovered on
+// the LAN (shared WebDAVUser/WebDAVPass credentials).
+type webdavDest struct {
+	label   string // shown in the picker, e.g. "office-nas (http://192.168.1.50:5005)"
+	baseURL string
+	user    string
+	pass    string
+	dir     string
+	vendor  string // rclone WebDAV vendor; "" = "other"
+	shared  bool   // true when using the shared gowebdav credentials
+}
+
+// handleTransferToWebDAV lets the user pick a WebDAV destination — explicitly
+// configured targets (goplexcli webdav add) plus gowebdav servers discovered on
+// the LAN via mDNS — and pushes the selected media to it using rclone's WebDAV
+// backend. Configured targets carry their own credentials; discovered servers
+// use the shared ones stored in config (WebDAVUser/Pass).
 func handleTransferToWebDAV(cfg *config.Config, mediaItems []*plex.MediaItem) error {
 	if len(mediaItems) == 0 {
 		return fmt.Errorf("no media items provided")
@@ -1661,78 +1712,109 @@ func handleTransferToWebDAV(cfg *config.Config, mediaItems []*plex.MediaItem) er
 		return fmt.Errorf("no valid rclone paths available")
 	}
 
+	// Configured targets are always available; discovered ones depend on what
+	// is currently on the LAN.
+	var dests []webdavDest
+	for _, t := range cfg.GetEnabledWebDAVTargets() {
+		dests = append(dests, webdavDest{
+			label:   fmt.Sprintf("%s (%s)", t.Name, t.URL),
+			baseURL: t.URL,
+			user:    t.User,
+			pass:    t.Pass,
+			dir:     t.Dir,
+			vendor:  t.Vendor,
+		})
+	}
+
 	// Discover gowebdav servers advertised on the LAN.
 	fmt.Println(infoStyle.Render("\nSearching for gowebdav servers on the local network..."))
 	ctx := context.Background()
 	targets, err := webdav.Discover(ctx, 3*time.Second)
 	if err != nil {
-		return fmt.Errorf("discovery failed: %w", err)
+		// Configured targets are still usable when mDNS discovery breaks
+		// (e.g. multicast blocked); only fail outright if there is nothing else.
+		if len(dests) == 0 {
+			return fmt.Errorf("discovery failed: %w", err)
+		}
+		fmt.Println(warningStyle.Render(fmt.Sprintf("⚠ Discovery failed: %v", err)))
 	}
-	if len(targets) == 0 {
-		fmt.Println(warningStyle.Render("No gowebdav servers found on the network"))
-		fmt.Println(infoStyle.Render("\nTo run a gowebdav server, on another machine run:"))
+	for _, t := range targets {
+		baseURL := t.BaseURL()
+		if baseURL == "" {
+			continue
+		}
+		dests = append(dests, webdavDest{
+			label:   fmt.Sprintf("%s (%s, discovered)", t.Name, baseURL),
+			baseURL: baseURL,
+			user:    cfg.WebDAVUser,
+			pass:    cfg.WebDAVPass,
+			dir:     cfg.WebDAVDir,
+			shared:  true,
+		})
+	}
+
+	if len(dests) == 0 {
+		fmt.Println(warningStyle.Render("No WebDAV destinations available"))
+		fmt.Println(infoStyle.Render("\nAdd a WebDAV server with:"))
+		fmt.Println(infoStyle.Render("  goplexcli webdav add"))
+		fmt.Println(infoStyle.Render("\nOr run a gowebdav server on another machine:"))
 		fmt.Println(infoStyle.Render("  gowebdav -name <label> -username <user> -password <pass>"))
 		fmt.Println(infoStyle.Render("(use the same credentials you set in goplexcli config)"))
 		return nil
 	}
 
-	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Found %d server(s)\n", len(targets))))
+	fmt.Println(successStyle.Render(fmt.Sprintf("✓ %d destination(s) available\n", len(dests))))
 
-	// Select a target if more than one was found.
-	var selected *webdav.Target
-	if len(targets) == 1 {
-		selected = targets[0]
-		fmt.Println(infoStyle.Render(fmt.Sprintf("Transferring to: %s (%s)", selected.Name, selected.BaseURL())))
+	// Select a destination if more than one is available.
+	var selected webdavDest
+	if len(dests) == 1 {
+		selected = dests[0]
+		fmt.Println(infoStyle.Render("Transferring to: " + selected.label))
 	} else {
 		var names []string
-		for _, t := range targets {
-			names = append(names, fmt.Sprintf("%s (%s)", t.Name, t.BaseURL()))
+		for _, d := range dests {
+			names = append(names, d.label)
 		}
 		if ui.IsAvailable(cfg.FzfPath) {
-			_, idx, err := ui.SelectWithFzf(names, "Select gowebdav server:", cfg.FzfPath)
+			_, idx, err := ui.SelectWithFzf(names, "Select WebDAV destination:", cfg.FzfPath)
 			if err != nil {
 				if errors.Is(err, apperrors.ErrCancelled) {
 					return nil
 				}
-				return fmt.Errorf("server selection failed: %w", err)
+				return fmt.Errorf("destination selection failed: %w", err)
 			}
-			selected = targets[idx]
+			selected = dests[idx]
 		} else {
-			fmt.Println(infoStyle.Render("Available servers:"))
+			fmt.Println(infoStyle.Render("Available destinations:"))
 			for i, name := range names {
 				fmt.Printf("  %d. %s\n", i+1, name)
 			}
-			fmt.Print("\nSelect server number: ")
+			fmt.Print("\nSelect destination number: ")
 			var choice int
 			if _, err := fmt.Scanln(&choice); err != nil {
 				return fmt.Errorf("failed to read selection: %w", err)
 			}
-			if choice < 1 || choice > len(targets) {
+			if choice < 1 || choice > len(dests) {
 				return fmt.Errorf("invalid selection")
 			}
-			selected = targets[choice-1]
+			selected = dests[choice-1]
 		}
 	}
 
-	baseURL := selected.BaseURL()
-	if baseURL == "" {
-		return fmt.Errorf("selected server %q has no reachable address", selected.Name)
-	}
-
 	if dryRun {
-		fmt.Println(warningStyle.Render(fmt.Sprintf("\n[DRY RUN] Would transfer %d file(s) to %s:", len(rclonePaths), baseURL)))
+		fmt.Println(warningStyle.Render(fmt.Sprintf("\n[DRY RUN] Would transfer %d file(s) to %s:", len(rclonePaths), selected.baseURL)))
 		for _, p := range rclonePaths {
 			fmt.Println(infoStyle.Render("  - " + p))
 		}
 		return nil
 	}
 
-	if cfg.WebDAVUser == "" && cfg.WebDAVPass == "" {
+	if selected.shared && selected.user == "" && selected.pass == "" {
 		fmt.Println(warningStyle.Render("Note: no webdav_user/webdav_pass set in config; connecting anonymously."))
 	}
 
-	fmt.Println(successStyle.Render(fmt.Sprintf("\n✓ Starting transfer of %d item(s) to %s...", len(rclonePaths), baseURL)))
-	if err := download.UploadToWebDAV(ctx, rclonePaths, baseURL, cfg.WebDAVUser, cfg.WebDAVPass, cfg.WebDAVDir, cfg.RclonePath); err != nil {
+	fmt.Println(successStyle.Render(fmt.Sprintf("\n✓ Starting transfer of %d item(s) to %s...", len(rclonePaths), selected.baseURL)))
+	if err := download.UploadToWebDAV(ctx, rclonePaths, selected.baseURL, selected.user, selected.pass, selected.dir, selected.vendor, cfg.RclonePath); err != nil {
 		return fmt.Errorf("transfer failed: %w", err)
 	}
 
@@ -1801,6 +1883,209 @@ func runWebDAVSetCreds(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Println(successStyle.Render("✓ Saved gowebdav credentials"))
+	return nil
+}
+
+// findWebDAVTarget returns the index of the configured WebDAV target whose
+// name matches (case insensitively), or -1 if none match.
+func findWebDAVTarget(cfg *config.Config, name string) int {
+	for i, t := range cfg.WebDAVTargets {
+		if strings.EqualFold(t.Name, name) {
+			return i
+		}
+	}
+	return -1
+}
+
+// completeWebDAVTargetNames provides shell completion of configured WebDAV
+// target names.
+func completeWebDAVTargetNames(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	already := make(map[string]struct{}, len(args))
+	for _, a := range args {
+		already[a] = struct{}{}
+	}
+	var names []string
+	for _, t := range cfg.WebDAVTargets {
+		if _, dup := already[t.Name]; dup {
+			continue
+		}
+		names = append(names, t.Name)
+	}
+	return names, cobra.ShellCompDirectiveNoFileComp
+}
+
+// runWebDAVList prints all configured WebDAV targets and their status.
+func runWebDAVList(cmd *cobra.Command, args []string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	fmt.Println(titleStyle.Render("WebDAV Targets"))
+	if len(cfg.WebDAVTargets) == 0 {
+		fmt.Println(warningStyle.Render("No WebDAV targets configured."))
+		fmt.Println(infoStyle.Render("Add one with: goplexcli webdav add"))
+		return nil
+	}
+
+	for _, t := range cfg.WebDAVTargets {
+		dir := t.Dir
+		if dir == "" {
+			dir = "/"
+		}
+		user := t.User
+		if user == "" {
+			user = "(anonymous)"
+		}
+		status := successStyle.Render("enabled")
+		if !t.Enabled {
+			status = warningStyle.Render("disabled")
+		}
+		fmt.Printf("  %-20s %-32s user=%-14s dir=%-12s %s\n", t.Name, t.URL, user, dir, status)
+	}
+	return nil
+}
+
+// runWebDAVAdd interactively adds a new WebDAV target to the config.
+func runWebDAVAdd(cmd *cobra.Command, args []string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Println(titleStyle.Render("Add WebDAV Target"))
+	fmt.Println(infoStyle.Render("A WebDAV server with its own URL (including port) and credentials.\n"))
+
+	fmt.Print("Name (e.g. office-nas): ")
+	name, _ := reader.ReadString('\n')
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("name is required")
+	}
+	if findWebDAVTarget(cfg, name) != -1 {
+		return fmt.Errorf("a target named %q already exists", name)
+	}
+
+	fmt.Print("URL with port (e.g. http://192.168.1.50:5005): ")
+	rawURL, _ := reader.ReadString('\n')
+	rawURL = strings.TrimSpace(rawURL)
+	// Default to http:// when the user omits the scheme.
+	if rawURL != "" && !strings.Contains(rawURL, "://") {
+		rawURL = "http://" + rawURL
+	}
+	rawURL = strings.TrimRight(rawURL, "/")
+
+	fmt.Print("Username (blank = anonymous): ")
+	var username string
+	_, _ = fmt.Scanln(&username)
+	username = strings.TrimSpace(username)
+
+	var password string
+	if username != "" {
+		fmt.Print("Password: ")
+		passwordBytes, err := term.ReadPassword(int(syscall.Stdin))
+		if err != nil {
+			return fmt.Errorf("failed to read password: %w", err)
+		}
+		fmt.Println()
+		password = string(passwordBytes)
+	}
+
+	fmt.Print("Upload sub-directory (optional, blank = server root): ")
+	dir, _ := reader.ReadString('\n')
+	dir = strings.TrimSpace(dir)
+
+	fmt.Print("Vendor [other/nextcloud/owncloud/sharepoint] (blank = other): ")
+	vendor, _ := reader.ReadString('\n')
+	vendor = strings.ToLower(strings.TrimSpace(vendor))
+
+	target := config.WebDAVTarget{
+		Name:    name,
+		URL:     rawURL,
+		User:    username,
+		Pass:    password,
+		Dir:     dir,
+		Vendor:  vendor,
+		Enabled: true,
+	}
+	if err := target.Validate(); err != nil {
+		return fmt.Errorf("invalid target: %w", err)
+	}
+
+	// Best-effort connectivity/credential check; a target can still be saved
+	// while the server is offline.
+	fmt.Println(infoStyle.Render("\nChecking connectivity..."))
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	if err := webdav.Check(ctx, target.URL, target.User, target.Pass); err != nil {
+		fmt.Println(warningStyle.Render(fmt.Sprintf("⚠ Could not verify target: %v", err)))
+		fmt.Println(infoStyle.Render("Saved anyway. Check the URL and credentials before transferring."))
+	} else {
+		fmt.Println(successStyle.Render("✓ Target is reachable and credentials are accepted"))
+	}
+
+	cfg.WebDAVTargets = append(cfg.WebDAVTargets, target)
+	if err := cfg.Save(); err != nil {
+		return fmt.Errorf("failed to save config: %w", err)
+	}
+	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Added WebDAV target %q", name)))
+	return nil
+}
+
+// runWebDAVRemove deletes a configured WebDAV target by name.
+func runWebDAVRemove(cmd *cobra.Command, args []string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	name := args[0]
+	idx := findWebDAVTarget(cfg, name)
+	if idx == -1 {
+		return fmt.Errorf("no WebDAV target named %q", name)
+	}
+	removed := cfg.WebDAVTargets[idx].Name
+	cfg.WebDAVTargets = append(cfg.WebDAVTargets[:idx], cfg.WebDAVTargets[idx+1:]...)
+	if err := cfg.Save(); err != nil {
+		return fmt.Errorf("failed to save config: %w", err)
+	}
+	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Removed WebDAV target %q", removed)))
+	return nil
+}
+
+// runWebDAVEnable enables a target so it appears in the transfer menu.
+func runWebDAVEnable(cmd *cobra.Command, args []string) error {
+	return setWebDAVTargetEnabled(args[0], true)
+}
+
+// runWebDAVDisable disables a target so it is hidden from the transfer menu.
+func runWebDAVDisable(cmd *cobra.Command, args []string) error {
+	return setWebDAVTargetEnabled(args[0], false)
+}
+
+// setWebDAVTargetEnabled toggles the Enabled flag of a target by name and saves.
+func setWebDAVTargetEnabled(name string, enabled bool) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	idx := findWebDAVTarget(cfg, name)
+	if idx == -1 {
+		return fmt.Errorf("no WebDAV target named %q", name)
+	}
+	cfg.WebDAVTargets[idx].Enabled = enabled
+	if err := cfg.Save(); err != nil {
+		return fmt.Errorf("failed to save config: %w", err)
+	}
+	state := "enabled"
+	if !enabled {
+		state = "disabled"
+	}
+	fmt.Println(successStyle.Render(fmt.Sprintf("✓ %s WebDAV target %q", state, cfg.WebDAVTargets[idx].Name)))
 	return nil
 }
 

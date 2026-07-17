@@ -29,15 +29,17 @@ func obscurePassword(rcloneBinary, plaintext string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// UploadToWebDAV pushes one or more rclone remote files onto a gowebdav server
+// UploadToWebDAV pushes one or more rclone remote files onto a WebDAV server
 // via rclone's native WebDAV backend, displaying the same Bubble Tea progress
 // UI used by DownloadMultiple.
 //
 // rclonePaths are rclone remote source paths (the same media.RclonePath values
 // used for downloads). baseURL is the WebDAV root, e.g. "http://192.168.1.10:8080".
-// user/pass are the shared Basic Auth credentials (pass may be empty for
+// user/pass are the server's Basic Auth credentials (pass may be empty for
 // anonymous servers). remoteDir is an optional sub-path under the server root.
-func UploadToWebDAV(ctx context.Context, rclonePaths []string, baseURL, user, pass, remoteDir, rcloneBinary string) error {
+// vendor is the rclone WebDAV vendor; empty defaults to "other", which suits
+// generic servers such as gowebdav.
+func UploadToWebDAV(ctx context.Context, rclonePaths []string, baseURL, user, pass, remoteDir, vendor, rcloneBinary string) error {
 	if len(rclonePaths) == 0 {
 		return fmt.Errorf("no rclone paths provided")
 	}
@@ -54,16 +56,18 @@ func UploadToWebDAV(ctx context.Context, rclonePaths []string, baseURL, user, pa
 		return fmt.Errorf("rclone not found in PATH. Please install rclone or specify the path in config")
 	}
 
-	// gowebdav is a generic WebDAV server (golang.org/x/net/webdav), so use the
-	// "other" vendor. The password flag requires an obscured value.
+	// The password flag requires an obscured value.
 	obscured, err := obscurePassword(rcloneBinary, pass)
 	if err != nil {
 		return err
 	}
 
+	if vendor == "" {
+		vendor = "other"
+	}
 	backendFlags := []string{
 		"--webdav-url", baseURL,
-		"--webdav-vendor", "other",
+		"--webdav-vendor", vendor,
 		"--ignore-checksum",
 	}
 	if user != "" {
