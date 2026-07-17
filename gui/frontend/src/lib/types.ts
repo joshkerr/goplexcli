@@ -44,6 +44,13 @@ export interface MediaCard {
   progressPct: number;
   viewCount: number;
   episodeCount: number;
+  newCount: number; // recently added episodes; set only on New Episodes show cards
+}
+
+export interface Person {
+  name: string;
+  role: "director" | "actor";
+  count: number; // movies with this tag
 }
 
 export interface Media {

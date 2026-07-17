@@ -56,6 +56,13 @@ export function PosterCard({ media, onClick, posterHeight, priority = false }: P
         {/* Hover overlay */}
         <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent opacity-0 transition-opacity duration-200 group-hover:opacity-100" />
 
+        {/* New-episode count, set only on New Episodes show cards */}
+        {media.newCount > 0 && (
+          <div className="absolute left-2 top-2 rounded-full bg-accent px-2 py-0.5 text-[11px] font-semibold text-ink-900 shadow">
+            {media.newCount} new
+          </div>
+        )}
+
         {/* Watched check. Plex resets viewOffset (and so progressPct) to 0 once
             an item is fully watched, only viewCount increments — so a
             completed item must be recognized via progressPct === 0 here, not

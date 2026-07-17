@@ -5,6 +5,7 @@ import type {
   DownloadProgress,
   Media,
   MediaCard,
+  Person,
   PlaybackStatus,
   SortField,
   Status,
@@ -80,6 +81,7 @@ export default function App() {
 
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<MediaCard[] | null>(null);
+  const [people, setPeople] = useState<Person[]>([]);
   const searchTimer = useRef<number | null>(null);
 
   const [downloads, setDownloads] = useState<Record<string, DownloadProgress>>({});
@@ -209,17 +211,25 @@ export default function App() {
     api.movieGenres().then(setMovieGenres).catch(() => {});
   }, [needsSetup]);
 
-  // Debounced search.
+  // Debounced search. Plain queries also fetch actor/director suggestions for
+  // the People row; field-scoped queries (cast:"…" etc.) are already the result
+  // of picking a person, so no suggestions there.
   useEffect(() => {
     if (searchTimer.current) window.clearTimeout(searchTimer.current);
     if (query.trim() === "") {
       setSearchResults(null);
+      setPeople([]);
       return;
     }
+    const isFieldQuery = /^(director|cast|genre):/i.test(query.trim());
     searchTimer.current = window.setTimeout(async () => {
       try {
-        const res = await api.search(query);
+        const [res, ppl] = await Promise.all([
+          api.search(query),
+          isFieldQuery ? Promise.resolve([]) : api.searchPeople(query),
+        ]);
         setSearchResults(res);
+        setPeople(ppl);
       } catch (e: any) {
         toast(String(e?.message ?? e), "error");
       }
@@ -386,6 +396,32 @@ export default function App() {
             />
           </div>
         </header>
+
+        {/* People suggestions: click a person to run the exact cast:/director:
+            filter that previously required typing the query syntax by hand. */}
+        {showSearch && people.length > 0 && (
+          <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-white/5 bg-ink-750 px-8 py-3">
+            <span className="text-[10px] font-semibold uppercase tracking-widest text-white/30">
+              People
+            </span>
+            {people.map((p) => (
+              <button
+                key={`${p.role}:${p.name}`}
+                onClick={() =>
+                  runFieldSearch(
+                    `${p.role === "director" ? "director" : "cast"}:"${p.name}"`
+                  )
+                }
+                className="flex items-center gap-1.5 rounded-full border border-white/10 bg-ink-700 px-3 py-1 text-sm text-white/80 transition-colors hover:border-accent/60 hover:text-white"
+              >
+                {p.name}
+                <span className="text-[10px] font-medium uppercase tracking-wider text-accent/70">
+                  {p.role}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Content. The poster grid owns its own scroll (it's virtualized) and
             stays mounted underneath the Downloads/Settings panels, which overlay

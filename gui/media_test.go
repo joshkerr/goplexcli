@@ -251,3 +251,82 @@ func TestBuildServerConfigs(t *testing.T) {
 		t.Error("expected error when no servers configured")
 	}
 }
+
+func TestRecentShowCards(t *testing.T) {
+	a := NewApp()
+	c := &cache.Cache{Media: []plex.MediaItem{
+		{Key: "m1", Type: "movie", Title: "A Movie", AddedAt: 900},
+		{Key: "e1", Type: "episode", Title: "Old Pilot", ParentTitle: "Show A", AddedAt: 100},
+		{Key: "e2", Type: "episode", Title: "Newest", ParentTitle: "Show B", AddedAt: 500},
+		{Key: "e3", Type: "episode", Title: "Recent A1", ParentTitle: "Show A", AddedAt: 400},
+		{Key: "e4", Type: "episode", Title: "Recent A2", ParentTitle: "Show A", AddedAt: 300},
+	}}
+
+	// Pool limited to the 3 newest episodes: e2 (Show B), e3, e4 (Show A).
+	// e1 falls outside the pool, so Show A's NewCount is 2, not 3.
+	cards := recentShowCards(a, c, 3)
+	if len(cards) != 2 {
+		t.Fatalf("expected 2 show cards, got %d", len(cards))
+	}
+	if cards[0].Title != "Show B" || cards[1].Title != "Show A" {
+		t.Errorf("order: got %q, %q; want Show B, Show A (newest episode first)", cards[0].Title, cards[1].Title)
+	}
+	if cards[0].NewCount != 1 || cards[1].NewCount != 2 {
+		t.Errorf("NewCount: got %d, %d; want 1, 2", cards[0].NewCount, cards[1].NewCount)
+	}
+	if cards[0].Type != "show" || cards[0].Key != "show:Show B" {
+		t.Errorf("card shape: type=%q key=%q; want show / show:Show B", cards[0].Type, cards[0].Key)
+	}
+}
+
+func TestSearchPeople(t *testing.T) {
+	a := NewApp()
+	a.setMedia(&cache.Cache{Media: []plex.MediaItem{
+		{Key: "m1", Type: "movie", Title: "Inception", Director: "Christopher Nolan", Cast: "Leonardo DiCaprio, Elliot Page"},
+		{Key: "m2", Type: "movie", Title: "Oppenheimer", Director: "Christopher Nolan", Cast: "Cillian Murphy"},
+		{Key: "m3", Type: "movie", Title: "Cape Fear", Director: "Martin Scorsese", Cast: "Nick Nolte, Nolan North"},
+		{Key: "e1", Type: "episode", Title: "Pilot", ParentTitle: "Some Show", Director: "Nolan Impostor"},
+	}})
+
+	t.Run("matches directors and actors, ranked by count", func(t *testing.T) {
+		people := a.SearchPeople("nol")
+		if len(people) != 3 {
+			t.Fatalf("got %d people, want 3: %+v", len(people), people)
+		}
+		// "Nolan North" starts with the query so it ranks first; among the
+		// substring matches, count decides: Nolan (2 movies) before Nolte (1).
+		want := []string{"Nolan North", "Christopher Nolan", "Nick Nolte"}
+		for i, name := range want {
+			if people[i].Name != name {
+				t.Errorf("person %d: got %q, want %q", i, people[i].Name, name)
+			}
+		}
+		if people[1].Role != "director" || people[1].Count != 2 {
+			t.Errorf("Nolan: %+v; want director with count 2", people[1])
+		}
+	})
+
+	t.Run("prefix match outranks higher count", func(t *testing.T) {
+		people := a.SearchPeople("nolan")
+		if len(people) != 2 {
+			t.Fatalf("got %d people, want 2: %+v", len(people), people)
+		}
+		// "Nolan North" starts with the query, so it beats Christopher Nolan
+		// despite Nolan's higher movie count.
+		if people[0].Name != "Nolan North" || people[1].Name != "Christopher Nolan" {
+			t.Errorf("order: got %q, %q; want Nolan North first", people[0].Name, people[1].Name)
+		}
+	})
+
+	t.Run("episodes are ignored", func(t *testing.T) {
+		for _, p := range a.SearchPeople("impostor") {
+			t.Errorf("episode-only person leaked into results: %+v", p)
+		}
+	})
+
+	t.Run("short queries return nothing", func(t *testing.T) {
+		if got := a.SearchPeople("n"); len(got) != 0 {
+			t.Errorf("1-char query: got %+v, want none", got)
+		}
+	})
+}

@@ -53,6 +53,14 @@ type MediaCardDTO struct {
 	ProgressPct  int    `json:"progressPct"`
 	ViewCount    int    `json:"viewCount"`
 	EpisodeCount int    `json:"episodeCount"`
+	NewCount     int    `json:"newCount"` // recently added episodes; set only by recentShowCards
+}
+
+// PersonDTO is one actor/director suggestion for the search bar's People row.
+type PersonDTO struct {
+	Name  string `json:"name"`
+	Role  string `json:"role"`  // "director" | "actor"
+	Count int    `json:"count"` // number of movies with this tag
 }
 
 // SeasonDTO describes one season of a show for the drill-down view.
@@ -219,7 +227,7 @@ type BrowseOptions struct {
 //	movies                  — all movies, filtered/sorted per opts (default A-Z)
 //	tv-shows                — distinct shows (grouped from episodes), A-Z
 //	recently-added-movies   — newest movies by AddedAt
-//	recently-added-tv       — newest episodes by AddedAt
+//	recently-added-tv       — shows with the newest episodes, one card per show
 //	continue-watching       — in-progress items, most recently viewed first
 func (a *App) ListCategory(category string, opts BrowseOptions) []MediaCardDTO {
 	c := a.media()
@@ -243,7 +251,7 @@ func (a *App) ListCategory(category string, opts BrowseOptions) []MediaCardDTO {
 		return a.warmedCards(recentlyAddedCards(a, c, "movie", 60))
 
 	case "recently-added-tv":
-		return a.warmedCards(recentlyAddedCards(a, c, "episode", 60))
+		return a.warmedCards(recentShowCards(a, c, 60))
 
 	case "continue-watching":
 		var items []*plex.MediaItem
@@ -437,6 +445,48 @@ func recentlyAddedCards(a *App, c *cache.Cache, mediaType string, limit int) []M
 	out := make([]MediaCardDTO, 0, len(items))
 	for _, it := range items {
 		out = append(out, a.toCard(it))
+	}
+	return out
+}
+
+// recentShowCards groups the `limit` newest episodes into one card per show,
+// ordered by each show's newest episode. NewCount says how many of those
+// recent episodes belong to the show; the card carries the synthetic
+// "show:<title>" key so opening it lands in the show detail view.
+func recentShowCards(a *App, c *cache.Cache, limit int) []MediaCardDTO {
+	var episodes []*plex.MediaItem
+	for i := range c.Media {
+		if c.Media[i].Type == "episode" && c.Media[i].ParentTitle != "" {
+			episodes = append(episodes, &c.Media[i])
+		}
+	}
+	sort.Slice(episodes, func(i, j int) bool { return episodes[i].AddedAt > episodes[j].AddedAt })
+	if limit > 0 && len(episodes) > limit {
+		episodes = episodes[:limit]
+	}
+
+	order := []string{}
+	byShow := map[string]*MediaCardDTO{}
+	for _, ep := range episodes {
+		card, ok := byShow[ep.ParentTitle]
+		if !ok {
+			card = &MediaCardDTO{
+				Key:          "show:" + ep.ParentTitle,
+				Type:         "show",
+				Title:        ep.ParentTitle,
+				DisplayTitle: ep.ParentTitle,
+				Year:         ep.Year,
+				ThumbURL:     a.showThumbURL(ep, 320, 480),
+			}
+			byShow[ep.ParentTitle] = card
+			order = append(order, ep.ParentTitle)
+		}
+		card.NewCount++
+	}
+
+	out := make([]MediaCardDTO, 0, len(order))
+	for _, name := range order {
+		out = append(out, *byShow[name])
 	}
 	return out
 }
@@ -637,6 +687,72 @@ func (a *App) Search(query string) []MediaCardDTO {
 	}
 	a.warmCards(out)
 	return nonNilCards(out)
+}
+
+// searchPeopleLimit caps the People suggestion row in the search bar.
+const searchPeopleLimit = 8
+
+// SearchPeople returns actor/director suggestions whose names contain the
+// query (case-insensitive, 2+ characters) for the search bar's People row.
+// Prefix matches rank first, then higher movie counts. Movies only — the same
+// scope the cast:/director: field filters cover.
+func (a *App) SearchPeople(query string) []PersonDTO {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if len(query) < 2 {
+		return []PersonDTO{}
+	}
+	c := a.media()
+	if c == nil {
+		return []PersonDTO{}
+	}
+
+	// Dedupe case-insensitively per role; the first spelling seen wins.
+	type personKey struct{ role, lower string }
+	seen := map[personKey]*PersonDTO{}
+	add := func(role, name string) {
+		name = strings.TrimSpace(name)
+		if name == "" || !strings.Contains(strings.ToLower(name), query) {
+			return
+		}
+		k := personKey{role, strings.ToLower(name)}
+		if p := seen[k]; p != nil {
+			p.Count++
+			return
+		}
+		seen[k] = &PersonDTO{Name: name, Role: role, Count: 1}
+	}
+	for i := range c.Media {
+		m := &c.Media[i]
+		if m.Type != "movie" {
+			continue
+		}
+		for _, name := range strings.Split(m.Director, ",") {
+			add("director", name)
+		}
+		for _, name := range strings.Split(m.Cast, ",") {
+			add("actor", name)
+		}
+	}
+
+	out := make([]PersonDTO, 0, len(seen))
+	for _, p := range seen {
+		out = append(out, *p)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		pi := strings.HasPrefix(strings.ToLower(out[i].Name), query)
+		pj := strings.HasPrefix(strings.ToLower(out[j].Name), query)
+		if pi != pj {
+			return pi
+		}
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+	})
+	if len(out) > searchPeopleLimit {
+		out = out[:searchPeopleLimit]
+	}
+	return out
 }
 
 // nonNilCards guarantees a non-nil slice so the frontend always receives a JSON

@@ -10,6 +10,7 @@ import type {
   DownloadProgress,
   Media,
   MediaCard,
+  Person,
   Season,
   Server,
   ServerSelection,
@@ -33,6 +34,7 @@ type WailsApp = {
   CheckUpdate(): Promise<UpdateInfo>;
   ApplyUpdate(): Promise<void>;
   Search(query: string): Promise<MediaCard[]>;
+  SearchPeople(query: string): Promise<Person[] | null>;
   GetItem(key: string): Promise<Media>;
   GetSeasons(showTitle: string): Promise<Season[]>;
   GetEpisodes(showTitle: string, season: number): Promise<Media[]>;
@@ -105,6 +107,7 @@ export const api = {
   checkUpdate: () => app().CheckUpdate(),
   applyUpdate: () => app().ApplyUpdate(),
   search: (q: string) => app().Search(q),
+  searchPeople: async (q: string) => (await app().SearchPeople(q)) ?? [],
   getItem: (key: string) => app().GetItem(key),
   getSeasons: (show: string) => app().GetSeasons(show),
   getEpisodes: (show: string, season: number) =>
