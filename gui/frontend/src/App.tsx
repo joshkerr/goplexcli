@@ -163,6 +163,28 @@ export default function App() {
     [toast]
   );
 
+  const pauseDownload = useCallback(
+    async (id: string) => {
+      try {
+        await api.pauseDownload(id);
+      } catch (e: any) {
+        toast(String(e?.message ?? e), "error");
+      }
+    },
+    [toast]
+  );
+
+  const resumeDownload = useCallback(
+    async (id: string) => {
+      try {
+        await api.resumeDownload(id);
+      } catch (e: any) {
+        toast(String(e?.message ?? e), "error");
+      }
+    },
+    [toast]
+  );
+
   const clearDownloadHistory = useCallback(async () => {
     try {
       await api.clearDownloadHistory();
@@ -452,6 +474,8 @@ export default function App() {
               <DownloadsPanel
                 downloads={downloadList}
                 onCancel={cancelDownload}
+                onPause={pauseDownload}
+                onResume={resumeDownload}
                 onClearHistory={clearDownloadHistory}
               />
             </div>

@@ -94,6 +94,12 @@ export const PlayIcon = (p: IconProps) => (
   </svg>
 );
 
+export const PauseIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M9 5v14M15 5v14" />
+  </svg>
+);
+
 export const ResumeIcon = (p: IconProps) => (
   <svg {...base(p)}>
     <path d="M3 12a9 9 0 1 0 3-6.7M3 4v4h4" />

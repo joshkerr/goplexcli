@@ -1,26 +1,41 @@
 import type { DownloadProgress } from "../lib/types";
 import { formatBytes, formatSpeed } from "../lib/format";
-import { CloseIcon, DownloadIcon } from "./icons";
+import { CloseIcon, DownloadIcon, PauseIcon, PlayIcon } from "./icons";
 
 interface Props {
   downloads: DownloadProgress[];
   onCancel: (id: string) => void;
+  onPause: (id: string) => void;
+  onResume: (id: string) => void;
   onClearHistory: () => void;
 }
 
 const STATUS_LABEL: Record<DownloadProgress["status"], string> = {
   pending: "Queued",
   in_progress: "Downloading",
+  paused: "Paused",
   completed: "Completed",
   failed: "Failed",
   cancelled: "Cancelled",
 };
 
+// Active entries (including paused ones) show control buttons and are kept by
+// Clear History.
 function isActive(d: DownloadProgress) {
-  return d.status === "pending" || d.status === "in_progress";
+  return (
+    d.status === "pending" ||
+    d.status === "in_progress" ||
+    d.status === "paused"
+  );
 }
 
-export function DownloadsPanel({ downloads, onCancel, onClearHistory }: Props) {
+export function DownloadsPanel({
+  downloads,
+  onCancel,
+  onPause,
+  onResume,
+  onClearHistory,
+}: Props) {
   if (downloads.length === 0) {
     return (
       <div className="flex h-full min-h-[40vh] flex-col items-center justify-center text-center text-white/40">
@@ -74,6 +89,24 @@ export function DownloadsPanel({ downloads, onCancel, onClearHistory }: Props) {
             <div className="shrink-0 text-sm font-semibold tabular-nums text-white/70">
               {Math.round(d.percent)}%
             </div>
+            {(d.status === "pending" || d.status === "in_progress") && (
+              <button
+                onClick={() => onPause(d.id)}
+                title="Pause download"
+                className="shrink-0 rounded-lg border border-white/10 bg-ink-700 p-1.5 text-white/50 hover:border-accent/60 hover:text-white"
+              >
+                <PauseIcon width={14} height={14} />
+              </button>
+            )}
+            {d.status === "paused" && (
+              <button
+                onClick={() => onResume(d.id)}
+                title="Resume download (restarts from the beginning)"
+                className="shrink-0 rounded-lg border border-white/10 bg-ink-700 p-1.5 text-white/50 hover:border-accent/60 hover:text-white"
+              >
+                <PlayIcon width={14} height={14} />
+              </button>
+            )}
             {isActive(d) && (
               <button
                 onClick={() => onCancel(d.id)}
@@ -91,6 +124,8 @@ export function DownloadsPanel({ downloads, onCancel, onClearHistory }: Props) {
                   ? "bg-red-500"
                   : d.status === "cancelled"
                   ? "bg-white/20"
+                  : d.status === "paused"
+                  ? "bg-amber-400/80"
                   : d.status === "completed"
                   ? "bg-emerald-500"
                   : "bg-accent"

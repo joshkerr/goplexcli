@@ -42,6 +42,8 @@ type WailsApp = {
   Download(keys: string[], destOverride: string): Promise<void>;
   ListDownloads(): Promise<DownloadProgress[] | null>;
   CancelDownload(id: string): Promise<void>;
+  PauseDownload(id: string): Promise<void>;
+  ResumeDownload(id: string): Promise<void>;
   ClearDownloadHistory(): Promise<void>;
 };
 
@@ -116,6 +118,8 @@ export const api = {
   download: (keys: string[], dest: string) => app().Download(keys, dest),
   listDownloads: async () => (await app().ListDownloads()) ?? [],
   cancelDownload: (id: string) => app().CancelDownload(id),
+  pauseDownload: (id: string) => app().PauseDownload(id),
+  resumeDownload: (id: string) => app().ResumeDownload(id),
   clearDownloadHistory: () => app().ClearDownloadHistory(),
 };
 

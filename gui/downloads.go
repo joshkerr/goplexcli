@@ -23,7 +23,7 @@ type DownloadProgress struct {
 	Seq     int64   `json:"seq"` // monotonically increasing; higher = added later
 	Name    string  `json:"name"`
 	Percent float64 `json:"percent"`
-	Status  string  `json:"status"` // pending | in_progress | completed | failed | cancelled
+	Status  string  `json:"status"` // pending | in_progress | paused | completed | failed | cancelled
 	Bytes   int64   `json:"bytes"`
 	Total   int64   `json:"total"`
 	Speed   int64   `json:"speed"` // bytes/sec, as reported by rclone (0 if unknown)
@@ -165,9 +165,9 @@ func (a *App) runRclone(bin string, j downloadJob) error {
 	defer cancel()
 
 	// Register the cancel func so CancelDownload can reach this transfer —
-	// unless the job was already cancelled while it sat in the queue.
+	// unless the job was already cancelled or paused while it sat in the queue.
 	a.dlStateMu.Lock()
-	if e, ok := a.dlHist[j.id]; ok && e.Status == "cancelled" {
+	if e, ok := a.dlHist[j.id]; ok && (e.Status == "cancelled" || e.Status == "paused") {
 		a.dlStateMu.Unlock()
 		return nil
 	}
@@ -176,6 +176,7 @@ func (a *App) runRclone(bin string, j downloadJob) error {
 	defer func() {
 		a.dlStateMu.Lock()
 		delete(a.dlCancels, j.id)
+		delete(a.dlPauseReq, j.id)
 		a.dlStateMu.Unlock()
 	}()
 
@@ -191,7 +192,9 @@ func (a *App) runRclone(bin string, j downloadJob) error {
 	}
 	if err := cmd.Start(); err != nil {
 		if ctx.Err() != nil {
-			if !a.quitting.Load() {
+			if a.consumePauseReq(j.id) {
+				a.pausedDownload(j, 0, 0, 0)
+			} else if !a.quitting.Load() {
 				a.cancelledDownload(j, 0, 0, 0)
 			}
 			return nil
@@ -237,11 +240,14 @@ func (a *App) runRclone(bin string, j downloadJob) error {
 
 	if err := cmd.Wait(); err != nil {
 		// A cancelled transfer is not a failure — report it as such and don't
-		// bubble an error up to the Download() caller. If the cancel came from
-		// app shutdown rather than the user, leave the on-disk "in_progress"
-		// entry alone so the download restarts on the next launch.
+		// bubble an error up to the Download() caller. A kill triggered by
+		// PauseDownload records "paused" (resumable) instead. If the cancel
+		// came from app shutdown rather than the user, leave the on-disk
+		// "in_progress" entry alone so the download restarts on the next launch.
 		if ctx.Err() != nil {
-			if !a.quitting.Load() {
+			if a.consumePauseReq(j.id) {
+				a.pausedDownload(j, lastPct, lastBytes, lastTotal)
+			} else if !a.quitting.Load() {
 				a.cancelledDownload(j, lastPct, lastBytes, lastTotal)
 			}
 			return nil
@@ -270,6 +276,28 @@ func (a *App) cancelledDownload(j downloadJob, pct float64, bytes, total int64) 
 		ID: j.id, Seq: j.seq, Name: j.name, Status: "cancelled",
 		Percent: pct, Bytes: bytes, Total: total,
 	})
+}
+
+// pausedDownload records a paused transfer, keeping the progress it reached so
+// the panel can show where it stopped. (The numbers are informational: rclone
+// can't continue a partial file, so a resume restarts from zero.)
+func (a *App) pausedDownload(j downloadJob, pct float64, bytes, total int64) {
+	a.recordDownload(DownloadProgress{
+		ID: j.id, Seq: j.seq, Name: j.name, Status: "paused",
+		Percent: pct, Bytes: bytes, Total: total,
+	})
+}
+
+// consumePauseReq reports whether the job's context cancellation was a pause
+// request, clearing the flag.
+func (a *App) consumePauseReq(id string) bool {
+	a.dlStateMu.Lock()
+	defer a.dlStateMu.Unlock()
+	if a.dlPauseReq[id] {
+		delete(a.dlPauseReq, id)
+		return true
+	}
+	return false
 }
 
 // recordDownload stores the latest state for the Downloads panel, emits the
@@ -322,9 +350,9 @@ func (a *App) ListDownloads() []DownloadProgress {
 	return out
 }
 
-// CancelDownload aborts a queued or in-flight download. Queued jobs are
-// skipped when their turn comes; the in-flight job's rclone process is killed
-// via its context.
+// CancelDownload aborts a queued, paused, or in-flight download. Queued jobs
+// are skipped when their turn comes; the in-flight job's rclone process is
+// killed via its context.
 func (a *App) CancelDownload(id string) error {
 	a.dlStateMu.Lock()
 	e, ok := a.dlHist[id]
@@ -333,7 +361,7 @@ func (a *App) CancelDownload(id string) error {
 		return fmt.Errorf("unknown download %q", id)
 	}
 	switch e.Status {
-	case "pending":
+	case "pending", "paused":
 		dp := *e
 		dp.Status = "cancelled"
 		a.dlStateMu.Unlock()
@@ -351,8 +379,91 @@ func (a *App) CancelDownload(id string) error {
 	return nil
 }
 
+// PauseDownload pauses a queued or in-flight download. Paused entries survive
+// quitting the app (they persist as "paused" in downloads.json and are not
+// auto-restarted on launch) and resume only when the user asks. Pausing the
+// in-flight transfer kills its rclone process; the resumed file restarts from
+// zero because rclone cannot continue a partial transfer.
+func (a *App) PauseDownload(id string) error {
+	a.dlStateMu.Lock()
+	e, ok := a.dlHist[id]
+	if !ok {
+		a.dlStateMu.Unlock()
+		return fmt.Errorf("unknown download %q", id)
+	}
+	switch e.Status {
+	case "pending":
+		dp := *e
+		dp.Status = "paused"
+		a.dlStateMu.Unlock()
+		a.recordDownload(dp)
+	case "in_progress":
+		// Mark the kill as a pause before cancelling so runRclone's exit path
+		// can't observe the cancel first and record "cancelled".
+		a.dlPauseReq[id] = true
+		cancel := a.dlCancels[id]
+		a.dlStateMu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+	default:
+		// Already finished (or already paused); nothing to do.
+		a.dlStateMu.Unlock()
+	}
+	return nil
+}
+
+// ResumeDownload requeues a paused download behind whatever is already
+// transferring. The file restarts from the beginning (rclone cannot continue
+// a partial file), so progress is reset rather than continued.
+func (a *App) ResumeDownload(id string) error {
+	a.dlStateMu.Lock()
+	e, ok := a.dlHist[id]
+	if !ok {
+		a.dlStateMu.Unlock()
+		return fmt.Errorf("unknown download %q", id)
+	}
+	if e.Status != "paused" {
+		// Already resumed, finished, or never paused — nothing to do.
+		a.dlStateMu.Unlock()
+		return nil
+	}
+	if e.Src == "" || e.Dest == "" {
+		a.dlStateMu.Unlock()
+		return fmt.Errorf("download %q is missing its source and cannot be resumed", id)
+	}
+	// Flip to pending under the lock so a rapid double-resume can't queue the
+	// job twice.
+	e.Status = "pending"
+	e.Percent, e.Bytes, e.Speed = 0, 0, 0
+	e.Error = ""
+	dp := *e
+	j := downloadJob{id: e.ID, seq: e.Seq, src: e.Src, dest: e.Dest, name: e.Name}
+	a.dlStateMu.Unlock()
+
+	a.emitDownload(dp)
+	if err := a.saveDownloadHistory(); err != nil {
+		fmt.Printf("failed to save download history: %v\n", err)
+	}
+
+	cfg := a.config()
+	bin := cfg.RclonePath
+	if bin == "" {
+		bin = "rclone"
+	}
+	if _, err := exec.LookPath(bin); err != nil {
+		return a.failDownload(j, fmt.Errorf("cannot resume: rclone not found (%q)", bin))
+	}
+	go func() {
+		a.dlMu.Lock()
+		_ = a.runRclone(bin, j)
+		a.dlMu.Unlock()
+	}()
+	return nil
+}
+
 // ClearDownloadHistory removes all finished (completed/failed/cancelled)
-// entries, keeping active jobs, and persists the result.
+// entries, keeping active and paused jobs, and persists the result.
 func (a *App) ClearDownloadHistory() error {
 	a.dlStateMu.Lock()
 	for id, e := range a.dlHist {
@@ -402,7 +513,8 @@ func (a *App) saveDownloadHistory() error {
 
 // loadDownloadHistory restores persisted history at startup and returns the
 // jobs that were still queued or transferring when the app last quit, oldest
-// first, so the caller can restart them. Interrupted entries missing their
+// first, so the caller can restart them. Paused entries are restored as-is —
+// they wait for an explicit ResumeDownload. Interrupted entries missing their
 // src/dest (pre-restart-support history) can't be requeued and are marked
 // failed instead.
 func (a *App) loadDownloadHistory() []downloadJob {

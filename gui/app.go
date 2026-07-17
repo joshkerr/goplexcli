@@ -46,13 +46,16 @@ type App struct {
 	dlMu  sync.Mutex
 	dlSeq atomic.Int64
 
-	// dlStateMu guards dlHist and dlCancels. dlHist tracks every download
-	// (live and finished) for the Downloads panel; terminal entries persist to
-	// downloads.json in the cache dir so history survives relaunches.
-	// dlCancels holds the cancel func for the in-flight rclone transfer.
-	dlStateMu sync.Mutex
-	dlHist    map[string]*DownloadProgress
-	dlCancels map[string]context.CancelFunc
+	// dlStateMu guards dlHist, dlCancels, and dlPauseReq. dlHist tracks every
+	// download (live and finished) for the Downloads panel; terminal entries
+	// persist to downloads.json in the cache dir so history survives
+	// relaunches. dlCancels holds the cancel func for the in-flight rclone
+	// transfer. dlPauseReq marks in-flight transfers whose cancel was a user
+	// pause, so runRclone records them as "paused" instead of "cancelled".
+	dlStateMu  sync.Mutex
+	dlHist     map[string]*DownloadProgress
+	dlCancels  map[string]context.CancelFunc
+	dlPauseReq map[string]bool
 
 	// quitting is set during shutdown so killed transfers keep their on-disk
 	// "in_progress"/"pending" state (and restart next launch) instead of
@@ -77,9 +80,10 @@ type App struct {
 // NewApp creates a new App. Config is loaded lazily in startup.
 func NewApp() *App {
 	a := &App{
-		posters:   newPosterCache(http.DefaultClient),
-		dlHist:    make(map[string]*DownloadProgress),
-		dlCancels: make(map[string]context.CancelFunc),
+		posters:    newPosterCache(http.DefaultClient),
+		dlHist:     make(map[string]*DownloadProgress),
+		dlCancels:  make(map[string]context.CancelFunc),
+		dlPauseReq: make(map[string]bool),
 	}
 	a.lan = a.newSyncServer()
 	return a

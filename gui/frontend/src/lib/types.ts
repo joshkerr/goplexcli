@@ -100,7 +100,13 @@ export interface DownloadProgress {
   seq: number; // monotonically increasing; higher = added later
   name: string;
   percent: number;
-  status: "pending" | "in_progress" | "completed" | "failed" | "cancelled";
+  status:
+    | "pending"
+    | "in_progress"
+    | "paused"
+    | "completed"
+    | "failed"
+    | "cancelled";
   bytes: number;
   total: number;
   speed: number; // bytes/sec (0 if unknown)
