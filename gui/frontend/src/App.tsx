@@ -14,6 +14,7 @@ import { Sidebar, type NavKey } from "./components/Sidebar";
 import { PosterGrid } from "./components/PosterGrid";
 import { DetailModal } from "./components/DetailModal";
 import { DownloadsPanel } from "./components/DownloadsPanel";
+import { Splash } from "./components/Splash";
 import { Toasts, type Toast } from "./components/Toasts";
 import { Setup } from "./views/Setup";
 import { Settings } from "./views/Settings";
@@ -283,25 +284,28 @@ export default function App() {
   );
 
   useEffect(() => {
-    if (needsSetup) return;
+    if (!status || needsSetup) return;
     if (searchResults !== null) return;
     loadCategory(browseCategory);
-  }, [browseCategory, needsSetup, loadCategory, searchResults]);
+  }, [browseCategory, status, needsSetup, loadCategory, searchResults]);
 
-  // Populate the movie genre filter once the library is ready.
+  // Populate the movie genre filter once the library is ready. Gated on
+  // status (not just needsSetup, which is null while status is loading):
+  // before the bindings are up, api.movieGenres throws synchronously and
+  // would crash the tree during the splash.
   useEffect(() => {
-    if (needsSetup) return;
+    if (!status || needsSetup) return;
     api.movieGenres().then(setMovieGenres).catch(() => {});
-  }, [needsSetup]);
+  }, [status, needsSetup]);
 
   // Load the persisted favorites once the library is ready.
   useEffect(() => {
-    if (needsSetup) return;
+    if (!status || needsSetup) return;
     api
       .listFavoriteKeys()
       .then((keys) => setFavorites(new Set(keys)))
       .catch(() => {});
-  }, [needsSetup]);
+  }, [status, needsSetup]);
 
   // Favorites can change out from under us — another machine pushing its set
   // to our LAN sync server, or a background/explicit sync merging a peer's.
@@ -408,7 +412,7 @@ export default function App() {
 
   if (!status) {
     return (
-      <div className="flex h-full items-center justify-center bg-ink-900 px-8 text-center">
+      <Splash>
         {startupError ? (
           <div className="max-w-lg">
             <div className="text-base font-semibold text-white/80">
@@ -423,9 +427,9 @@ export default function App() {
             </button>
           </div>
         ) : (
-          <div className="text-white/40">Loading…</div>
+          <div className="animate-pulse text-sm text-white/40">Loading…</div>
         )}
-      </div>
+      </Splash>
     );
   }
 

@@ -39,9 +39,19 @@ export default {
           "0%": { opacity: "0", transform: "translateY(6px)" },
           "100%": { opacity: "1", transform: "translateY(0)" },
         },
+        breathe: {
+          "0%, 100%": { transform: "scale(1)" },
+          "50%": { transform: "scale(1.05)" },
+        },
+        glow: {
+          "0%, 100%": { opacity: "0.6", transform: "scale(1)" },
+          "50%": { opacity: "1", transform: "scale(1.15)" },
+        },
       },
       animation: {
         "fade-in": "fade-in 0.18s ease-out",
+        breathe: "breathe 3s ease-in-out infinite",
+        glow: "glow 3s ease-in-out infinite",
       },
     },
   },
