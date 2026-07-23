@@ -11,8 +11,10 @@ import (
 
 // newSyncServer builds the LAN cache-sync server for the GUI. Its freshness is
 // read from the in-memory cache (cheap — no re-parse of the large media.json).
+// It also serves this machine's favorites, and merges in sets pushed by peers,
+// refreshing the frontend's stars when that happens.
 func (a *App) newSyncServer() *lansync.Server {
-	return lansync.NewServer(func() lansync.Meta {
+	srv := lansync.NewServer(func() lansync.Meta {
 		m := lansync.Meta{}
 		if c := a.media(); c != nil {
 			m.Count = len(c.Media)
@@ -20,6 +22,29 @@ func (a *App) newSyncServer() *lansync.Server {
 		}
 		return m
 	})
+	srv.ServeFavorites(a.fav, a.emitFavoritesChanged)
+	return srv
+}
+
+// syncFavoritesAtStartup merges favorites with LAN peers in the background
+// shortly after launch, so machines converge without waiting for an explicit
+// Sync. Favorites are a few KB, so this is cheap; failures are silent — the
+// next explicit sync (or a peer's push) will catch up.
+func (a *App) syncFavoritesAtStartup() {
+	ctx := context.Background()
+	var peers []lansync.Peer
+	if peer := strings.TrimSpace(a.config().SyncPeer); peer != "" {
+		peers = []lansync.Peer{{Addr: lansync.NormalizePeerAddr(peer)}}
+	} else {
+		discovered, err := lansync.Discover(ctx, a.lan.Instance())
+		if err != nil {
+			return
+		}
+		peers = discovered
+	}
+	if lansync.SyncFavoritesWith(ctx, a.fav, peers, nil) {
+		a.emitFavoritesChanged()
+	}
 }
 
 // SyncFromLAN pulls the newest media cache from another computer and hot-swaps
@@ -45,9 +70,14 @@ func (a *App) SyncFromLAN() error {
 	var res lansync.Result
 	var err error
 	if peer := strings.TrimSpace(a.config().SyncPeer); peer != "" {
-		res, err = lansync.SyncFromPeer(context.Background(), lansync.NormalizePeerAddr(peer), local, a.emitSyncProgress)
+		res, err = lansync.SyncFromPeer(context.Background(), lansync.NormalizePeerAddr(peer), local, a.fav, a.emitSyncProgress)
 	} else {
-		res, err = lansync.SyncFromLAN(context.Background(), a.lan.Instance(), local, a.emitSyncProgress)
+		res, err = lansync.SyncFromLAN(context.Background(), a.lan.Instance(), local, a.fav, a.emitSyncProgress)
+	}
+	// Favorites merge before the cache transfer, so honor the flag even when
+	// the cache part failed.
+	if res.FavoritesChanged {
+		a.emitFavoritesChanged()
 	}
 	if err != nil {
 		a.emitSyncDone(map[string]any{"error": err.Error()})
@@ -76,4 +106,14 @@ func (a *App) emitSyncDone(payload map[string]any) {
 		return
 	}
 	wruntime.EventsEmit(a.ctx, "sync:done", payload)
+}
+
+// emitFavoritesChanged tells the frontend the favorites set changed outside a
+// user toggle (a peer's push, or a background/explicit sync) so it refreshes
+// its stars and any open favorites grid.
+func (a *App) emitFavoritesChanged() {
+	if a.ctx == nil {
+		return
+	}
+	wruntime.EventsEmit(a.ctx, "favorites:changed", nil)
 }

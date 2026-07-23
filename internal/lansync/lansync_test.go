@@ -2,10 +2,12 @@ package lansync
 
 import (
 	"context"
+	"path/filepath"
 	"strconv"
 	"testing"
 
 	"github.com/joshkerr/goplexcli/internal/cache"
+	"github.com/joshkerr/goplexcli/internal/favorites"
 	"github.com/joshkerr/goplexcli/internal/plex"
 )
 
@@ -62,6 +64,58 @@ func TestRoundTrip(t *testing.T) {
 	}
 	if !loaded.LastUpdated.Equal(meta.LastUpdated) {
 		t.Errorf("LastUpdated not preserved: got %v, want %v", loaded.LastUpdated, meta.LastUpdated)
+	}
+}
+
+// TestFavoritesSync exercises the /favorites endpoints end to end: the client
+// pulls the server's set, merges it locally, pushes the merged set back, and
+// both sides converge — each keeping its own favorites plus the other's.
+func TestFavoritesSync(t *testing.T) {
+	serverStore := favorites.NewStoreAt(filepath.Join(t.TempDir(), "favorites.json"))
+	clientStore := favorites.NewStoreAt(filepath.Join(t.TempDir(), "favorites.json"))
+	if _, err := serverStore.Toggle("server-movie"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := clientStore.Toggle("show:Client Show"); err != nil {
+		t.Fatal(err)
+	}
+
+	notified := 0
+	srv := NewServer(nil)
+	srv.ServeFavorites(serverStore, func() { notified++ })
+	if err := srv.StartOn(0); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer srv.Close(context.Background())
+	if srv.Port() == 0 {
+		t.Skip("could not bind LAN sync server in this environment")
+	}
+
+	peer := Peer{Instance: "host-1", Addr: "127.0.0.1:" + strconv.Itoa(srv.Port())}
+	if !SyncFavoritesWith(context.Background(), clientStore, []Peer{peer}, nil) {
+		t.Fatal("client set should have changed")
+	}
+
+	want := []string{"server-movie", "show:Client Show"}
+	for name, st := range map[string]*favorites.Store{"client": clientStore, "server": serverStore} {
+		keys, err := st.Keys()
+		if err != nil {
+			t.Fatalf("%s keys: %v", name, err)
+		}
+		if len(keys) != 2 || keys[0] != want[0] || keys[1] != want[1] {
+			t.Errorf("%s keys = %v; want %v", name, keys, want)
+		}
+	}
+	if notified != 1 {
+		t.Errorf("onChange called %d times; want 1", notified)
+	}
+
+	// A second sync is a no-op on both sides.
+	if SyncFavoritesWith(context.Background(), clientStore, []Peer{peer}, nil) {
+		t.Error("second sync reported a change")
+	}
+	if notified != 1 {
+		t.Errorf("onChange after no-op sync = %d; want still 1", notified)
 	}
 }
 

@@ -250,6 +250,22 @@ export default function App() {
       .catch(() => {});
   }, [needsSetup]);
 
+  // Favorites can change out from under us — another machine pushing its set
+  // to our LAN sync server, or a background/explicit sync merging a peer's.
+  // Refresh the star set and, if a favorites grid is showing, its contents.
+  useEffect(() => {
+    const off = onEvent("favorites:changed", () => {
+      api
+        .listFavoriteKeys()
+        .then((keys) => setFavorites(new Set(keys)))
+        .catch(() => {});
+      if (browseCategory === "favorites-movies" || browseCategory === "favorites-tv") {
+        loadCategory(browseCategory);
+      }
+    });
+    return off;
+  }, [browseCategory, loadCategory]);
+
   // Shows only carry title/year/added-order, so the other sort fields don't
   // apply; snap back to title when landing on the Favorites TV grid with one.
   useEffect(() => {

@@ -12,6 +12,7 @@ import (
 	"github.com/joshkerr/goplexcli/internal/cache"
 	"github.com/joshkerr/goplexcli/internal/config"
 	"github.com/joshkerr/goplexcli/internal/download"
+	"github.com/joshkerr/goplexcli/internal/favorites"
 	"github.com/joshkerr/goplexcli/internal/lansync"
 	"github.com/joshkerr/goplexcli/internal/player"
 	"github.com/joshkerr/goplexcli/internal/plex"
@@ -70,11 +71,9 @@ type App struct {
 	mediaMu    sync.RWMutex
 	mediaCache *cache.Cache
 
-	// favMu guards favorites, the set of favorited card keys (movie keys and
-	// synthetic "show:<title>" keys). Loaded lazily from favorites.json on
-	// first use; nil until then. See gui/favorites.go.
-	favMu     sync.Mutex
-	favorites map[string]bool
+	// fav is the favorites store (movie keys and synthetic "show:<title>"
+	// keys), shared with the LAN sync server so peers can read and merge it.
+	fav *favorites.Store
 
 	posters *posterCache
 
@@ -90,6 +89,7 @@ func NewApp() *App {
 		dlHist:     make(map[string]*DownloadProgress),
 		dlCancels:  make(map[string]context.CancelFunc),
 		dlPauseReq: make(map[string]bool),
+		fav:        favorites.NewStore(),
 	}
 	a.lan = a.newSyncServer()
 	return a
@@ -109,6 +109,7 @@ func (a *App) startup(ctx context.Context) {
 	} else if err := a.lan.AdvertiseError(); err != nil {
 		fmt.Printf("lan cache sync discovery disabled: %v\n", err)
 	}
+	go a.syncFavoritesAtStartup()
 	if cfg, err := config.Load(); err == nil {
 		a.mu.Lock()
 		a.cfg = cfg

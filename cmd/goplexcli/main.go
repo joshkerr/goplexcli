@@ -25,6 +25,7 @@ import (
 	"github.com/joshkerr/goplexcli/internal/config"
 	"github.com/joshkerr/goplexcli/internal/download"
 	apperrors "github.com/joshkerr/goplexcli/internal/errors"
+	"github.com/joshkerr/goplexcli/internal/favorites"
 	"github.com/joshkerr/goplexcli/internal/lansync"
 	"github.com/joshkerr/goplexcli/internal/logging"
 	"github.com/joshkerr/goplexcli/internal/outplayer"
@@ -3544,6 +3545,10 @@ func runServerRemove(cmd *cobra.Command, args []string) error {
 func runSyncServe(cmd *cobra.Command, args []string) error {
 	// Freshness is reported from the sidecar so we never parse the large cache.
 	srv := lansync.NewServer(lansync.CacheMetaFunc())
+	// Serve favorites too: peers pull and push their sets here, which makes an
+	// always-on daemon a rendezvous point — machines that are never awake at
+	// the same time still converge through it.
+	srv.ServeFavorites(favorites.NewStore(), nil)
 	if err := srv.StartOn(syncServePort); err != nil {
 		return fmt.Errorf("failed to start sync server: %w", err)
 	}
@@ -3627,10 +3632,14 @@ func runSyncPull(cmd *cobra.Command, args []string) error {
 
 	var res lansync.Result
 	var err error
+	fav := favorites.NewStore()
 	if peer != "" {
-		res, err = lansync.SyncFromPeer(ctx, lansync.NormalizePeerAddr(peer), localMeta, progress)
+		res, err = lansync.SyncFromPeer(ctx, lansync.NormalizePeerAddr(peer), localMeta, fav, progress)
 	} else {
-		res, err = lansync.SyncFromLAN(ctx, "", localMeta, progress)
+		res, err = lansync.SyncFromLAN(ctx, "", localMeta, fav, progress)
+	}
+	if res.FavoritesChanged {
+		fmt.Println(successStyle.Render("✓ Favorites updated from the network"))
 	}
 	if err != nil {
 		if peer == "" {

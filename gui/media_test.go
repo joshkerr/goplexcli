@@ -123,12 +123,12 @@ func TestParseFieldQuery(t *testing.T) {
 		{`cast:"Tom Hanks"`, "cast", "Tom Hanks", true},
 		{`genre:Comedy`, "genre", "Comedy", true},
 		{`DIRECTOR:"Nolan"`, "director", "Nolan", true}, // field is case-insensitive
-		{`cast:"  Spaced  "`, "cast", "Spaced", true},    // value trimmed
-		{`The Matrix`, "", "", false},                    // plain title
-		{`Aliens: Special Edition`, "", "", false},       // colon but unknown prefix
-		{`studio:"A24"`, "", "", false},                  // unsupported field
-		{`director:`, "", "", false},                     // empty value
-		{`director:""`, "", "", false},                   // empty quoted value
+		{`cast:"  Spaced  "`, "cast", "Spaced", true},   // value trimmed
+		{`The Matrix`, "", "", false},                   // plain title
+		{`Aliens: Special Edition`, "", "", false},      // colon but unknown prefix
+		{`studio:"A24"`, "", "", false},                 // unsupported field
+		{`director:`, "", "", false},                    // empty value
+		{`director:""`, "", "", false},                  // empty quoted value
 	}
 	for _, tc := range cases {
 		t.Run(tc.query, func(t *testing.T) {

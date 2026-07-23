@@ -30,6 +30,7 @@ import (
 
 	"github.com/grandcat/zeroconf"
 	"github.com/joshkerr/goplexcli/internal/cache"
+	"github.com/joshkerr/goplexcli/internal/favorites"
 )
 
 const (
@@ -85,11 +86,24 @@ type Server struct {
 	instance string
 	port     int
 	advErr   error // non-nil if mDNS advertising failed (serving still works)
+
+	fav        *favorites.Store // nil = favorites endpoints disabled
+	favChanged func()           // optional, called after a peer's POST changes the set
 }
 
 // NewServer creates a Server that reports freshness via metaFn.
 func NewServer(metaFn MetaFunc) *Server {
 	return &Server{metaFn: metaFn}
+}
+
+// ServeFavorites enables the /favorites endpoints backed by store. onChange
+// (optional) is invoked whenever a peer's push changes the local set, so the
+// host can refresh its UI. Call before Start.
+func (s *Server) ServeFavorites(store *favorites.Store, onChange func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.fav = store
+	s.favChanged = onChange
 }
 
 // Instance returns this server's unique mDNS instance name (empty until Start).
@@ -147,6 +161,7 @@ func (s *Server) StartOn(port int) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/cache/meta", s.serveMeta)
 	mux.HandleFunc("/cache", s.serveCache)
+	mux.HandleFunc("/favorites", s.serveFavorites)
 	s.server = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = s.server.Serve(listener) }()
 
@@ -225,6 +240,48 @@ func (s *Server) serveCache(w http.ResponseWriter, r *http.Request) {
 	gz := gzip.NewWriter(w)
 	defer gz.Close()
 	_, _ = io.Copy(gz, f)
+}
+
+// serveFavorites shares the favorites set with peers. GET returns the local
+// set as v2 JSON; POST merges the peer's set into the local one (last-writer-
+// wins per key, so pushes from any number of peers converge). 404 when the
+// host didn't enable favorites (an older version, or no store configured) —
+// clients treat that as "nothing to sync".
+func (s *Server) serveFavorites(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	st, onChange := s.fav, s.favChanged
+	s.mu.Unlock()
+	if st == nil {
+		http.NotFound(w, r)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		data, err := st.Export()
+		if err != nil {
+			http.Error(w, "favorites unavailable", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(data)
+	case http.MethodPost:
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<22))
+		if err != nil {
+			http.Error(w, "read body", http.StatusBadRequest)
+			return
+		}
+		changed, err := st.MergeData(body)
+		if err != nil {
+			http.Error(w, "bad favorites payload", http.StatusBadRequest)
+			return
+		}
+		if changed && onChange != nil {
+			onChange()
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // Peer is a discovered instance we can query and pull from.
@@ -371,19 +428,91 @@ func Pull(ctx context.Context, p Peer) (*cache.Cache, error) {
 	return loaded, nil
 }
 
+// FetchFavorites downloads a peer's favorites JSON. A 404 (peer predates
+// favorites sync, or has it disabled) returns nil data and no error.
+func FetchFavorites(ctx context.Context, p Peer) ([]byte, error) {
+	rctx, cancel := context.WithTimeout(ctx, metaTimeout)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(rctx, http.MethodGet, p.baseURL()+"/favorites", nil)
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("favorites %s", resp.Status)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 1<<22))
+}
+
+// PushFavorites uploads a favorites set for the peer to merge into its own.
+// A 404 (peer predates favorites sync) is not an error.
+func PushFavorites(ctx context.Context, p Peer, data []byte) error {
+	rctx, cancel := context.WithTimeout(ctx, metaTimeout)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(rctx, http.MethodPost, p.baseURL()+"/favorites", strings.NewReader(string(data)))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
+		return fmt.Errorf("favorites %s", resp.Status)
+	}
+	return nil
+}
+
+// SyncFavoritesWith merges favorites with the given peers: each reachable
+// peer's set is folded into the local store, then the merged result is pushed
+// back so the peers converge too. Merging is commutative and idempotent, so
+// every peer is visited (not just the freshest, as the cache pull does).
+// Returns whether the local set changed. Unreachable peers are skipped.
+func SyncFavoritesWith(ctx context.Context, store *favorites.Store, peers []Peer, progress func(string)) bool {
+	if store == nil || len(peers) == 0 {
+		return false
+	}
+	if progress != nil {
+		progress("Syncing favorites…")
+	}
+	changed := false
+	for _, p := range peers {
+		data, err := FetchFavorites(ctx, p)
+		if err != nil || data == nil {
+			continue
+		}
+		if ch, err := store.MergeData(data); err == nil && ch {
+			changed = true
+		}
+	}
+	if data, err := store.Export(); err == nil {
+		for _, p := range peers {
+			_ = PushFavorites(ctx, p, data)
+		}
+	}
+	return changed
+}
+
 // Result reports the outcome of SyncFromLAN.
 type Result struct {
-	Updated  bool         // a newer cache was pulled
-	UpToDate bool         // peers found, but none newer than local
-	Source   string       // friendly hostname the cache came from (when Updated)
-	Cache    *cache.Cache // the pulled cache (non-nil when Updated)
+	Updated          bool         // a newer cache was pulled
+	UpToDate         bool         // peers found, but none newer than local
+	Source           string       // friendly hostname the cache came from (when Updated)
+	Cache            *cache.Cache // the pulled cache (non-nil when Updated)
+	FavoritesChanged bool         // the local favorites set gained changes from a peer
 }
 
 // SyncFromLAN discovers peers (excluding excludeInstance), finds the one whose
-// cache is newest and strictly newer than local, and pulls it. progress, if
-// non-nil, is called with human-readable status lines. Errors are returned with
-// user-facing messages.
-func SyncFromLAN(ctx context.Context, excludeInstance string, local Meta, progress func(string)) (Result, error) {
+// cache is newest and strictly newer than local, and pulls it. If fav is
+// non-nil, favorites are also merged with every reachable peer — even when the
+// cache is already up to date. progress, if non-nil, is called with
+// human-readable status lines. Errors are returned with user-facing messages;
+// Result.FavoritesChanged is meaningful even alongside a cache error, since
+// favorites merge before the cache transfer.
+func SyncFromLAN(ctx context.Context, excludeInstance string, local Meta, fav *favorites.Store, progress func(string)) (Result, error) {
 	report := func(msg string) {
 		if progress != nil {
 			progress(msg)
@@ -399,6 +528,8 @@ func SyncFromLAN(ctx context.Context, excludeInstance string, local Meta, progre
 		return Result{}, fmt.Errorf("no other running goplexcli found on the network")
 	}
 
+	res := Result{FavoritesChanged: SyncFavoritesWith(ctx, fav, peers, progress)}
+
 	report(fmt.Sprintf("Comparing %d computer(s)…", len(peers)))
 	var best *Peer
 	var bestMeta Meta
@@ -413,26 +544,31 @@ func SyncFromLAN(ctx context.Context, excludeInstance string, local Meta, progre
 		}
 	}
 	if best == nil {
-		return Result{}, fmt.Errorf("found computers, but none could share their cache")
+		return res, fmt.Errorf("found computers, but none could share their cache")
 	}
 	if !bestMeta.LastUpdated.After(local.LastUpdated) {
-		return Result{UpToDate: true}, nil
+		res.UpToDate = true
+		return res, nil
 	}
 
 	source := best.Host()
 	report(fmt.Sprintf("Downloading cache from %s…", source))
 	c, err := Pull(ctx, *best)
 	if err != nil {
-		return Result{}, err
+		return res, err
 	}
-	return Result{Updated: true, Source: source, Cache: c}, nil
+	res.Updated = true
+	res.Source = source
+	res.Cache = c
+	return res, nil
 }
 
 // SyncFromPeer pulls from an explicitly addressed peer, bypassing mDNS discovery
 // entirely — the reliable path when multicast is blocked but the host is
 // directly reachable (e.g. `--peer ghost-2.local`). It pulls only if the peer's
-// cache is newer than local.
-func SyncFromPeer(ctx context.Context, addr string, local Meta, progress func(string)) (Result, error) {
+// cache is newer than local; favorites (when fav is non-nil) are merged either
+// way.
+func SyncFromPeer(ctx context.Context, addr string, local Meta, fav *favorites.Store, progress func(string)) (Result, error) {
 	report := func(msg string) {
 		if progress != nil {
 			progress(msg)
@@ -446,8 +582,12 @@ func SyncFromPeer(ctx context.Context, addr string, local Meta, progress func(st
 		return Result{}, fmt.Errorf("could not reach %s: %w", addr, err)
 	}
 	peer.Instance = m.Instance
+
+	res := Result{FavoritesChanged: SyncFavoritesWith(ctx, fav, []Peer{peer}, progress)}
+
 	if !m.LastUpdated.After(local.LastUpdated) {
-		return Result{UpToDate: true}, nil
+		res.UpToDate = true
+		return res, nil
 	}
 
 	source := peer.Host()
@@ -457,9 +597,12 @@ func SyncFromPeer(ctx context.Context, addr string, local Meta, progress func(st
 	report(fmt.Sprintf("Downloading cache from %s…", source))
 	c, err := Pull(ctx, peer)
 	if err != nil {
-		return Result{}, err
+		return res, err
 	}
-	return Result{Updated: true, Source: source, Cache: c}, nil
+	res.Updated = true
+	res.Source = source
+	res.Cache = c
+	return res, nil
 }
 
 // NormalizePeerAddr appends DefaultPort to a bare host (e.g. "ghost-2.local")
