@@ -7,6 +7,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 
 	"github.com/wailsapp/wails/v2"
@@ -30,14 +31,21 @@ func main() {
 		Title:     "GoplexCLI",
 		Width:     1320,
 		Height:    860,
-		MinWidth:  800,
-		MinHeight: 520,
+		MinWidth:  minWindowW,
+		MinHeight: minWindowH,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
 		BackgroundColour: &options.RGBA{R: 9, G: 11, B: 17, A: 1},
 		OnStartup:        app.startup,
 		OnShutdown:       app.shutdown,
+		// Capture window geometry here rather than OnShutdown: this hook runs
+		// while the native window is still alive, so maximized state and size
+		// read reliably. Returning false lets the close proceed.
+		OnBeforeClose: func(ctx context.Context) bool {
+			app.captureWindowState(ctx)
+			return false
+		},
 		Bind: []interface{}{
 			app,
 		},

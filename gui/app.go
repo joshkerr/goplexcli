@@ -97,7 +97,7 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	a.fitWindowToScreen(ctx)
+	a.restoreWindowState(ctx)
 	if jobs := a.loadDownloadHistory(); len(jobs) > 0 {
 		go a.resumeDownloads(jobs)
 	}
