@@ -333,6 +333,37 @@ func (a *App) emitDownload(dp DownloadProgress) {
 		return
 	}
 	wruntime.EventsEmit(a.ctx, "download:progress", dp)
+	a.updateTaskbarProgress()
+}
+
+// updateTaskbarProgress mirrors the download queue on the OS taskbar/dock
+// icon: the in-flight transfer's percent while one is running, an empty bar
+// while jobs are only queued, and cleared when the queue is idle. Downloads
+// run one at a time (dlMu), so the in-flight percent is the natural overall
+// signal.
+func (a *App) updateTaskbarProgress() {
+	a.dlStateMu.Lock()
+	running, pending := 0, 0
+	var sum float64
+	for _, e := range a.dlHist {
+		switch e.Status {
+		case "in_progress":
+			running++
+			sum += e.Percent
+		case "pending":
+			pending++
+		}
+	}
+	a.dlStateMu.Unlock()
+
+	switch {
+	case running > 0:
+		setTaskbarProgress(sum / float64(running) / 100)
+	case pending > 0:
+		setTaskbarProgress(0)
+	default:
+		setTaskbarProgress(-1)
+	}
 }
 
 // ---- Bound methods: download list / cancel / history ----
