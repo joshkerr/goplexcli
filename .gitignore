@@ -55,3 +55,4 @@ gui/frontend/dist/*
 gui/frontend/wailsjs/
 
 gui/frontend/package.json.md5
+/goplexcli-preview
