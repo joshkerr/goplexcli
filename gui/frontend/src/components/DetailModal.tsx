@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
-import type { Media, Season } from "../lib/types";
+import type { Media, MediaCard, Season } from "../lib/types";
 import { formatDuration, formatRating } from "../lib/format";
 import {
   CloseIcon,
@@ -24,6 +24,9 @@ interface Props {
   // Run a field-scoped search (e.g. all movies by a director). Called when a
   // director/cast/genre tag is clicked; the caller closes this modal.
   onSearch: (query: string) => void;
+  // Open another item's detail view (a "More like this" card was clicked);
+  // the caller swaps this modal's content to the new item.
+  onSelectSimilar: (card: MediaCard) => void;
 }
 
 // FavoriteButton is the star toggle shared by the movie and show detail views.
@@ -185,82 +188,154 @@ function ItemDetail(props: Props) {
   };
 
   return (
-    <div className="flex gap-6 overflow-y-auto p-6">
-      <Poster media={media} />
-      <div className="flex min-w-0 flex-1 flex-col">
-        {media.type === "episode" && media.parentTitle && (
-          <div className="text-xs font-semibold uppercase tracking-widest text-accent/80">
-            {media.parentTitle}
+    <div className="flex w-full flex-col overflow-y-auto">
+      <div className="flex gap-6 p-6">
+        <Poster media={media} />
+        <div className="flex min-w-0 flex-1 flex-col">
+          {media.type === "episode" && media.parentTitle && (
+            <div className="text-xs font-semibold uppercase tracking-widest text-accent/80">
+              {media.parentTitle}
+            </div>
+          )}
+          <h2 className="mt-1 text-2xl font-semibold leading-tight text-white">
+            {media.type === "episode"
+              ? `S${pad(media.parentIndex)}E${pad(media.index)} · ${media.title}`
+              : media.title}
+          </h2>
+          <div className="mt-2">
+            <MetaRow media={media} />
           </div>
-        )}
-        <h2 className="mt-1 text-2xl font-semibold leading-tight text-white">
-          {media.type === "episode"
-            ? `S${pad(media.parentIndex)}E${pad(media.index)} · ${media.title}`
-            : media.title}
-        </h2>
-        <div className="mt-2">
-          <MetaRow media={media} />
-        </div>
 
-        {media.genre && (
-          <div className="mt-3 text-xs text-white/40">
-            <TagLinks field="genre" value={media.genre} onSearch={onSearch} />
-          </div>
-        )}
+          {media.genre && (
+            <div className="mt-3 text-xs text-white/40">
+              <TagLinks field="genre" value={media.genre} onSearch={onSearch} />
+            </div>
+          )}
 
-        {media.summary && (
-          <p className="mt-4 max-h-40 overflow-y-auto text-sm leading-relaxed text-white/70">
-            {media.summary}
-          </p>
-        )}
+          {media.summary && (
+            <p className="mt-4 max-h-40 overflow-y-auto text-sm leading-relaxed text-white/70">
+              {media.summary}
+            </p>
+          )}
 
-        {media.cast && (
-          <div className="mt-4 text-xs text-white/40">
-            <span className="font-semibold text-white/55">Cast: </span>
-            <TagLinks field="cast" value={media.cast} onSearch={onSearch} />
-          </div>
-        )}
-        {media.director && (
-          <div className="mt-1 text-xs text-white/40">
-            <span className="font-semibold text-white/55">Director: </span>
-            <TagLinks field="director" value={media.director} onSearch={onSearch} />
-          </div>
-        )}
+          {media.cast && (
+            <div className="mt-4 text-xs text-white/40">
+              <span className="font-semibold text-white/55">Cast: </span>
+              <TagLinks field="cast" value={media.cast} onSearch={onSearch} />
+            </div>
+          )}
+          {media.director && (
+            <div className="mt-1 text-xs text-white/40">
+              <span className="font-semibold text-white/55">Director: </span>
+              <TagLinks field="director" value={media.director} onSearch={onSearch} />
+            </div>
+          )}
 
-        <div className="mt-auto flex flex-wrap gap-3 pt-6">
-          {canResume && (
+          <div className="mt-auto flex flex-wrap gap-3 pt-6">
+            {canResume && (
+              <button
+                disabled={busy}
+                onClick={() => play(true)}
+                className="flex items-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-ink-900 transition-colors hover:bg-accent-soft disabled:opacity-50"
+              >
+                <ResumeIcon width={18} height={18} /> Resume {media.progressPct}%
+              </button>
+            )}
             <button
               disabled={busy}
-              onClick={() => play(true)}
-              className="flex items-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-ink-900 transition-colors hover:bg-accent-soft disabled:opacity-50"
+              onClick={() => play(false)}
+              className={`flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors disabled:opacity-50 ${
+                canResume
+                  ? "bg-white/10 text-white hover:bg-white/20"
+                  : "bg-accent text-ink-900 hover:bg-accent-soft"
+              }`}
             >
-              <ResumeIcon width={18} height={18} /> Resume {media.progressPct}%
+              <PlayIcon width={18} height={18} /> {canResume ? "Play from start" : "Play"}
             </button>
-          )}
-          <button
-            disabled={busy}
-            onClick={() => play(false)}
-            className={`flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors disabled:opacity-50 ${
-              canResume
-                ? "bg-white/10 text-white hover:bg-white/20"
-                : "bg-accent text-ink-900 hover:bg-accent-soft"
-            }`}
-          >
-            <PlayIcon width={18} height={18} /> {canResume ? "Play from start" : "Play"}
-          </button>
-          <button
-            onClick={download}
-            className="flex items-center gap-2 rounded-lg bg-white/10 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-white/20"
-          >
-            <DownloadIcon width={18} height={18} /> Download
-          </button>
-          {media.type === "movie" && (
-            <FavoriteButton
-              isFavorite={props.isFavorite}
-              onClick={() => props.onToggleFavorite(media.key)}
-            />
-          )}
+            <button
+              onClick={download}
+              className="flex items-center gap-2 rounded-lg bg-white/10 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-white/20"
+            >
+              <DownloadIcon width={18} height={18} /> Download
+            </button>
+            {media.type === "movie" && (
+              <FavoriteButton
+                isFavorite={props.isFavorite}
+                onClick={() => props.onToggleFavorite(media.key)}
+              />
+            )}
+          </div>
         </div>
+      </div>
+      <MoreLikeThis media={media} onSelect={props.onSelectSimilar} />
+    </div>
+  );
+}
+
+// MoreLikeThis fetches and renders a horizontal strip of the items most
+// similar to the open one (summary TF-IDF + genre/director/cast/year overlap,
+// computed backend-side). Renders nothing while loading or when the library
+// has no meaningful neighbors. For an episode the backend returns similar
+// shows, so the strip works in every ItemDetail context.
+function MoreLikeThis({
+  media,
+  onSelect,
+}: {
+  media: Media;
+  onSelect: (card: MediaCard) => void;
+}) {
+  const [cards, setCards] = useState<MediaCard[]>([]);
+  useEffect(() => {
+    let stale = false;
+    setCards([]);
+    api
+      .similarItems(media.key)
+      .then((c) => {
+        if (!stale) setCards(c);
+      })
+      .catch(() => {});
+    return () => {
+      stale = true;
+    };
+  }, [media.key]);
+
+  if (cards.length === 0) return null;
+  return (
+    <div className="border-t border-white/5 px-6 pb-6 pt-4">
+      <div className="text-xs font-semibold uppercase tracking-widest text-white/40">
+        More like this
+      </div>
+      <div className="mt-3 flex gap-3 overflow-x-auto pb-1">
+        {cards.map((card) => {
+          const Placeholder = card.type === "show" ? TvIcon : FilmIcon;
+          return (
+            <button
+              key={card.key}
+              onClick={() => onSelect(card)}
+              title={card.title}
+              className="group w-24 shrink-0 text-left focus:outline-none"
+            >
+              <div className="aspect-[2/3] w-full overflow-hidden rounded-lg bg-ink-600 ring-1 ring-white/5 transition group-hover:ring-accent/40">
+                {card.thumbURL ? (
+                  <img
+                    src={card.thumbURL}
+                    alt={card.title}
+                    loading="lazy"
+                    decoding="async"
+                    className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105"
+                  />
+                ) : (
+                  <div className="flex h-full w-full items-center justify-center text-white/20">
+                    <Placeholder width={24} height={24} />
+                  </div>
+                )}
+              </div>
+              <div className="mt-1.5 truncate text-xs font-medium text-white/70 group-hover:text-white">
+                {card.title}
+              </div>
+            </button>
+          );
+        })}
       </div>
     </div>
   );

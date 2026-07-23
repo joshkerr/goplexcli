@@ -627,6 +627,7 @@ export default function App() {
           onClose={() => setSelected(null)}
           onToast={toast}
           onSearch={runFieldSearch}
+          onSelectSimilar={handleSelect}
         />
       )}
 

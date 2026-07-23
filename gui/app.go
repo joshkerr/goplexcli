@@ -71,6 +71,14 @@ type App struct {
 	mediaMu    sync.RWMutex
 	mediaCache *cache.Cache
 
+	// simMu/simIdx memoize the "More like this" similarity index (TF-IDF over
+	// summaries plus metadata sets). simBuiltFrom records which media cache
+	// generation it was built from, so a reindex or LAN sync transparently
+	// triggers a rebuild on the next SimilarItems call.
+	simMu        sync.Mutex
+	simIdx       *similarIndex
+	simBuiltFrom *cache.Cache
+
 	// fav is the favorites store (movie keys and synthetic "show:<title>"
 	// keys), shared with the LAN sync server so peers can read and merge it.
 	fav *favorites.Store
