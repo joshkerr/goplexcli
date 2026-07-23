@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/joshkerr/goplexcli/internal/config"
@@ -22,7 +23,11 @@ import (
 )
 
 const (
-	posterCacheMaxBytes = int64(256 << 20)
+	// posterCacheMaxBytes must comfortably hold an entire large library: at
+	// ~40-60KB per 320x480 rendition, 10k+ items need several hundred MB, and a
+	// cap below that makes prune evict posters that are about to be scrolled
+	// back into view — re-transcoding them on Plex forever.
+	posterCacheMaxBytes = int64(2 << 30)
 	posterMaxImageBytes = int64(12 << 20)
 	// warmConcurrency bounds how many posters are pre-fetched from Plex in
 	// parallel. Warming runs on the Go client's own connection pool, independent
@@ -30,6 +35,10 @@ const (
 	// value lets a jump-scrolled window fill in parallel instead of trickling in
 	// six at a time — while staying gentle enough not to flood Plex's transcoder.
 	warmConcurrency = 12
+	// warmAllConcurrency bounds the whole-library background crawl. It is kept
+	// low (and on its own semaphore) so the crawl never starves interactive
+	// warms of the visible window, which must win the transcoder's attention.
+	warmAllConcurrency = 4
 )
 
 type posterSource struct {
@@ -41,13 +50,15 @@ type posterSource struct {
 }
 
 type posterCache struct {
-	client  *http.Client
-	mu      sync.RWMutex
-	sources map[string]posterSource
-	group   singleflight.Group
-	warmSem chan struct{}
-	server  *http.Server
-	baseURL string
+	client     *http.Client
+	mu         sync.RWMutex
+	sources    map[string]posterSource
+	group      singleflight.Group
+	warmSem    chan struct{}
+	warmAllSem chan struct{}
+	warmAllGen atomic.Int64
+	server     *http.Server
+	baseURL    string
 }
 
 func newPosterCache(client *http.Client) *posterCache {
@@ -61,9 +72,10 @@ func newPosterCache(client *http.Client) *posterCache {
 		client = &http.Client{Timeout: 20 * time.Second, Transport: transport}
 	}
 	return &posterCache{
-		client:  client,
-		sources: make(map[string]posterSource),
-		warmSem: make(chan struct{}, warmConcurrency),
+		client:     client,
+		sources:    make(map[string]posterSource),
+		warmSem:    make(chan struct{}, warmConcurrency),
+		warmAllSem: make(chan struct{}, warmAllConcurrency),
 	}
 }
 
@@ -158,6 +170,13 @@ func (p *posterCache) ensureCached(id string) (string, error) {
 	}
 	if info, statErr := os.Stat(path); statErr == nil {
 		if info.Size() > 0 {
+			// Refresh the mtime on hits (throttled to hourly) so prune's
+			// LRU order reflects access time, not write time — otherwise the
+			// oldest-fetched posters are evicted even while in heavy use.
+			if time.Since(info.ModTime()) > time.Hour {
+				now := time.Now()
+				_ = os.Chtimes(path, now, now)
+			}
 			return path, nil
 		}
 	} else if !os.IsNotExist(statErr) {
@@ -191,6 +210,35 @@ func (p *posterCache) warm(urls []string) {
 		go func(id string) {
 			defer wg.Done()
 			defer func() { <-p.warmSem }()
+			_, _ = p.ensureCached(id)
+		}(id)
+	}
+	wg.Wait()
+}
+
+// warmAll crawls the given posters into the disk cache on a low-concurrency
+// pool separate from warm's, so the crawl fills the whole library over minutes
+// without ever queueing ahead of the visible-window warms. Posters already on
+// disk cost only a stat, so re-crawls after the first fast-forward to the
+// missing tail. Each call supersedes the previous one: the older crawl stops
+// scheduling new fetches at its next iteration (a generation check), keeping a
+// category switch from stacking redundant crawls of overlapping URL sets.
+func (p *posterCache) warmAll(urls []string) {
+	gen := p.warmAllGen.Add(1)
+	var wg sync.WaitGroup
+	for _, u := range urls {
+		if p.warmAllGen.Load() != gen {
+			break
+		}
+		id := posterIDFromURL(u)
+		if id == "" {
+			continue
+		}
+		p.warmAllSem <- struct{}{}
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			defer func() { <-p.warmAllSem }()
 			_, _ = p.ensureCached(id)
 		}(id)
 	}

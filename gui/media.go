@@ -847,11 +847,34 @@ func nonNilCards(in []MediaCardDTO) []MediaCardDTO {
 // scrolls of a virtualized grid without transcoding the whole library.
 const warmPosterCount = 60
 
-// warmedCards warms the first posters of a result set and returns it as a
-// guaranteed non-nil slice — a convenience for the many category branches.
+// warmedCards warms the first posters of a result set at interactive priority,
+// schedules the rest as a low-priority background crawl, and returns the set as
+// a guaranteed non-nil slice — a convenience for the many category branches.
+// The crawl is what makes a jump-scroll into the middle of a 10k-item library
+// paint instantly: once it completes (or has passed that region), every poster
+// is a local file serve instead of a Plex transcode round-trip.
 func (a *App) warmedCards(cards []MediaCardDTO) []MediaCardDTO {
 	a.warmCards(cards)
+	a.warmRemainingCards(cards)
 	return nonNilCards(cards)
+}
+
+// warmRemainingCards background-crawls every poster past the warmPosterCount
+// prefix that warmCards covers. Runs on the crawl pool (warmAll), so it never
+// competes with visible-window warms; a newer call supersedes an in-flight one.
+func (a *App) warmRemainingCards(cards []MediaCardDTO) {
+	if a.posters == nil || len(cards) <= warmPosterCount {
+		return
+	}
+	urls := make([]string, 0, len(cards)-warmPosterCount)
+	for i := warmPosterCount; i < len(cards); i++ {
+		if cards[i].ThumbURL != "" {
+			urls = append(urls, cards[i].ThumbURL)
+		}
+	}
+	if len(urls) > 0 {
+		go a.posters.warmAll(urls)
+	}
 }
 
 // WarmPosters pre-fetches the given poster URLs into the disk cache off the UI

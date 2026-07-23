@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -107,6 +108,48 @@ func TestPosterCacheDeduplicatesConcurrentMisses(t *testing.T) {
 	}
 	if got := requests.Load(); got != 1 {
 		t.Fatalf("Plex requests = %d, want 1", got)
+	}
+}
+
+func TestPosterCacheWarmAllCrawlsAndSkipsCached(t *testing.T) {
+	useTempConfigDir(t)
+	var requests atomic.Int32
+	plexServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write([]byte("image"))
+	}))
+	defer plexServer.Close()
+
+	cache := newPosterCache(plexServer.Client())
+	urls := make([]string, 0, 10)
+	for i := range 10 {
+		urls = append(urls, cache.register(posterSource{
+			ServerURL: plexServer.URL,
+			ThumbPath: fmt.Sprintf("/thumb/%d", i),
+			Width:     320,
+			Height:    480,
+		}))
+	}
+
+	cache.warmAll(urls)
+	if got := requests.Load(); got != 10 {
+		t.Fatalf("Plex requests after first crawl = %d, want 10", got)
+	}
+	for _, u := range urls {
+		path, err := cache.cachedPath(posterIDFromURL(u))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("poster %s not cached: %v", u, err)
+		}
+	}
+
+	// A re-crawl over the same set is all stats, no re-fetches.
+	cache.warmAll(urls)
+	if got := requests.Load(); got != 10 {
+		t.Fatalf("Plex requests after re-crawl = %d, want 10", got)
 	}
 }
 
