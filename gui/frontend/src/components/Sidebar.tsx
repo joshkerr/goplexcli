@@ -24,6 +24,8 @@ const ITEMS: NavItem[] = [
   { key: "movies", label: "Movies", icon: FilmIcon, group: "Library" },
   { key: "tv-shows", label: "TV Shows", icon: TvIcon, group: "Library" },
   { key: "continue-watching", label: "Continue Watching", icon: ResumeIcon, group: "Library" },
+  { key: "favorites-movies", label: "Movies", icon: FilmIcon, group: "Favorites" },
+  { key: "favorites-tv", label: "TV Shows", icon: TvIcon, group: "Favorites" },
   { key: "recently-added-movies", label: "New Movies", icon: SparkIcon, group: "Recently Added" },
   { key: "recently-added-tv", label: "New Episodes", icon: StackIcon, group: "Recently Added" },
   { key: "downloads", label: "Downloads", icon: DownloadIcon, group: "Activity" },

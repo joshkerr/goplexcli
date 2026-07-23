@@ -221,14 +221,16 @@ type BrowseOptions struct {
 
 // ListCategory returns the poster-grid rows for a sidebar category as
 // lightweight cards, read from the in-memory cache. opts (genre filter + sort)
-// is honored only for the "movies" category; other categories keep their fixed
-// ordering.
+// is honored for the "movies" and favorites categories; other categories keep
+// their fixed ordering.
 //
 //	movies                  — all movies, filtered/sorted per opts (default A-Z)
 //	tv-shows                — distinct shows (grouped from episodes), A-Z
 //	recently-added-movies   — newest movies by AddedAt
 //	recently-added-tv       — shows with the newest episodes, one card per show
 //	continue-watching       — in-progress items, most recently viewed first
+//	favorites-movies        — favorited movies, filtered/sorted per opts
+//	favorites-tv            — favorited shows, sorted per opts (no genre filter)
 func (a *App) ListCategory(category string, opts BrowseOptions) []MediaCardDTO {
 	c := a.media()
 	if c == nil {
@@ -246,6 +248,38 @@ func (a *App) ListCategory(category string, opts BrowseOptions) []MediaCardDTO {
 
 	case "tv-shows":
 		return a.warmedCards(a.groupShowCards(c))
+
+	case "favorites-movies":
+		fav := a.favSnapshot()
+		var items []*plex.MediaItem
+		for i := range c.Media {
+			m := &c.Media[i]
+			if m.Type != "movie" || !fav[m.Key] {
+				continue
+			}
+			if opts.Genre != "" && !hasTag(m.Genre, opts.Genre) {
+				continue
+			}
+			items = append(items, m)
+		}
+		sortMovies(items, opts)
+		out := make([]MediaCardDTO, 0, len(items))
+		for _, it := range items {
+			out = append(out, a.toCard(it))
+		}
+		return a.warmedCards(out)
+
+	case "favorites-tv":
+		fav := a.favSnapshot()
+		all := a.groupShowCards(c) // ordered by latest added episode, newest first
+		cards := make([]MediaCardDTO, 0, len(all))
+		for _, card := range all {
+			if fav[card.Key] {
+				cards = append(cards, card)
+			}
+		}
+		sortShowCards(cards, opts)
+		return a.warmedCards(cards)
 
 	case "recently-added-movies":
 		return a.warmedCards(recentlyAddedCards(a, c, "movie", 60))
@@ -325,8 +359,7 @@ const movieGenreLimit = 12
 
 // sortMovieItems returns the movie items matching opts.Genre, ordered by
 // opts.SortField / opts.Desc. An empty opts yields all movies sorted A-Z by
-// title, matching the historical default. Title is the tiebreaker for every
-// field so equal values keep a stable, readable order.
+// title, matching the historical default.
 func sortMovieItems(c *cache.Cache, opts BrowseOptions) []*plex.MediaItem {
 	var items []*plex.MediaItem
 	for i := range c.Media {
@@ -338,7 +371,14 @@ func sortMovieItems(c *cache.Cache, opts BrowseOptions) []*plex.MediaItem {
 		}
 		items = append(items, &c.Media[i])
 	}
+	sortMovies(items, opts)
+	return items
+}
 
+// sortMovies orders movie items in place by opts.SortField / opts.Desc. Title
+// is the tiebreaker for every field so equal values keep a stable, readable
+// order.
+func sortMovies(items []*plex.MediaItem, opts BrowseOptions) {
 	byTitle := func(i, j int) bool {
 		return strings.ToLower(items[i].Title) < strings.ToLower(items[j].Title)
 	}
@@ -369,7 +409,37 @@ func sortMovieItems(c *cache.Cache, opts BrowseOptions) []*plex.MediaItem {
 		}
 		return byTitle(i, j)
 	})
-	return items
+}
+
+// sortShowCards orders show cards in place by opts.SortField / opts.Desc.
+// Cards carry only title/year plus the caller's added-order, so the supported
+// fields are title, year, and added; anything else falls back to title. For
+// "added" the incoming order (newest episode first, as produced by
+// groupShowCards) is kept for desc and reversed for asc.
+func sortShowCards(cards []MediaCardDTO, opts BrowseOptions) {
+	switch opts.SortField {
+	case "added":
+		if !opts.Desc {
+			for i, j := 0, len(cards)-1; i < j; i, j = i+1, j-1 {
+				cards[i], cards[j] = cards[j], cards[i]
+			}
+		}
+	case "year":
+		sort.SliceStable(cards, func(i, j int) bool {
+			if cards[i].Year != cards[j].Year {
+				return less(cards[i].Year < cards[j].Year, cards[i].Year > cards[j].Year, opts.Desc)
+			}
+			return strings.ToLower(cards[i].Title) < strings.ToLower(cards[j].Title)
+		})
+	default: // "title" and fields shows don't carry (rating, duration)
+		sort.SliceStable(cards, func(i, j int) bool {
+			la, lb := strings.ToLower(cards[i].Title), strings.ToLower(cards[j].Title)
+			if la != lb {
+				return less(la < lb, la > lb, opts.Desc)
+			}
+			return false
+		})
+	}
 }
 
 // less picks the ascending or descending comparison result based on desc.

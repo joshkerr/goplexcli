@@ -125,14 +125,16 @@ export type Category =
   | "tv-shows"
   | "recently-added-movies"
   | "recently-added-tv"
-  | "continue-watching";
+  | "continue-watching"
+  | "favorites-movies"
+  | "favorites-tv";
 
 // SortField mirrors the fields honored by the Movies grid backend (see
 // sortMovieItems in gui/media.go).
 export type SortField = "title" | "year" | "added" | "rating" | "duration";
 
-// BrowseOptions is the genre filter + sort order passed to ListCategory. Only
-// the Movies grid honors it.
+// BrowseOptions is the genre filter + sort order passed to ListCategory. The
+// Movies and Favorites grids honor it; other categories keep a fixed order.
 export interface BrowseOptions {
   genre: string;
   sortField: SortField;

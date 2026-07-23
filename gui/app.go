@@ -70,6 +70,12 @@ type App struct {
 	mediaMu    sync.RWMutex
 	mediaCache *cache.Cache
 
+	// favMu guards favorites, the set of favorited card keys (movie keys and
+	// synthetic "show:<title>" keys). Loaded lazily from favorites.json on
+	// first use; nil until then. See gui/favorites.go.
+	favMu     sync.Mutex
+	favorites map[string]bool
+
 	posters *posterCache
 
 	// lan advertises this instance's media cache on the LAN and pulls a newer

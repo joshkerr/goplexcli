@@ -8,6 +8,8 @@ interface Props {
   loading: boolean;
   emptyMessage: string;
   onSelect: (media: MediaCard) => void;
+  favorites: Set<string>;
+  onToggleFavorite: (key: string) => void;
 }
 
 // Layout constants (kept in sync with the Tailwind classes below).
@@ -34,7 +36,7 @@ const prefetchedPosters = new Set<string>();
  * The parent should remount this (via `key`) when the dataset changes so the
  * scroll position resets.
  */
-export function PosterGrid({ items, loading, emptyMessage, onSelect }: Props) {
+export function PosterGrid({ items, loading, emptyMessage, onSelect, favorites, onToggleFavorite }: Props) {
   const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const [dims, setDims] = useState({ width: 0, height: 0 });
@@ -176,6 +178,8 @@ export function PosterGrid({ items, loading, emptyMessage, onSelect }: Props) {
                 key={item.key}
                 media={item}
                 onClick={() => onSelect(item)}
+                favorite={favorites.has(item.key)}
+                onToggleFavorite={() => onToggleFavorite(item.key)}
                 priority={
                   Math.floor((startIdx + i) / cols) >= viewportFirstRow &&
                   Math.floor((startIdx + i) / cols) <= viewportLastRow

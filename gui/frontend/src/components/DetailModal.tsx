@@ -9,6 +9,7 @@ import {
   PlayIcon,
   ResumeIcon,
   StarIcon,
+  StarOutlineIcon,
   TvIcon,
 } from "./icons";
 
@@ -16,11 +17,41 @@ interface Props {
   media: Media;
   rcloneAvailable: boolean;
   mpvAvailable: boolean;
+  isFavorite: boolean;
+  onToggleFavorite: (key: string) => void;
   onClose: () => void;
   onToast: (msg: string, kind?: "info" | "error") => void;
   // Run a field-scoped search (e.g. all movies by a director). Called when a
   // director/cast/genre tag is clicked; the caller closes this modal.
   onSearch: (query: string) => void;
+}
+
+// FavoriteButton is the star toggle shared by the movie and show detail views.
+function FavoriteButton({
+  isFavorite,
+  onClick,
+  compact = false,
+}: {
+  isFavorite: boolean;
+  onClick: () => void;
+  compact?: boolean;
+}) {
+  const Icon = isFavorite ? StarIcon : StarOutlineIcon;
+  return (
+    <button
+      onClick={onClick}
+      className={`flex items-center gap-2 rounded-lg font-semibold transition-colors ${
+        compact ? "px-3 py-1.5 text-xs" : "px-4 py-2.5 text-sm"
+      } ${
+        isFavorite
+          ? "bg-accent/15 text-accent-soft hover:bg-accent/25"
+          : "bg-white/10 text-white hover:bg-white/20"
+      }`}
+    >
+      <Icon width={compact ? 15 : 18} height={compact ? 15 : 18} />
+      {isFavorite ? "Favorited" : "Favorite"}
+    </button>
+  );
 }
 
 // TagLinks splits a comma-separated tag field ("Tom Hardy, Cillian Murphy")
@@ -223,6 +254,12 @@ function ItemDetail(props: Props) {
           >
             <DownloadIcon width={18} height={18} /> Download
           </button>
+          {media.type === "movie" && (
+            <FavoriteButton
+              isFavorite={props.isFavorite}
+              onClick={() => props.onToggleFavorite(media.key)}
+            />
+          )}
         </div>
       </div>
     </div>
@@ -311,7 +348,14 @@ function ShowDetail(props: Props) {
           <div className="text-xs font-semibold uppercase tracking-widest text-accent/80">
             TV Show
           </div>
-          <h2 className="mt-1 text-2xl font-semibold text-white">{media.title}</h2>
+          <div className="mt-1 flex items-center gap-3">
+            <h2 className="min-w-0 truncate text-2xl font-semibold text-white">{media.title}</h2>
+            <FavoriteButton
+              compact
+              isFavorite={props.isFavorite}
+              onClick={() => props.onToggleFavorite(media.key)}
+            />
+          </div>
           {media.genre && <div className="mt-1 text-xs text-white/40">{media.genre}</div>}
           {media.summary && (
             <p className="mt-3 max-h-20 overflow-y-auto text-sm leading-relaxed text-white/60">

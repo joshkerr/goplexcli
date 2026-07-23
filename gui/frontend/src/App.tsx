@@ -23,6 +23,8 @@ const CATEGORY_TITLES: Record<NavKey, string> = {
   movies: "Movies",
   "tv-shows": "TV Shows",
   "continue-watching": "Continue Watching",
+  "favorites-movies": "Favorite Movies",
+  "favorites-tv": "Favorite TV Shows",
   "recently-added-movies": "Recently Added Movies",
   "recently-added-tv": "Recently Added Episodes",
   downloads: "Downloads",
@@ -33,6 +35,8 @@ const EMPTY_MESSAGES: Partial<Record<NavKey, string>> = {
   movies: "No movies in your library yet.",
   "tv-shows": "No TV shows in your library yet.",
   "continue-watching": "Nothing in progress — start watching something!",
+  "favorites-movies": "No favorite movies yet — click the star on a movie to add it.",
+  "favorites-tv": "No favorite shows yet — click the star on a show to add it.",
   "recently-added-movies": "No movies indexed yet.",
   "recently-added-tv": "No episodes indexed yet.",
 };
@@ -86,6 +90,10 @@ export default function App() {
 
   const [downloads, setDownloads] = useState<Record<string, DownloadProgress>>({});
   const [toasts, setToasts] = useState<Toast[]>([]);
+
+  // Favorited card keys (movie keys and synthetic "show:<title>" keys), loaded
+  // once and kept in sync locally on toggle so stars update instantly.
+  const [favorites, setFavorites] = useState<Set<string>>(new Set());
 
   const toast = useCallback((message: string, kind: "info" | "error" = "info") => {
     const id = Date.now() + Math.random();
@@ -233,6 +241,46 @@ export default function App() {
     api.movieGenres().then(setMovieGenres).catch(() => {});
   }, [needsSetup]);
 
+  // Load the persisted favorites once the library is ready.
+  useEffect(() => {
+    if (needsSetup) return;
+    api
+      .listFavoriteKeys()
+      .then((keys) => setFavorites(new Set(keys)))
+      .catch(() => {});
+  }, [needsSetup]);
+
+  // Shows only carry title/year/added-order, so the other sort fields don't
+  // apply; snap back to title when landing on the Favorites TV grid with one.
+  useEffect(() => {
+    if (active === "favorites-tv" && sortField !== "title" && sortField !== "year" && sortField !== "added") {
+      setSortField("title");
+    }
+  }, [active, sortField]);
+
+  const toggleFavorite = useCallback(
+    async (key: string) => {
+      try {
+        const nowFav = await api.toggleFavorite(key);
+        setFavorites((prev) => {
+          const next = new Set(prev);
+          if (nowFav) next.add(key);
+          else next.delete(key);
+          return next;
+        });
+        // A favorites grid changes membership on toggle; refresh it so the
+        // card appears/disappears in place (the grid stays mounted, so the
+        // scroll position is preserved).
+        if (browseCategory === "favorites-movies" || browseCategory === "favorites-tv") {
+          loadCategory(browseCategory);
+        }
+      } catch (e: any) {
+        toast(String(e?.message ?? e), "error");
+      }
+    },
+    [browseCategory, loadCategory, toast]
+  );
+
   // Debounced search. Plain queries also fetch actor/director suggestions for
   // the People row; field-scoped queries (cast:"…" etc.) are already the result
   // of picking a person, so no suggestions there.
@@ -360,24 +408,26 @@ export default function App() {
             {showSearch ? searchHeading(query) : CATEGORY_TITLES[active]}
           </h1>
 
-          {active === "movies" && !showSearch && (
+          {(active === "movies" || active === "favorites-movies" || active === "favorites-tv") && !showSearch && (
             <div
               className="flex items-center gap-2"
               style={{ ["--wails-draggable" as any]: "no-drag" }}
             >
-              <select
-                value={genre}
-                onChange={(e) => setGenre(e.target.value)}
-                className="rounded-lg border border-white/10 bg-ink-700 px-2.5 py-2 text-sm text-white outline-none focus:border-accent/60"
-                title="Filter by genre"
-              >
-                <option value="">All Genres</option>
-                {movieGenres.map((g) => (
-                  <option key={g} value={g}>
-                    {g}
-                  </option>
-                ))}
-              </select>
+              {active !== "favorites-tv" && (
+                <select
+                  value={genre}
+                  onChange={(e) => setGenre(e.target.value)}
+                  className="rounded-lg border border-white/10 bg-ink-700 px-2.5 py-2 text-sm text-white outline-none focus:border-accent/60"
+                  title="Filter by genre"
+                >
+                  <option value="">All Genres</option>
+                  {movieGenres.map((g) => (
+                    <option key={g} value={g}>
+                      {g}
+                    </option>
+                  ))}
+                </select>
+              )}
               <select
                 value={sortField}
                 onChange={(e) => setSortField(e.target.value as SortField)}
@@ -387,8 +437,12 @@ export default function App() {
                 <option value="title">Title</option>
                 <option value="year">Year</option>
                 <option value="added">Date Added</option>
-                <option value="rating">Rating</option>
-                <option value="duration">Duration</option>
+                {active !== "favorites-tv" && (
+                  <>
+                    <option value="rating">Rating</option>
+                    <option value="duration">Duration</option>
+                  </>
+                )}
               </select>
               <button
                 onClick={() => setDesc((d) => !d)}
@@ -459,6 +513,8 @@ export default function App() {
                 : EMPTY_MESSAGES[browseCategory] ?? "Nothing here yet."
             }
             onSelect={handleSelect}
+            favorites={favorites}
+            onToggleFavorite={toggleFavorite}
           />
           {active === "settings" && !showSearch && (
             <div className="absolute inset-0 overflow-y-auto bg-ink-750 px-8 py-6">
@@ -488,6 +544,8 @@ export default function App() {
           media={selected}
           mpvAvailable={status.mpvAvailable}
           rcloneAvailable={status.rcloneAvailable}
+          isFavorite={favorites.has(selected.key)}
+          onToggleFavorite={toggleFavorite}
           onClose={() => setSelected(null)}
           onToast={toast}
           onSearch={runFieldSearch}

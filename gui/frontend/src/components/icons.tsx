@@ -150,6 +150,12 @@ export const StarIcon = (p: IconProps) => (
   </svg>
 );
 
+export const StarOutlineIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="m12 3 2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9 6.8 19.2l1-5.8L3.5 9.2l5.9-.9z" />
+  </svg>
+);
+
 export const ChevronLeft = (p: IconProps) => (
   <svg {...base(p)}>
     <path d="M15 6l-6 6 6 6" />
