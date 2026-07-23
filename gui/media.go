@@ -210,9 +210,10 @@ func isInProgress(item *plex.MediaItem) bool {
 	return item.ViewOffset > 0 && pct > 0 && pct < 95
 }
 
-// BrowseOptions carries the genre filter and sort order the frontend applies to
-// the Movies grid. It's ignored for every other category. An empty value
-// (Genre "", SortField "") yields the historical default (all movies, A-Z).
+// BrowseOptions carries the genre filter and sort order the frontend applies
+// to the movie, TV, and favorites grids; the fixed-order categories (recently
+// added, continue watching) ignore it. An empty value (Genre "", SortField "")
+// yields each category's historical default.
 type BrowseOptions struct {
 	Genre     string `json:"genre"`     // "" = all genres
 	SortField string `json:"sortField"` // title | year | added | rating | duration
@@ -221,11 +222,12 @@ type BrowseOptions struct {
 
 // ListCategory returns the poster-grid rows for a sidebar category as
 // lightweight cards, read from the in-memory cache. opts (genre filter + sort)
-// is honored for the "movies" and favorites categories; other categories keep
-// their fixed ordering.
+// is honored for the "movies", "tv-shows", and favorites categories; the
+// recently-added and continue-watching categories keep their fixed ordering.
 //
 //	movies                  — all movies, filtered/sorted per opts (default A-Z)
-//	tv-shows                — distinct shows (grouped from episodes), A-Z
+//	tv-shows                — distinct shows (grouped from episodes), sorted
+//	                          per opts (default: newest episode first)
 //	recently-added-movies   — newest movies by AddedAt
 //	recently-added-tv       — shows with the newest episodes, one card per show
 //	continue-watching       — in-progress items, most recently viewed first
@@ -247,7 +249,13 @@ func (a *App) ListCategory(category string, opts BrowseOptions) []MediaCardDTO {
 		return a.warmedCards(out)
 
 	case "tv-shows":
-		return a.warmedCards(a.groupShowCards(c))
+		cards := a.groupShowCards(c)
+		// An empty SortField keeps the historical newest-episode-first order;
+		// sortShowCards would otherwise interpret it as title A-Z.
+		if opts.SortField != "" {
+			sortShowCards(cards, opts)
+		}
+		return a.warmedCards(cards)
 
 	case "favorites-movies":
 		fav := a.favSnapshot()

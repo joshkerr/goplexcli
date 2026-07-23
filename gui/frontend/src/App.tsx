@@ -46,6 +46,34 @@ function isCategory(k: NavKey): k is Category {
   return k !== "downloads" && k !== "settings";
 }
 
+// Per-category sort preferences, persisted to localStorage so each grid
+// remembers its order across launches.
+interface SortPref {
+  sortField: SortField;
+  desc: boolean;
+}
+
+const SORT_STORAGE_KEY = "goplex:sortPrefs";
+const SORTABLE_CATEGORIES: Category[] = ["movies", "favorites-movies", "tv-shows", "favorites-tv"];
+// Show cards only carry title/year/added-order; the other fields are movie-only.
+const TV_CATEGORIES: Category[] = ["tv-shows", "favorites-tv"];
+const TV_SORT_FIELDS: SortField[] = ["title", "year", "added"];
+
+// TV Shows historically lists shows with the newest episodes first; keep that
+// as its default. Everything else defaults to title A-Z.
+const SORT_DEFAULTS: Partial<Record<Category, SortPref>> = {
+  "tv-shows": { sortField: "added", desc: true },
+};
+const FALLBACK_SORT: SortPref = { sortField: "title", desc: false };
+
+function loadSortPrefs(): Partial<Record<Category, SortPref>> {
+  try {
+    return JSON.parse(localStorage.getItem(SORT_STORAGE_KEY) ?? "{}");
+  } catch {
+    return {};
+  }
+}
+
 // searchHeading turns a query into the header shown above the results. A
 // field-scoped query (director:"…" / cast:"…" / genre:"…", produced by clicking
 // a name in the detail modal) gets a friendly label; anything else falls back to
@@ -76,12 +104,36 @@ export default function App() {
   const [loadingGrid, setLoadingGrid] = useState(false);
   const [selected, setSelected] = useState<Media | null>(null);
 
-  // Movies-grid controls (genre filter + sort). Honored only for the Movies
-  // category; other grids ignore them.
+  // Grid controls: the genre filter (movie grids only, session-scoped) and the
+  // per-category sort preferences (persisted across launches).
   const [genre, setGenre] = useState("");
-  const [sortField, setSortField] = useState<SortField>("title");
-  const [desc, setDesc] = useState(false);
+  const [sortPrefs, setSortPrefs] = useState<Partial<Record<Category, SortPref>>>(loadSortPrefs);
   const [movieGenres, setMovieGenres] = useState<string[]>([]);
+
+  const sortPrefFor = useCallback(
+    (cat: Category): SortPref => {
+      const p = sortPrefs[cat] ?? SORT_DEFAULTS[cat] ?? FALLBACK_SORT;
+      // Clamp a stale stored value (e.g. "rating" on a TV grid) so the select
+      // and the backend stay in agreement.
+      if (TV_CATEGORIES.includes(cat) && !TV_SORT_FIELDS.includes(p.sortField)) {
+        return { ...p, sortField: "title" };
+      }
+      return p;
+    },
+    [sortPrefs]
+  );
+
+  const updateSortPref = useCallback((cat: Category, pref: SortPref) => {
+    setSortPrefs((prev) => {
+      const next = { ...prev, [cat]: pref };
+      try {
+        localStorage.setItem(SORT_STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        // Storage unavailable — the preference still applies for this session.
+      }
+      return next;
+    });
+  }, []);
 
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<MediaCard[] | null>(null);
@@ -217,6 +269,7 @@ export default function App() {
     async (cat: Category) => {
       setLoadingGrid(true);
       try {
+        const { sortField, desc } = sortPrefFor(cat);
         const data = await api.listCategory(cat, { genre, sortField, desc });
         setItems(data);
       } catch (e: any) {
@@ -226,7 +279,7 @@ export default function App() {
         setLoadingGrid(false);
       }
     },
-    [toast, genre, sortField, desc]
+    [toast, genre, sortPrefFor]
   );
 
   useEffect(() => {
@@ -265,14 +318,6 @@ export default function App() {
     });
     return off;
   }, [browseCategory, loadCategory]);
-
-  // Shows only carry title/year/added-order, so the other sort fields don't
-  // apply; snap back to title when landing on the Favorites TV grid with one.
-  useEffect(() => {
-    if (active === "favorites-tv" && sortField !== "title" && sortField !== "year" && sortField !== "added") {
-      setSortField("title");
-    }
-  }, [active, sortField]);
 
   const toggleFavorite = useCallback(
     async (key: string) => {
@@ -402,6 +447,12 @@ export default function App() {
   const showSearch = searchResults !== null;
   const gridItems = showSearch ? searchResults! : items;
 
+  // Sort controls target the current sortable grid (hidden during search).
+  const sortCategory =
+    !showSearch && isCategory(active) && SORTABLE_CATEGORIES.includes(active) ? active : null;
+  const sortPref = sortCategory ? sortPrefFor(sortCategory) : null;
+  const sortIsTv = sortCategory !== null && TV_CATEGORIES.includes(sortCategory);
+
   return (
     <div className="flex h-full overflow-hidden bg-ink-900 text-white">
       <Sidebar
@@ -424,12 +475,12 @@ export default function App() {
             {showSearch ? searchHeading(query) : CATEGORY_TITLES[active]}
           </h1>
 
-          {(active === "movies" || active === "favorites-movies" || active === "favorites-tv") && !showSearch && (
+          {sortCategory && sortPref && (
             <div
               className="flex items-center gap-2"
               style={{ ["--wails-draggable" as any]: "no-drag" }}
             >
-              {active !== "favorites-tv" && (
+              {!sortIsTv && (
                 <select
                   value={genre}
                   onChange={(e) => setGenre(e.target.value)}
@@ -445,15 +496,20 @@ export default function App() {
                 </select>
               )}
               <select
-                value={sortField}
-                onChange={(e) => setSortField(e.target.value as SortField)}
+                value={sortPref.sortField}
+                onChange={(e) =>
+                  updateSortPref(sortCategory, {
+                    ...sortPref,
+                    sortField: e.target.value as SortField,
+                  })
+                }
                 className="rounded-lg border border-white/10 bg-ink-700 px-2.5 py-2 text-sm text-white outline-none focus:border-accent/60"
                 title="Sort by"
               >
                 <option value="title">Title</option>
                 <option value="year">Year</option>
                 <option value="added">Date Added</option>
-                {active !== "favorites-tv" && (
+                {!sortIsTv && (
                   <>
                     <option value="rating">Rating</option>
                     <option value="duration">Duration</option>
@@ -461,11 +517,13 @@ export default function App() {
                 )}
               </select>
               <button
-                onClick={() => setDesc((d) => !d)}
+                onClick={() =>
+                  updateSortPref(sortCategory, { ...sortPref, desc: !sortPref.desc })
+                }
                 className="rounded-lg border border-white/10 bg-ink-700 px-3 py-2 text-sm text-white outline-none hover:border-accent/60"
-                title={desc ? "Descending" : "Ascending"}
+                title={sortPref.desc ? "Descending" : "Ascending"}
               >
-                {desc ? "↓" : "↑"}
+                {sortPref.desc ? "↓" : "↑"}
               </button>
             </div>
           )}

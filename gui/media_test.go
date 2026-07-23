@@ -57,6 +57,42 @@ func TestGroupShows(t *testing.T) {
 	}
 }
 
+// TestListCategoryTVSort checks that the TV Shows grid honors sort options and
+// that empty options keep the historical newest-episode-first order.
+func TestListCategoryTVSort(t *testing.T) {
+	a := NewApp()
+	a.setMedia(&cache.Cache{Media: []plex.MediaItem{
+		{Key: "e1", Type: "episode", Title: "P", ParentTitle: "Zeta", Year: 2010, AddedAt: 300},
+		{Key: "e2", Type: "episode", Title: "P", ParentTitle: "Alpha", Year: 2020, AddedAt: 100},
+	}})
+
+	cases := []struct {
+		name string
+		opts BrowseOptions
+		want []string // expected show titles in order
+	}{
+		{"default newest-first", BrowseOptions{}, []string{"Zeta", "Alpha"}},
+		{"title asc", BrowseOptions{SortField: "title"}, []string{"Alpha", "Zeta"}},
+		{"title desc", BrowseOptions{SortField: "title", Desc: true}, []string{"Zeta", "Alpha"}},
+		{"year asc", BrowseOptions{SortField: "year"}, []string{"Zeta", "Alpha"}},
+		{"added asc", BrowseOptions{SortField: "added"}, []string{"Alpha", "Zeta"}},
+		{"added desc", BrowseOptions{SortField: "added", Desc: true}, []string{"Zeta", "Alpha"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := a.ListCategory("tv-shows", tc.opts)
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %d shows, want %d", len(got), len(tc.want))
+			}
+			for i := range tc.want {
+				if got[i].Title != tc.want[i] {
+					t.Errorf("position %d = %q, want %q", i, got[i].Title, tc.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestRecentlyAdded(t *testing.T) {
 	a := NewApp()
 	c := &cache.Cache{Media: []plex.MediaItem{
