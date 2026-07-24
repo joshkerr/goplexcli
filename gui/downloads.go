@@ -27,6 +27,7 @@ type DownloadProgress struct {
 	Bytes   int64   `json:"bytes"`
 	Total   int64   `json:"total"`
 	Speed   int64   `json:"speed"` // bytes/sec, as reported by rclone (0 if unknown)
+	ETA     string  `json:"eta"`   // rclone's remaining-time estimate ("" if unknown); transient, only set on in_progress records
 	Error   string  `json:"error"`
 
 	// Src/Dest are the rclone source and local destination, persisted so an
@@ -162,9 +163,9 @@ func (a *App) Download(keys []string, destOverride string) error {
 
 // statsRegex matches rclone's "Transferred:" progress lines (printed to stderr
 // with -v), e.g. "Transferred: 1.234 GiB / 5.678 GiB, 22%, 10 MiB/s, ETA 1m30s".
-// The trailing rate (group 6/7) is optional — rclone may omit it early on or
-// print a non-numeric placeholder.
-var statsRegex = regexp.MustCompile(`Transferred:\s+([0-9.]+)\s*([kKMGTP]i?[Bb]?)\s*/\s*([0-9.]+)\s*([kKMGTP]i?[Bb]?),\s*([0-9]+)%(?:,\s*([0-9.]+)\s*([kKMGTP]?i?[Bb])/s)?`)
+// The trailing rate (group 6/7) and ETA (group 8) are optional — rclone may
+// omit them early on or print a non-numeric placeholder ("ETA -").
+var statsRegex = regexp.MustCompile(`Transferred:\s+([0-9.]+)\s*([kKMGTP]i?[Bb]?)\s*/\s*([0-9.]+)\s*([kKMGTP]i?[Bb]?),\s*([0-9]+)%(?:,\s*([0-9.]+)\s*([kKMGTP]?i?[Bb])/s)?(?:,\s*ETA\s+(\S+))?`)
 
 // runRclone executes a single transfer, parsing progress from stderr and
 // emitting events. The rclone subprocess is started with the OS-specific
@@ -239,9 +240,13 @@ func (a *App) runRclone(bin string, j downloadJob) error {
 			if len(m) >= 8 && m[6] != "" {
 				speed = parseSize(m[6], m[7])
 			}
+			var eta string
+			if len(m) >= 9 && m[8] != "-" {
+				eta = m[8]
+			}
 			a.recordDownload(DownloadProgress{
 				ID: j.id, Seq: j.seq, Name: j.name, Status: "in_progress",
-				Percent: pct, Bytes: lastBytes, Total: lastTotal, Speed: speed,
+				Percent: pct, Bytes: lastBytes, Total: lastTotal, Speed: speed, ETA: eta,
 			})
 			continue
 		}

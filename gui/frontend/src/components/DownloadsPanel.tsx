@@ -87,6 +87,9 @@ export function DownloadsPanel({
                 {d.status === "in_progress" && d.speed > 0 && (
                   <span className="text-white/60"> · {formatSpeed(d.speed)}</span>
                 )}
+                {d.status === "in_progress" && d.eta && (
+                  <span className="text-white/60"> · ETA {d.eta}</span>
+                )}
                 {d.error && <span className="text-red-400"> · {d.error}</span>}
               </div>
             </div>

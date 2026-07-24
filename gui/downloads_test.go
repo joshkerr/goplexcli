@@ -6,17 +6,19 @@ import (
 )
 
 // TestStatsRegexSpeed checks that the rclone stats parser extracts the transfer
-// rate (and stays correct when rclone omits it).
+// rate and ETA (and stays correct when rclone omits either).
 func TestStatsRegexSpeed(t *testing.T) {
 	cases := []struct {
 		line      string
 		pct       string
-		wantSpeed int64 // bytes/sec, 0 = none
+		wantSpeed int64  // bytes/sec, 0 = none
+		wantETA   string // "" = none (absent or the "-" placeholder)
 	}{
-		{"Transferred:   \t  1.234 GiB / 5.678 GiB, 22%, 10 MiB/s, ETA 7m30s", "22", 10 << 20},
-		{"Transferred:        512 KiB / 100 MiB, 0%, 0 B/s, ETA -", "0", 0},
-		{"Transferred:   \t  2.0 GiB / 2.0 GiB, 100%, 45 MiB/s, ETA 0s", "100", 45 << 20},
-		{"Transferred:   \t  1.5 MiB / 900 MiB, 0%", "0", 0}, // no speed field at all
+		{"Transferred:   \t  1.234 GiB / 5.678 GiB, 22%, 10 MiB/s, ETA 7m30s", "22", 10 << 20, "7m30s"},
+		{"Transferred:        512 KiB / 100 MiB, 0%, 0 B/s, ETA -", "0", 0, ""},
+		{"Transferred:   \t  2.0 GiB / 2.0 GiB, 100%, 45 MiB/s, ETA 0s", "100", 45 << 20, "0s"},
+		{"Transferred:   \t  1.5 MiB / 900 MiB, 0%", "0", 0, ""}, // no speed or ETA field at all
+		{"Transferred:   \t  3 GiB / 12 GiB, 25%, 8 MiB/s, ETA 1h2m3s", "25", 8 << 20, "1h2m3s"},
 	}
 	for _, tc := range cases {
 		m := statsRegex.FindStringSubmatch(tc.line)
@@ -32,6 +34,13 @@ func TestStatsRegexSpeed(t *testing.T) {
 		}
 		if speed != tc.wantSpeed {
 			t.Errorf("speed = %d, want %d (%q)", speed, tc.wantSpeed, tc.line)
+		}
+		var eta string
+		if len(m) >= 9 && m[8] != "-" {
+			eta = m[8]
+		}
+		if eta != tc.wantETA {
+			t.Errorf("eta = %q, want %q (%q)", eta, tc.wantETA, tc.line)
 		}
 	}
 }

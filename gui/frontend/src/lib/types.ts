@@ -113,6 +113,7 @@ export interface DownloadProgress {
   bytes: number;
   total: number;
   speed: number; // bytes/sec (0 if unknown)
+  eta: string; // rclone's remaining-time estimate ("" if unknown)
   error: string;
 }
 
