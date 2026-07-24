@@ -157,6 +157,11 @@ function MetaRow({ media }: { media: Media }) {
 function ItemDetail(props: Props) {
   const { media, mpvAvailable, rcloneAvailable, onToast, onSearch } = props;
   const [busy, setBusy] = useState(false);
+  // Download button feedback: "queued" flips instantly on click (highlight +
+  // disable, so the press visibly registered), "done" when the transfer
+  // finishes. Reset when the modal swaps to another item ("More like this").
+  const [dlState, setDlState] = useState<"idle" | "queued" | "done">("idle");
+  useEffect(() => setDlState("idle"), [media.key]);
   const canResume = media.viewOffset > 0 && media.progressPct < 95;
 
   const play = async (resume: boolean) => {
@@ -179,11 +184,14 @@ function ItemDetail(props: Props) {
       onToast("rclone is not installed", "error");
       return;
     }
+    setDlState("queued");
     try {
       onToast(`Downloading ${media.title}…`);
       await api.download([media.key], "");
+      setDlState("done");
     } catch (e: any) {
       onToast(String(e?.message ?? e), "error");
+      setDlState("idle"); // allow a retry after a failure
     }
   };
 
@@ -254,9 +262,19 @@ function ItemDetail(props: Props) {
             </button>
             <button
               onClick={download}
-              className="flex items-center gap-2 rounded-lg bg-white/10 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-white/20"
+              disabled={dlState !== "idle"}
+              className={`flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-all active:scale-95 ${
+                dlState === "idle"
+                  ? "bg-white/10 text-white hover:bg-white/20"
+                  : "cursor-default bg-accent/20 text-accent-soft"
+              }`}
             >
-              <DownloadIcon width={18} height={18} /> Download
+              <DownloadIcon width={18} height={18} />{" "}
+              {dlState === "idle"
+                ? "Download"
+                : dlState === "queued"
+                ? "Queued"
+                : "Downloaded"}
             </button>
             {media.type === "movie" && (
               <FavoriteButton
