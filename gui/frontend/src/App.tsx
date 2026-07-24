@@ -183,6 +183,15 @@ export default function App() {
     return off;
   }, []);
 
+  // Backend-initiated toasts: background flows (e.g. auto-send to rclonecp)
+  // have no bound-call return path, so their outcomes arrive as events.
+  useEffect(() => {
+    const off = onEvent<{ kind?: string; message: string }>("toast", (d) =>
+      toast(d.message, d.kind === "error" ? "error" : "info")
+    );
+    return off;
+  }, [toast]);
+
   // Playback stage feedback. Errors are not events — they arrive as rejected
   // Play() promises and are toasted by each play button's catch block.
   useEffect(() => {
@@ -611,6 +620,17 @@ export default function App() {
                 onPause={pauseDownload}
                 onResume={resumeDownload}
                 onClearHistory={clearDownloadHistory}
+                onSendToRclonecp={
+                  status.rclonecpAvailable
+                    ? (id) =>
+                        api
+                          .sendToRclonecp(id)
+                          .then(() => toast("Sent to rclonecp"))
+                          .catch((e: any) =>
+                            toast(String(e?.message ?? e), "error")
+                          )
+                    : undefined
+                }
               />
             </div>
           )}

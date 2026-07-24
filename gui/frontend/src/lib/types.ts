@@ -10,6 +10,7 @@ export interface Status {
   episodeCount: number;
   mpvAvailable: boolean;
   rcloneAvailable: boolean;
+  rclonecpAvailable: boolean;
   serverNames: string[] | null;
 }
 
@@ -29,6 +30,8 @@ export interface AppConfig {
   downloadDir: string;
   mpvPath: string;
   rclonePath: string;
+  rclonecpPath: string;
+  autoSendRclonecp: boolean;
   syncPeer: string;
 }
 

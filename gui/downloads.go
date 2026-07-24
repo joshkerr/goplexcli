@@ -34,15 +34,24 @@ type DownloadProgress struct {
 	// the UI.
 	Src  string `json:"src,omitempty"`
 	Dest string `json:"dest,omitempty"`
+
+	// Title/Year carry the item's Plex metadata (show title for episodes) so
+	// "Send to rclonecp" can seed rclonecp's poster search with the exact name
+	// instead of re-parsing the filename. Persisted with the history so the
+	// handoff still works for downloads finished in an earlier session.
+	Title string `json:"title,omitempty"`
+	Year  int    `json:"year,omitempty"`
 }
 
 // downloadJob is a single file transfer.
 type downloadJob struct {
-	id   string
-	seq  int64
-	src  string
-	dest string
-	name string
+	id    string
+	seq   int64
+	src   string
+	dest  string
+	name  string
+	title string
+	year  int
 }
 
 // Download copies the given cached items (by Plex key) to the configured (or
@@ -106,13 +115,21 @@ func (a *App) Download(keys []string, destOverride string) error {
 			continue // no rclone path; skip silently
 		}
 		name := filepath.Base(it.RclonePath)
+		// Episodes carry the show title: that's the name rclonecp's poster
+		// search needs (TMDB is searched by show, not by episode).
+		title := it.Title
+		if it.Type == "episode" && it.ParentTitle != "" {
+			title = it.ParentTitle
+		}
 		seq := a.dlSeq.Add(1)
 		jobs = append(jobs, downloadJob{
-			id:   fmt.Sprintf("dl_%d_%s", seq, name),
-			seq:  seq,
-			src:  it.RclonePath,
-			dest: filepath.Join(destDir, name),
-			name: name,
+			id:    fmt.Sprintf("dl_%d_%s", seq, name),
+			seq:   seq,
+			src:   it.RclonePath,
+			dest:  filepath.Join(destDir, name),
+			name:  name,
+			title: title,
+			year:  it.Year,
 		})
 	}
 	if len(jobs) == 0 {
@@ -124,7 +141,7 @@ func (a *App) Download(keys []string, destOverride string) error {
 	for _, j := range jobs {
 		a.recordDownload(DownloadProgress{
 			ID: j.id, Seq: j.seq, Name: j.name, Status: "pending",
-			Src: j.src, Dest: j.dest,
+			Src: j.src, Dest: j.dest, Title: j.title, Year: j.year,
 		})
 	}
 
@@ -263,6 +280,7 @@ func (a *App) runRclone(bin string, j downloadJob) error {
 		ID: j.id, Seq: j.seq, Name: j.name, Status: "completed",
 		Percent: 100, Bytes: lastTotal, Total: lastTotal,
 	})
+	a.maybeAutoSendToRclonecp(j.id)
 	return nil
 }
 
@@ -314,6 +332,12 @@ func (a *App) recordDownload(dp DownloadProgress) {
 		}
 		if dp.Dest == "" {
 			dp.Dest = prev.Dest
+		}
+		if dp.Title == "" {
+			dp.Title = prev.Title
+		}
+		if dp.Year == 0 {
+			dp.Year = prev.Year
 		}
 	}
 	statusChanged := prev == nil || prev.Status != dp.Status

@@ -49,6 +49,15 @@ type Config struct {
 	RclonePath string `json:"rclone_path,omitempty"`
 	FzfPath    string `json:"fzf_path,omitempty"`
 
+	// RclonecpPath optionally points at the rclonecp GUI binary used by the
+	// GUI's "Send to rclonecp" handoff. If empty, PATH and conventional
+	// install locations are searched.
+	RclonecpPath string `json:"rclonecp_path,omitempty"`
+
+	// AutoSendRclonecp forwards every completed GUI download to rclonecp
+	// automatically, in addition to the manual per-download button.
+	AutoSendRclonecp bool `json:"auto_send_rclonecp,omitempty"`
+
 	// DownloadDir is the destination directory for downloads. A leading "~"
 	// is expanded to the user's home directory. If empty, downloads go to the
 	// current working directory. Can be overridden per-run with --dest.

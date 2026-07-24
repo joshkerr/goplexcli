@@ -1,6 +1,6 @@
 import type { DownloadProgress } from "../lib/types";
 import { formatBytes, formatSpeed } from "../lib/format";
-import { CloseIcon, DownloadIcon, PauseIcon, PlayIcon } from "./icons";
+import { CloseIcon, DownloadIcon, PauseIcon, PlayIcon, SendIcon } from "./icons";
 
 interface Props {
   downloads: DownloadProgress[];
@@ -8,6 +8,9 @@ interface Props {
   onPause: (id: string) => void;
   onResume: (id: string) => void;
   onClearHistory: () => void;
+  // Hand a completed download to rclonecp for cover art + onward copy.
+  // Undefined hides the button (rclonecp not installed).
+  onSendToRclonecp?: (id: string) => void;
 }
 
 const STATUS_LABEL: Record<DownloadProgress["status"], string> = {
@@ -35,6 +38,7 @@ export function DownloadsPanel({
   onPause,
   onResume,
   onClearHistory,
+  onSendToRclonecp,
 }: Props) {
   if (downloads.length === 0) {
     return (
@@ -89,6 +93,15 @@ export function DownloadsPanel({
             <div className="shrink-0 text-sm font-semibold tabular-nums text-white/70">
               {Math.round(d.percent)}%
             </div>
+            {d.status === "completed" && onSendToRclonecp && (
+              <button
+                onClick={() => onSendToRclonecp(d.id)}
+                title="Send to rclonecp (add cover art & copy onward)"
+                className="shrink-0 rounded-lg border border-white/10 bg-ink-700 p-1.5 text-white/50 hover:border-accent/60 hover:text-white"
+              >
+                <SendIcon width={14} height={14} />
+              </button>
+            )}
             {(d.status === "pending" || d.status === "in_progress") && (
               <button
                 onClick={() => onPause(d.id)}

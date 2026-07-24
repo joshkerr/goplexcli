@@ -18,6 +18,8 @@ export function Settings({ status, onReindexed, onToast }: Props) {
     downloadDir: "",
     mpvPath: "",
     rclonePath: "",
+    rclonecpPath: "",
+    autoSendRclonecp: false,
     syncPeer: "",
   });
   const [saving, setSaving] = useState(false);
@@ -185,7 +187,7 @@ export function Settings({ status, onReindexed, onToast }: Props) {
 
   const field = (
     label: string,
-    key: keyof AppConfig,
+    key: Exclude<keyof AppConfig, "autoSendRclonecp">,
     placeholder: string,
     hint?: string
   ) => (
@@ -276,6 +278,23 @@ export function Settings({ status, onReindexed, onToast }: Props) {
           "Override if rclone is not on your PATH."
         )}
         {field(
+          "rclonecp path",
+          "rclonecpPath",
+          "rclonecp-gui",
+          "Override if the rclonecp GUI is not on your PATH. Completed downloads can be sent to rclonecp to embed cover art and copy onward."
+        )}
+        <label className="flex cursor-pointer items-center gap-2.5 text-sm text-white/70">
+          <input
+            type="checkbox"
+            checked={cfg.autoSendRclonecp}
+            onChange={(e) =>
+              setCfg({ ...cfg, autoSendRclonecp: e.target.checked })
+            }
+            className="h-4 w-4 accent-accent"
+          />
+          Automatically send completed downloads to rclonecp
+        </label>
+        {field(
           "Sync from computer (LAN)",
           "syncPeer",
           "e.g. ghost-2.local",
@@ -284,6 +303,7 @@ export function Settings({ status, onReindexed, onToast }: Props) {
         <div className="flex items-center gap-3 pt-1 text-xs">
           <Availability label="mpv" ok={status.mpvAvailable} />
           <Availability label="rclone" ok={status.rcloneAvailable} />
+          <Availability label="rclonecp" ok={status.rclonecpAvailable} />
         </div>
         <button
           onClick={save}

@@ -113,6 +113,14 @@ export const DownloadIcon = (p: IconProps) => (
   </svg>
 );
 
+// SendIcon is a paper-plane glyph for handoff actions ("Send to rclonecp").
+export const SendIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M21 3L10 14" />
+    <path d="M21 3l-7 18-4-7-7-4 18-7z" />
+  </svg>
+);
+
 export const SearchIcon = (p: IconProps) => (
   <svg {...base(p)}>
     <circle cx="11" cy="11" r="7" />

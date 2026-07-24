@@ -16,6 +16,7 @@ import (
 	"github.com/joshkerr/goplexcli/internal/lansync"
 	"github.com/joshkerr/goplexcli/internal/player"
 	"github.com/joshkerr/goplexcli/internal/plex"
+	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // App is the Wails backend. Its exported methods are bound into the frontend as
@@ -189,6 +190,16 @@ func (a *App) reloadConfig() *config.Config {
 	return cfg
 }
 
+// emitToast surfaces a message in the frontend's toast stack (the "toast"
+// event). Background flows (goroutines with no bound-call return path) use
+// this so their outcomes — especially failures — stay visible.
+func (a *App) emitToast(kind, message string) {
+	if a.ctx == nil {
+		return
+	}
+	wruntime.EventsEmit(a.ctx, "toast", map[string]string{"kind": kind, "message": message})
+}
+
 // ---- DTOs exposed to the frontend ----
 
 // StatusDTO describes the app's readiness on launch so the frontend can route
@@ -201,9 +212,10 @@ type StatusDTO struct {
 	MovieCount      int      `json:"movieCount"`
 	ShowCount       int      `json:"showCount"`
 	EpisodeCount    int      `json:"episodeCount"`
-	MPVAvailable    bool     `json:"mpvAvailable"`
-	RcloneAvailable bool     `json:"rcloneAvailable"`
-	ServerNames     []string `json:"serverNames"`
+	MPVAvailable      bool     `json:"mpvAvailable"`
+	RcloneAvailable   bool     `json:"rcloneAvailable"`
+	RclonecpAvailable bool     `json:"rclonecpAvailable"`
+	ServerNames       []string `json:"serverNames"`
 }
 
 // ServerDTO is a Plex server discovered during login.
@@ -222,10 +234,12 @@ type ServerSelection struct {
 
 // ConfigDTO is the subset of config the Settings view edits.
 type ConfigDTO struct {
-	DownloadDir string `json:"downloadDir"`
-	MPVPath     string `json:"mpvPath"`
-	RclonePath  string `json:"rclonePath"`
-	SyncPeer    string `json:"syncPeer"`
+	DownloadDir      string `json:"downloadDir"`
+	MPVPath          string `json:"mpvPath"`
+	RclonePath       string `json:"rclonePath"`
+	RclonecpPath     string `json:"rclonecpPath"`
+	AutoSendRclonecp bool   `json:"autoSendRclonecp"`
+	SyncPeer         string `json:"syncPeer"`
 }
 
 // ---- Bound methods: status & config ----
@@ -238,6 +252,8 @@ func (a *App) GetStatus() StatusDTO {
 		MPVAvailable:    player.IsAvailable(cfg.MPVPath),
 		RcloneAvailable: download.IsAvailable(cfg.RclonePath),
 	}
+	_, rcpErr := a.findRclonecp()
+	dto.RclonecpAvailable = rcpErr == nil
 	dto.Configured = cfg.Validate() == nil
 	for _, s := range cfg.Servers {
 		dto.ServerNames = append(dto.ServerNames, s.Name)
@@ -336,10 +352,12 @@ func (a *App) SaveServers(selections []ServerSelection) error {
 func (a *App) GetConfig() ConfigDTO {
 	cfg := a.config()
 	return ConfigDTO{
-		DownloadDir: cfg.DownloadDir,
-		MPVPath:     cfg.MPVPath,
-		RclonePath:  cfg.RclonePath,
-		SyncPeer:    cfg.SyncPeer,
+		DownloadDir:      cfg.DownloadDir,
+		MPVPath:          cfg.MPVPath,
+		RclonePath:       cfg.RclonePath,
+		RclonecpPath:     cfg.RclonecpPath,
+		AutoSendRclonecp: cfg.AutoSendRclonecp,
+		SyncPeer:         cfg.SyncPeer,
 	}
 }
 
@@ -349,6 +367,8 @@ func (a *App) SaveConfig(dto ConfigDTO) error {
 	cfg.DownloadDir = dto.DownloadDir
 	cfg.MPVPath = dto.MPVPath
 	cfg.RclonePath = dto.RclonePath
+	cfg.RclonecpPath = strings.TrimSpace(dto.RclonecpPath)
+	cfg.AutoSendRclonecp = dto.AutoSendRclonecp
 	cfg.SyncPeer = strings.TrimSpace(dto.SyncPeer)
 	if err := cfg.Save(); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
