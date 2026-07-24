@@ -263,7 +263,7 @@ function ItemDetail(props: Props) {
             <button
               onClick={download}
               disabled={dlState !== "idle"}
-              className={`flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-all active:scale-95 ${
+              className={`flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-all ${
                 dlState === "idle"
                   ? "bg-white/10 text-white hover:bg-white/20"
                   : "cursor-default bg-accent/20 text-accent-soft"
@@ -366,6 +366,9 @@ function ShowDetail(props: Props) {
   const [episodes, setEpisodes] = useState<Media[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
+  // Brief "Queued" confirmation on the episode Download button, mirroring the
+  // movie download button's press feedback.
+  const [epQueued, setEpQueued] = useState(false);
 
   useEffect(() => {
     api.getSeasons(media.title).then((s) => {
@@ -420,6 +423,8 @@ function ShowDetail(props: Props) {
     try {
       onToast(`Downloading ${keys.length} episode(s)…`);
       await api.download(keys, "");
+      setEpQueued(true);
+      setTimeout(() => setEpQueued(false), 2000);
     } catch (e: any) {
       onToast(String(e?.message ?? e), "error");
     }
@@ -540,9 +545,15 @@ function ShowDetail(props: Props) {
             </button>
             <button
               onClick={downloadSelected}
-              className="flex items-center gap-2 rounded-lg bg-white/10 px-3.5 py-2 text-sm font-semibold text-white hover:bg-white/20"
+              disabled={epQueued}
+              className={`flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-semibold transition-all ${
+                epQueued
+                  ? "cursor-default bg-accent/20 text-accent-soft"
+                  : "bg-white/10 text-white hover:bg-white/20"
+              }`}
             >
-              <DownloadIcon width={16} height={16} /> Download
+              <DownloadIcon width={16} height={16} />{" "}
+              {epQueued ? "Queued" : "Download"}
             </button>
           </div>
         </div>

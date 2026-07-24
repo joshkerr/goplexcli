@@ -37,3 +37,13 @@ body {
 input {
   user-select: text;
 }
+
+/* Universal press feedback: every enabled button shrinks and brightens the
+   instant it's pressed, so a click visibly registers even when the action's
+   own UI (toast, list refresh) lags behind. The standalone `scale` property
+   composes with transform utilities instead of overwriting them, so buttons
+   positioned with translate don't jump while pressed. */
+button:not(:disabled):active {
+  scale: 0.96;
+  filter: brightness(1.25);
+}
