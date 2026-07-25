@@ -55,6 +55,17 @@ interface SortPref {
 }
 
 const SORT_STORAGE_KEY = "goplex:sortPrefs";
+// Unlike the session-scoped genre filter, hiding foreign-language films is a
+// standing preference, so it persists across launches.
+const HIDE_FOREIGN_KEY = "goplex:hideForeign";
+
+function loadHideForeign(): boolean {
+  try {
+    return localStorage.getItem(HIDE_FOREIGN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 const SORTABLE_CATEGORIES: Category[] = ["movies", "favorites-movies", "tv-shows", "favorites-tv"];
 // Show cards only carry title/year/added-order; the other fields are movie-only.
 const TV_CATEGORIES: Category[] = ["tv-shows", "favorites-tv"];
@@ -105,11 +116,22 @@ export default function App() {
   const [loadingGrid, setLoadingGrid] = useState(false);
   const [selected, setSelected] = useState<Media | null>(null);
 
-  // Grid controls: the genre filter (movie grids only, session-scoped) and the
-  // per-category sort preferences (persisted across launches).
+  // Grid controls: the genre filter (movie grids only, session-scoped), the
+  // hide-foreign toggle (movie grids only, persisted), and the per-category
+  // sort preferences (persisted across launches).
   const [genre, setGenre] = useState("");
+  const [hideForeign, setHideForeign] = useState(loadHideForeign);
   const [sortPrefs, setSortPrefs] = useState<Partial<Record<Category, SortPref>>>(loadSortPrefs);
   const [movieGenres, setMovieGenres] = useState<string[]>([]);
+
+  const updateHideForeign = useCallback((on: boolean) => {
+    setHideForeign(on);
+    try {
+      localStorage.setItem(HIDE_FOREIGN_KEY, on ? "1" : "0");
+    } catch {
+      // Storage unavailable — the preference still applies for this session.
+    }
+  }, []);
 
   const sortPrefFor = useCallback(
     (cat: Category): SortPref => {
@@ -280,7 +302,7 @@ export default function App() {
       setLoadingGrid(true);
       try {
         const { sortField, desc } = sortPrefFor(cat);
-        const data = await api.listCategory(cat, { genre, sortField, desc });
+        const data = await api.listCategory(cat, { genre, sortField, desc, hideForeign });
         setItems(data);
       } catch (e: any) {
         toast(String(e?.message ?? e), "error");
@@ -289,7 +311,7 @@ export default function App() {
         setLoadingGrid(false);
       }
     },
-    [toast, genre, sortPrefFor]
+    [toast, genre, hideForeign, sortPrefFor]
   );
 
   useEffect(() => {
@@ -494,19 +516,33 @@ export default function App() {
               style={{ ["--wails-draggable" as any]: "no-drag" }}
             >
               {!sortIsTv && (
-                <select
-                  value={genre}
-                  onChange={(e) => setGenre(e.target.value)}
-                  className="rounded-lg border border-white/10 bg-ink-700 px-2.5 py-2 text-sm text-white outline-none focus:border-accent/60"
-                  title="Filter by genre"
-                >
-                  <option value="">All Genres</option>
-                  {movieGenres.map((g) => (
-                    <option key={g} value={g}>
-                      {g}
-                    </option>
-                  ))}
-                </select>
+                <>
+                  <select
+                    value={genre}
+                    onChange={(e) => setGenre(e.target.value)}
+                    className="rounded-lg border border-white/10 bg-ink-700 px-2.5 py-2 text-sm text-white outline-none focus:border-accent/60"
+                    title="Filter by genre"
+                  >
+                    <option value="">All Genres</option>
+                    {movieGenres.map((g) => (
+                      <option key={g} value={g}>
+                        {g}
+                      </option>
+                    ))}
+                  </select>
+                  <label
+                    className="flex cursor-pointer select-none items-center gap-1.5 rounded-lg border border-white/10 bg-ink-700 px-2.5 py-2 text-sm text-white outline-none hover:border-accent/60"
+                    title="Hide foreign-language films"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={hideForeign}
+                      onChange={(e) => updateHideForeign(e.target.checked)}
+                      className="accent-accent"
+                    />
+                    Hide foreign
+                  </label>
+                </>
               )}
               <select
                 value={sortPref.sortField}

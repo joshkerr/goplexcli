@@ -210,14 +210,15 @@ func isInProgress(item *plex.MediaItem) bool {
 	return item.ViewOffset > 0 && pct > 0 && pct < 95
 }
 
-// BrowseOptions carries the genre filter and sort order the frontend applies
-// to the movie, TV, and favorites grids; the fixed-order categories (recently
+// BrowseOptions carries the filters and sort order the frontend applies to
+// the movie, TV, and favorites grids; the fixed-order categories (recently
 // added, continue watching) ignore it. An empty value (Genre "", SortField "")
 // yields each category's historical default.
 type BrowseOptions struct {
-	Genre     string `json:"genre"`     // "" = all genres
-	SortField string `json:"sortField"` // title | year | added | rating | duration
-	Desc      bool   `json:"desc"`
+	Genre       string `json:"genre"`     // "" = all genres
+	SortField   string `json:"sortField"` // title | year | added | rating | duration
+	Desc        bool   `json:"desc"`
+	HideForeign bool   `json:"hideForeign"` // drop non-English-language movies
 }
 
 // ListCategory returns the poster-grid rows for a sidebar category as
@@ -266,6 +267,9 @@ func (a *App) ListCategory(category string, opts BrowseOptions) []MediaCardDTO {
 				continue
 			}
 			if opts.Genre != "" && !hasTag(m.Genre, opts.Genre) {
+				continue
+			}
+			if opts.HideForeign && m.IsForeignLanguage() {
 				continue
 			}
 			items = append(items, m)
@@ -365,9 +369,9 @@ func (a *App) showDTO(c *cache.Cache, title string) (MediaDTO, error) {
 // surface only the most common ones, which map to Plex's primary genres.
 const movieGenreLimit = 12
 
-// sortMovieItems returns the movie items matching opts.Genre, ordered by
-// opts.SortField / opts.Desc. An empty opts yields all movies sorted A-Z by
-// title, matching the historical default.
+// sortMovieItems returns the movie items matching opts' filters (genre,
+// hide-foreign), ordered by opts.SortField / opts.Desc. An empty opts yields
+// all movies sorted A-Z by title, matching the historical default.
 func sortMovieItems(c *cache.Cache, opts BrowseOptions) []*plex.MediaItem {
 	var items []*plex.MediaItem
 	for i := range c.Media {
@@ -375,6 +379,9 @@ func sortMovieItems(c *cache.Cache, opts BrowseOptions) []*plex.MediaItem {
 			continue
 		}
 		if opts.Genre != "" && !hasTag(c.Media[i].Genre, opts.Genre) {
+			continue
+		}
+		if opts.HideForeign && c.Media[i].IsForeignLanguage() {
 			continue
 		}
 		items = append(items, &c.Media[i])

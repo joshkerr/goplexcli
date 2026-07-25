@@ -101,6 +101,8 @@ type MediaItem struct {
 	Cast             string // Cast members, comma-separated
 	AddedAt          int64  // Unix timestamp when added to library
 	OriginallyAired  string // Original air date for episodes
+	OriginalTitle    string // Native-language title when it differs from Title (movies)
+	AudioLanguages   string // Distinct audio-track language tags, comma-separated (movies; "" if unknown)
 }
 
 // New creates a new Plex client
@@ -462,6 +464,7 @@ type sectionMetadata struct {
 	Key                   string       `json:"key"`
 	RatingKey             string       `json:"ratingKey"`
 	Title                 string       `json:"title"`
+	OriginalTitle         *string      `json:"originalTitle"`
 	Year                  *int         `json:"year"`
 	Summary               *string      `json:"summary"`
 	Rating                *float32     `json:"rating"`
@@ -484,9 +487,20 @@ type sectionMetadata struct {
 	Role                  []taggedItem `json:"Role"`
 	Media                 []struct {
 		Part []struct {
-			File *string `json:"file"`
+			File   *string        `json:"file"`
+			Stream []streamDetail `json:"Stream"`
 		} `json:"Part"`
 	} `json:"Media"`
+}
+
+// streamDetail mirrors a media part's Stream element. Section listings only
+// include streams when the request asks for them (includeStreams=1); older
+// servers that ignore the parameter simply leave this empty.
+type streamDetail struct {
+	StreamType   *int    `json:"streamType"`   // 1=video, 2=audio, 3=subtitle
+	Language     *string `json:"language"`     // display name, e.g. "English"
+	LanguageTag  *string `json:"languageTag"`  // BCP-47, e.g. "en"
+	LanguageCode *string `json:"languageCode"` // ISO 639-2, e.g. "eng"
 }
 
 // GetMediaFromSection returns media items from a specific library section.
@@ -516,8 +530,10 @@ func (c *Client) getMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 		// For TV shows, specifically request type=4 (episodes)
 		baseURL = fmt.Sprintf("%s/library/sections/%s/all?type=4&X-Plex-Token=%s", c.serverURL, sectionKey, c.token)
 	} else {
-		// For movies, use the default all endpoint
-		baseURL = fmt.Sprintf("%s/library/sections/%s/all?X-Plex-Token=%s", c.serverURL, sectionKey, c.token)
+		// For movies, use the default all endpoint. includeStreams asks the
+		// server to inline each part's Stream elements so audio-track languages
+		// can be indexed; servers that don't support it ignore the parameter.
+		baseURL = fmt.Sprintf("%s/library/sections/%s/all?includeStreams=1&X-Plex-Token=%s", c.serverURL, sectionKey, c.token)
 	}
 
 	// For incremental fetches, ask the server for newest items first so we can
@@ -575,6 +591,8 @@ func (c *Client) getMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 				Cast:            strings.Join(extractTags(metadata.Role, castLimit), ", "),
 				AddedAt:         valueOrZeroInt64(metadata.AddedAt),
 				OriginallyAired: valueOrEmpty(metadata.OriginallyAvailableAt),
+				OriginalTitle:   valueOrEmpty(metadata.OriginalTitle),
+				AudioLanguages:  audioLanguages(metadata),
 			}
 
 			// Get file path

@@ -113,9 +113,9 @@ func TestRecentlyAdded(t *testing.T) {
 
 func TestSortMovieItems(t *testing.T) {
 	c := &cache.Cache{Media: []plex.MediaItem{
-		{Key: "b", Type: "movie", Title: "Beta", Year: 2001, AddedAt: 100, Rating: 7, Genre: "Action, Comedy"},
+		{Key: "b", Type: "movie", Title: "Beta", Year: 2001, AddedAt: 100, Rating: 7, Genre: "Action, Comedy", AudioLanguages: "ja"},
 		{Key: "a", Type: "movie", Title: "Alpha", Year: 1999, AddedAt: 300, Rating: 9, Genre: "Drama"},
-		{Key: "c", Type: "movie", Title: "Gamma", Year: 2010, AddedAt: 200, Rating: 5, Genre: "Comedy"},
+		{Key: "c", Type: "movie", Title: "Gamma", Year: 2010, AddedAt: 200, Rating: 5, Genre: "Comedy", AudioLanguages: "fr, en"},
 		{Key: "ep", Type: "episode", Title: "Nope", Genre: "Comedy"},
 	}}
 
@@ -146,6 +146,11 @@ func TestSortMovieItems(t *testing.T) {
 	eq(t, keys(sortMovieItems(c, BrowseOptions{SortField: "year"})), []string{"a", "b", "c"})
 	// Genre filter matches a token within a comma-separated field.
 	eq(t, keys(sortMovieItems(c, BrowseOptions{Genre: "Comedy"})), []string{"b", "c"})
+	// HideForeign drops Beta (Japanese-only audio); Alpha (no language data)
+	// and Gamma (English track present) stay.
+	eq(t, keys(sortMovieItems(c, BrowseOptions{HideForeign: true})), []string{"a", "c"})
+	// Filters compose.
+	eq(t, keys(sortMovieItems(c, BrowseOptions{Genre: "Comedy", HideForeign: true})), []string{"c"})
 }
 
 func TestParseFieldQuery(t *testing.T) {

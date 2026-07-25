@@ -138,12 +138,13 @@ export type Category =
 // sortMovieItems in gui/media.go).
 export type SortField = "title" | "year" | "added" | "rating" | "duration";
 
-// BrowseOptions is the genre filter + sort order passed to ListCategory. The
+// BrowseOptions is the filters + sort order passed to ListCategory. The
 // Movies and Favorites grids honor it; other categories keep a fixed order.
 export interface BrowseOptions {
   genre: string;
   sortField: SortField;
   desc: boolean;
+  hideForeign: boolean;
 }
 
 // UpdateInfo reports whether a newer GUI release is available (see CheckUpdate).
