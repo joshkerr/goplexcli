@@ -200,7 +200,9 @@ func (a *App) runRclone(bin string, j downloadJob) error {
 
 	a.recordDownload(DownloadProgress{ID: j.id, Seq: j.seq, Name: j.name, Status: "in_progress"})
 
-	args := []string{"copyto", "-v", "--stats", "500ms", "--ignore-checksum", j.src, j.dest}
+	// 16 streams because a single TCP stream caps around 3 MiB/s on
+	// high-latency links; 32M cutoff so mid-size files multi-thread too.
+	args := []string{"copyto", "-v", "--stats", "500ms", "--ignore-checksum", "--multi-thread-streams", "16", "--multi-thread-cutoff", "32M", j.src, j.dest}
 	cmd := exec.CommandContext(ctx, bin, args...)
 	configureSysProc(cmd)
 
