@@ -32,6 +32,7 @@ export interface AppConfig {
   rclonePath: string;
   rclonecpPath: string;
   autoSendRclonecp: boolean;
+  slowDeviceMode: boolean;
   syncPeer: string;
 }
 

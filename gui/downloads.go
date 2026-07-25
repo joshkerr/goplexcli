@@ -202,7 +202,13 @@ func (a *App) runRclone(bin string, j downloadJob) error {
 
 	// 16 streams because a single TCP stream caps around 3 MiB/s on
 	// high-latency links; 32M cutoff so mid-size files multi-thread too.
-	args := []string{"copyto", "-v", "--stats", "500ms", "--ignore-checksum", "--multi-thread-streams", "16", "--multi-thread-cutoff", "32M", j.src, j.dest}
+	args := []string{"copyto", "-v", "--stats", "500ms", "--ignore-checksum", "--multi-thread-streams", "16", "--multi-thread-cutoff", "32M"}
+	if a.config().SlowDeviceMode {
+		// SD cards and USB drives collapse under concurrent random writes;
+		// large per-stream buffers make the writes sequential.
+		args = append(args, "--multi-thread-write-buffer-size", "128M")
+	}
+	args = append(args, j.src, j.dest)
 	cmd := exec.CommandContext(ctx, bin, args...)
 	configureSysProc(cmd)
 

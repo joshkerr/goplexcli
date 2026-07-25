@@ -20,6 +20,7 @@ export function Settings({ status, onReindexed, onToast }: Props) {
     rclonePath: "",
     rclonecpPath: "",
     autoSendRclonecp: false,
+    slowDeviceMode: false,
     syncPeer: "",
   });
   const [saving, setSaving] = useState(false);
@@ -187,7 +188,7 @@ export function Settings({ status, onReindexed, onToast }: Props) {
 
   const field = (
     label: string,
-    key: Exclude<keyof AppConfig, "autoSendRclonecp">,
+    key: Exclude<keyof AppConfig, "autoSendRclonecp" | "slowDeviceMode">,
     placeholder: string,
     hint?: string
   ) => (
@@ -293,6 +294,18 @@ export function Settings({ status, onReindexed, onToast }: Props) {
             className="h-4 w-4 accent-accent"
           />
           Automatically send completed downloads to rclonecp
+        </label>
+        <label className="flex cursor-pointer items-center gap-2.5 text-sm text-white/70">
+          <input
+            type="checkbox"
+            checked={cfg.slowDeviceMode}
+            onChange={(e) =>
+              setCfg({ ...cfg, slowDeviceMode: e.target.checked })
+            }
+            className="h-4 w-4 accent-accent"
+          />
+          Slow-device write buffer — smooths downloads onto SD cards and USB
+          drives (uses up to 2 GB RAM during transfers)
         </label>
         {field(
           "Sync from computer (LAN)",

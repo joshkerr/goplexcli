@@ -239,6 +239,7 @@ type ConfigDTO struct {
 	RclonePath       string `json:"rclonePath"`
 	RclonecpPath     string `json:"rclonecpPath"`
 	AutoSendRclonecp bool   `json:"autoSendRclonecp"`
+	SlowDeviceMode   bool   `json:"slowDeviceMode"`
 	SyncPeer         string `json:"syncPeer"`
 }
 
@@ -357,6 +358,7 @@ func (a *App) GetConfig() ConfigDTO {
 		RclonePath:       cfg.RclonePath,
 		RclonecpPath:     cfg.RclonecpPath,
 		AutoSendRclonecp: cfg.AutoSendRclonecp,
+		SlowDeviceMode:   cfg.SlowDeviceMode,
 		SyncPeer:         cfg.SyncPeer,
 	}
 }
@@ -369,6 +371,7 @@ func (a *App) SaveConfig(dto ConfigDTO) error {
 	cfg.RclonePath = dto.RclonePath
 	cfg.RclonecpPath = strings.TrimSpace(dto.RclonecpPath)
 	cfg.AutoSendRclonecp = dto.AutoSendRclonecp
+	cfg.SlowDeviceMode = dto.SlowDeviceMode
 	cfg.SyncPeer = strings.TrimSpace(dto.SyncPeer)
 	if err := cfg.Save(); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)

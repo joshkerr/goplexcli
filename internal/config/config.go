@@ -63,6 +63,11 @@ type Config struct {
 	// current working directory. Can be overridden per-run with --dest.
 	DownloadDir string `json:"download_dir,omitempty"`
 
+	// SlowDeviceMode buffers each multi-thread stream's writes into large
+	// sequential chunks (--multi-thread-write-buffer-size=128M). SD cards and
+	// USB drives collapse under concurrent random writes without this.
+	SlowDeviceMode bool `json:"slow_device_mode,omitempty"`
+
 	// SyncPeer is the hostname or IP (optionally host:port) of another computer
 	// on the LAN to pull the media cache from ("Sync from LAN"). When set, sync
 	// goes straight to this host; when empty, mDNS auto-discovery is used.
