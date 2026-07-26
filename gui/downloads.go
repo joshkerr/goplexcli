@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/joshkerr/goplexcli/internal/config"
+	"github.com/joshkerr/goplexcli/internal/plex"
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -122,12 +123,16 @@ func (a *App) Download(keys []string, destOverride string) error {
 		if it.Type == "episode" && it.ParentTitle != "" {
 			title = it.ParentTitle
 		}
+		dest := filepath.Join(destDir, downloadSubdir(it, cfg.SortDownloads), name)
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return fmt.Errorf("failed to create download directory: %w", err)
+		}
 		seq := a.dlSeq.Add(1)
 		jobs = append(jobs, downloadJob{
 			id:    fmt.Sprintf("dl_%d_%s", seq, name),
 			seq:   seq,
 			src:   it.RclonePath,
-			dest:  filepath.Join(destDir, name),
+			dest:  dest,
 			name:  name,
 			title: title,
 			year:  it.Year,
@@ -159,6 +164,46 @@ func (a *App) Download(keys []string, destOverride string) error {
 		return fmt.Errorf("download failed: %w", firstErr)
 	}
 	return nil
+}
+
+// downloadSubdir returns the subfolder (relative to the download directory) an
+// item is filed into when sorted downloads are enabled: movies into "Movies",
+// episodes into "TV Shows/<show>" — the layout gowebdav's Movies/TV tabs
+// auto-detect, with the show folder naming the show. Plex metadata decides, so
+// no filename guessing is involved; items of any other type (and episodes
+// missing a show title) land in the download directory itself.
+func downloadSubdir(it *plex.MediaItem, sorted bool) string {
+	if !sorted || it == nil {
+		return ""
+	}
+	switch it.Type {
+	case "movie":
+		return "Movies"
+	case "episode":
+		if show := sanitizeDirName(it.ParentTitle); show != "" {
+			return filepath.Join("TV Shows", show)
+		}
+		return "TV Shows"
+	}
+	return ""
+}
+
+// sanitizeDirName makes a Plex title safe as a folder name: characters Windows
+// forbids become "-", control characters are dropped, and edge dots/spaces
+// (invalid on Windows) are trimmed along with any dashes those replacements
+// left dangling ("What If...?" -> "What If").
+func sanitizeDirName(name string) string {
+	name = strings.Map(func(r rune) rune {
+		switch r {
+		case '<', '>', ':', '"', '/', '\\', '|', '?', '*':
+			return '-'
+		}
+		if r < 0x20 {
+			return -1
+		}
+		return r
+	}, name)
+	return strings.Trim(name, " .-")
 }
 
 // statsRegex matches rclone's "Transferred:" progress lines (printed to stderr

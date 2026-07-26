@@ -1,9 +1,37 @@
 package main
 
 import (
+	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/joshkerr/goplexcli/internal/plex"
 )
+
+// TestDownloadSubdir checks the sorted-download destination routing: movies
+// into Movies/, episodes into TV Shows/<show>/ with unsafe folder characters
+// cleaned, and everything else (or sorting disabled) into the root.
+func TestDownloadSubdir(t *testing.T) {
+	cases := []struct {
+		name   string
+		item   plex.MediaItem
+		sorted bool
+		want   string
+	}{
+		{"disabled", plex.MediaItem{Type: "movie"}, false, ""},
+		{"movie", plex.MediaItem{Type: "movie"}, true, "Movies"},
+		{"episode", plex.MediaItem{Type: "episode", ParentTitle: "Severance"}, true, filepath.Join("TV Shows", "Severance")},
+		{"episode show name sanitized", plex.MediaItem{Type: "episode", ParentTitle: "What If...?"}, true, filepath.Join("TV Shows", "What If")},
+		{"episode with colon", plex.MediaItem{Type: "episode", ParentTitle: "Star Trek: Picard"}, true, filepath.Join("TV Shows", "Star Trek- Picard")},
+		{"episode without show", plex.MediaItem{Type: "episode"}, true, "TV Shows"},
+		{"other type", plex.MediaItem{Type: "track"}, true, ""},
+	}
+	for _, tc := range cases {
+		if got := downloadSubdir(&tc.item, tc.sorted); got != tc.want {
+			t.Errorf("%s: downloadSubdir = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
 
 // TestStatsRegexSpeed checks that the rclone stats parser extracts the transfer
 // rate and ETA (and stays correct when rclone omits either).

@@ -68,6 +68,12 @@ type Config struct {
 	// USB drives collapse under concurrent random writes without this.
 	SlowDeviceMode bool `json:"slow_device_mode,omitempty"`
 
+	// SortDownloads files GUI downloads into subfolders of the download
+	// directory by Plex type: movies into "Movies", episodes into
+	// "TV Shows/<show>". The layout matches what gowebdav's Movies/TV tabs
+	// auto-detect, so a shared library folder sorts itself.
+	SortDownloads bool `json:"sort_downloads,omitempty"`
+
 	// SyncPeer is the hostname or IP (optionally host:port) of another computer
 	// on the LAN to pull the media cache from ("Sync from LAN"). When set, sync
 	// goes straight to this host; when empty, mDNS auto-discovery is used.

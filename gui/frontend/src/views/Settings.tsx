@@ -21,6 +21,7 @@ export function Settings({ status, onReindexed, onToast }: Props) {
     rclonecpPath: "",
     autoSendRclonecp: false,
     slowDeviceMode: false,
+    sortDownloads: false,
     syncPeer: "",
   });
   const [saving, setSaving] = useState(false);
@@ -188,7 +189,10 @@ export function Settings({ status, onReindexed, onToast }: Props) {
 
   const field = (
     label: string,
-    key: Exclude<keyof AppConfig, "autoSendRclonecp" | "slowDeviceMode">,
+    key: Exclude<
+      keyof AppConfig,
+      "autoSendRclonecp" | "slowDeviceMode" | "sortDownloads"
+    >,
     placeholder: string,
     hint?: string
   ) => (
@@ -271,6 +275,18 @@ export function Settings({ status, onReindexed, onToast }: Props) {
           "~/Downloads/Plex",
           "Where rclone saves downloaded media. ~ is expanded to your home directory. Defaults to ~/Downloads when empty."
         )}
+        <label className="flex cursor-pointer items-center gap-2.5 text-sm text-white/70">
+          <input
+            type="checkbox"
+            checked={cfg.sortDownloads}
+            onChange={(e) =>
+              setCfg({ ...cfg, sortDownloads: e.target.checked })
+            }
+            className="h-4 w-4 accent-accent"
+          />
+          Sort downloads into Movies and TV Shows subfolders — episodes are
+          filed under TV Shows/&lt;show&gt;
+        </label>
         {field("mpv path", "mpvPath", "mpv", "Override if mpv is not on your PATH.")}
         {field(
           "rclone path",
