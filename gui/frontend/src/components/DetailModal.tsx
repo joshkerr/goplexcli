@@ -1,7 +1,14 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
-import type { Media, MediaCard, Season } from "../lib/types";
+import type {
+  DownloadConflict,
+  Media,
+  MediaCard,
+  OnExisting,
+  Season,
+} from "../lib/types";
 import { formatDuration, formatRating } from "../lib/format";
+import { ConflictModal } from "./ConflictModal";
 import {
   CloseIcon,
   DownloadIcon,
@@ -161,7 +168,12 @@ function ItemDetail(props: Props) {
   // disable, so the press visibly registered), "done" when the transfer
   // finishes. Reset when the modal swaps to another item ("More like this").
   const [dlState, setDlState] = useState<"idle" | "queued" | "done">("idle");
-  useEffect(() => setDlState("idle"), [media.key]);
+  // Destination files that already exist; non-null shows the conflict prompt.
+  const [conflicts, setConflicts] = useState<DownloadConflict[] | null>(null);
+  useEffect(() => {
+    setDlState("idle");
+    setConflicts(null);
+  }, [media.key]);
   const canResume = media.viewOffset > 0 && media.progressPct < 95;
 
   const play = async (resume: boolean) => {
@@ -184,10 +196,27 @@ function ItemDetail(props: Props) {
       onToast("rclone is not installed", "error");
       return;
     }
+    // Ask how to handle destination files that already exist before starting.
+    try {
+      const found = await api.checkDownloadConflicts([media.key], "");
+      if (found.length > 0) {
+        setConflicts(found);
+        return;
+      }
+    } catch (e: any) {
+      onToast(String(e?.message ?? e), "error");
+      return;
+    }
+    await startDownload("");
+  };
+
+  // startDownload runs the transfer with the chosen existing-file policy
+  // (picked in ConflictModal when the destination file already exists).
+  const startDownload = async (onExisting: OnExisting) => {
     setDlState("queued");
     try {
       onToast(`Downloading ${media.title}…`);
-      await api.download([media.key], "");
+      await api.download([media.key], "", onExisting);
       setDlState("done");
     } catch (e: any) {
       onToast(String(e?.message ?? e), "error");
@@ -286,6 +315,16 @@ function ItemDetail(props: Props) {
         </div>
       </div>
       <MoreLikeThis media={media} onSelect={props.onSelectSimilar} />
+      {conflicts && (
+        <ConflictModal
+          conflicts={conflicts}
+          onChoose={(choice) => {
+            setConflicts(null);
+            if (choice === "cancel") return;
+            void startDownload(choice);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -369,6 +408,13 @@ function ShowDetail(props: Props) {
   // Brief "Queued" confirmation on the episode Download button, mirroring the
   // movie download button's press feedback.
   const [epQueued, setEpQueued] = useState(false);
+  // Destination files that already exist for the pending selection; non-null
+  // shows the conflict prompt. keys captures the selection at check time so
+  // the choice applies to exactly the files the user was warned about.
+  const [conflicts, setConflicts] = useState<{
+    keys: string[];
+    files: DownloadConflict[];
+  } | null>(null);
 
   useEffect(() => {
     api.getSeasons(media.title).then((s) => {
@@ -420,9 +466,25 @@ function ShowDetail(props: Props) {
     const keys = orderedSelection();
     if (keys.length === 0) return;
     if (!rcloneAvailable) return onToast("rclone is not installed", "error");
+    // Ask how to handle destination files that already exist before starting.
+    try {
+      const found = await api.checkDownloadConflicts(keys, "");
+      if (found.length > 0) {
+        setConflicts({ keys, files: found });
+        return;
+      }
+    } catch (e: any) {
+      return onToast(String(e?.message ?? e), "error");
+    }
+    await startDownload(keys, "");
+  };
+
+  // startDownload runs the transfer with the chosen existing-file policy
+  // (picked in ConflictModal when some destination files already exist).
+  const startDownload = async (keys: string[], onExisting: OnExisting) => {
     try {
       onToast(`Downloading ${keys.length} episode(s)…`);
-      await api.download(keys, "");
+      await api.download(keys, "", onExisting);
       setEpQueued(true);
       setTimeout(() => setEpQueued(false), 2000);
     } catch (e: any) {
@@ -557,6 +619,18 @@ function ShowDetail(props: Props) {
             </button>
           </div>
         </div>
+      )}
+
+      {conflicts && (
+        <ConflictModal
+          conflicts={conflicts.files}
+          onChoose={(choice) => {
+            const keys = conflicts.keys;
+            setConflicts(null);
+            if (choice === "cancel") return;
+            void startDownload(keys, choice);
+          }}
+        />
       )}
     </div>
   );

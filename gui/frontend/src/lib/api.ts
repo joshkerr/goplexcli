@@ -7,9 +7,11 @@ import type {
   AppConfig,
   BrowseOptions,
   Category,
+  DownloadConflict,
   DownloadProgress,
   Media,
   MediaCard,
+  OnExisting,
   Person,
   Season,
   Server,
@@ -40,7 +42,15 @@ type WailsApp = {
   GetSeasons(showTitle: string): Promise<Season[]>;
   GetEpisodes(showTitle: string, season: number): Promise<Media[]>;
   Play(keys: string[], resume: boolean): Promise<void>;
-  Download(keys: string[], destOverride: string): Promise<void>;
+  Download(
+    keys: string[],
+    destOverride: string,
+    onExisting: OnExisting
+  ): Promise<void>;
+  CheckDownloadConflicts(
+    keys: string[],
+    destOverride: string
+  ): Promise<DownloadConflict[] | null>;
   ToggleFavorite(key: string): Promise<boolean>;
   ListFavoriteKeys(): Promise<string[] | null>;
   ListDownloads(): Promise<DownloadProgress[] | null>;
@@ -120,7 +130,10 @@ export const api = {
   getEpisodes: (show: string, season: number) =>
     app().GetEpisodes(show, season),
   play: (keys: string[], resume: boolean) => app().Play(keys, resume),
-  download: (keys: string[], dest: string) => app().Download(keys, dest),
+  download: (keys: string[], dest: string, onExisting: OnExisting = "") =>
+    app().Download(keys, dest, onExisting),
+  checkDownloadConflicts: async (keys: string[], dest: string) =>
+    (await app().CheckDownloadConflicts(keys, dest)) ?? [],
   toggleFavorite: (key: string) => app().ToggleFavorite(key),
   listFavoriteKeys: async () => (await app().ListFavoriteKeys()) ?? [],
   listDownloads: async () => (await app().ListDownloads()) ?? [],

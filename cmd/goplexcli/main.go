@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -1655,6 +1656,69 @@ func handleDownloadMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) er
 		return nil
 	}
 
+	// Warn about destination files that already exist and ask whether to
+	// replace, skip, or cancel. Only when stdin is a terminal: non-interactive
+	// runs keep the historical behavior (rclone silently overwrites).
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		// The destination filename is derived exactly the way the download
+		// package derives it: filepath.Join(destDir, filepath.Base(rclonePath)).
+		var conflicts []string
+		for _, path := range rclonePaths {
+			if _, statErr := os.Stat(filepath.Join(destDir, filepath.Base(path))); statErr == nil {
+				conflicts = append(conflicts, path)
+			}
+		}
+		if len(conflicts) > 0 {
+			fmt.Println(warningStyle.Render(fmt.Sprintf("\n⚠ %d file(s) already exist at the destination:", len(conflicts))))
+			for _, path := range conflicts {
+				fmt.Println(warningStyle.Render(fmt.Sprintf("  - %s", filepath.Base(path))))
+			}
+
+			var choice ui.OverwriteChoice
+			if ui.IsAvailable(cfg.FzfPath) {
+				choice, err = ui.PromptMultiOverwrite(len(conflicts), len(rclonePaths), cfg.FzfPath)
+				if err != nil {
+					if errors.Is(err, apperrors.ErrCancelled) {
+						fmt.Println(warningStyle.Render("Cancelled."))
+						return nil
+					}
+					return err
+				}
+			} else {
+				choice = promptOverwriteManual()
+			}
+
+			switch choice {
+			case ui.CancelBatch:
+				fmt.Println(warningStyle.Render("Cancelled."))
+				return nil
+			case ui.SkipExisting:
+				conflictSet := make(map[string]bool, len(conflicts))
+				for _, path := range conflicts {
+					conflictSet[path] = true
+				}
+				var remaining []string
+				for _, path := range rclonePaths {
+					if !conflictSet[path] {
+						remaining = append(remaining, path)
+					}
+				}
+				rclonePaths = remaining
+				if len(rclonePaths) == 0 {
+					fmt.Println(warningStyle.Render("All files already exist; nothing to download."))
+					return nil
+				}
+			case ui.ReplaceAll:
+				for _, path := range conflicts {
+					destPath := filepath.Join(destDir, filepath.Base(path))
+					if err := os.Remove(destPath); err != nil {
+						return fmt.Errorf("failed to remove existing file %q: %w", destPath, err)
+					}
+				}
+			}
+		}
+	}
+
 	// Ensure the destination directory exists
 	if err := os.MkdirAll(destDir, 0755); err != nil {
 		return fmt.Errorf("failed to create download directory %q: %w", destDir, err)
@@ -2815,6 +2879,31 @@ func promptMoreActionManual() (string, error) {
 		return "stream", nil
 	default:
 		return "cancel", nil
+	}
+}
+
+// promptOverwriteManual - fallback for no-fzf selection when destination files
+// already exist. Unreadable or out-of-range input cancels: deleting files needs
+// an explicit choice.
+func promptOverwriteManual() ui.OverwriteChoice {
+	fmt.Println(infoStyle.Render("\nWhat would you like to do?"))
+	fmt.Println("  1. Replace all (delete existing files, download everything)")
+	fmt.Println("  2. Skip existing (download only the rest)")
+	fmt.Println("  3. Cancel")
+	fmt.Print("\nChoice (1-3): ")
+
+	var choice int
+	if _, err := fmt.Scanln(&choice); err != nil {
+		return ui.CancelBatch
+	}
+
+	switch choice {
+	case 1:
+		return ui.ReplaceAll
+	case 2:
+		return ui.SkipExisting
+	default:
+		return ui.CancelBatch
 	}
 }
 

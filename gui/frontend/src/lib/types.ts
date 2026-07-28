@@ -119,6 +119,17 @@ export interface DownloadProgress {
   error: string;
 }
 
+// A requested download whose destination file already exists on disk.
+export interface DownloadConflict {
+  name: string;
+  dest: string;
+}
+
+// What Download does with items whose destination file already exists:
+// "replace" deletes the existing file first, "skip" drops those transfers,
+// and "" overwrites in place (the historical behavior).
+export type OnExisting = "" | "replace" | "skip";
+
 export interface PlaybackStatus {
   stage: "preparing" | "starting" | "playing" | "warning" | "stopped";
   title: string;

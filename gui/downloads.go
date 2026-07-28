@@ -56,31 +56,39 @@ type downloadJob struct {
 	year  int
 }
 
-// Download copies the given cached items (by Plex key) to the configured (or
-// overridden) download directory using rclone, emitting "download:progress"
-// events as each transfer advances.
-//
-// It runs rclone directly (rather than via rclone-golib's executor) so it can
-// (a) honor the configured rclone path, (b) suppress the console window that
-// Windows otherwise pops up for a console subprocess of a GUI app, and
-// (c) surface failures in the UI instead of a silent black console.
-func (a *App) Download(keys []string, destOverride string) error {
-	if len(keys) == 0 {
-		return fmt.Errorf("no items to download")
-	}
+// DownloadConflict describes a requested download whose final destination file
+// already exists on disk. Returned by CheckDownloadConflicts so the frontend
+// can ask the user whether to replace, skip, or cancel before starting.
+type DownloadConflict struct {
+	Name string `json:"name"`
+	Dest string `json:"dest"`
+}
 
+// downloadTarget pairs a cached item with the exact destination path Download
+// will write to.
+type downloadTarget struct {
+	item *plex.MediaItem
+	name string
+	dest string
+}
+
+// resolveDownloadTargets resolves the given Plex keys to their source items and
+// final destination paths. Both Download and CheckDownloadConflicts build their
+// paths through this helper so the two can never disagree. Items without an
+// rclone path are silently dropped, matching Download's historical behavior.
+func (a *App) resolveDownloadTargets(keys []string, destOverride string) ([]downloadTarget, string, error) {
 	cfg := a.config()
 	c := a.media()
 	if c == nil {
-		return fmt.Errorf("media cache is empty")
+		return nil, "", fmt.Errorf("media cache is empty")
 	}
 
 	items, missing, err := resolveItems(c, keys)
 	if err != nil {
-		return err
+		return nil, "", err
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("%d of %d items not found in cache", len(missing), len(keys))
+		return nil, "", fmt.Errorf("%d of %d items not found in cache", len(missing), len(keys))
 	}
 
 	// With nothing configured, ResolveDownloadDir falls back to the process
@@ -89,12 +97,71 @@ func (a *App) Download(keys []string, destOverride string) error {
 	if destOverride == "" && cfg.DownloadDir == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return fmt.Errorf("no download directory configured and no home directory found: %w", err)
+			return nil, "", fmt.Errorf("no download directory configured and no home directory found: %w", err)
 		}
 		destOverride = filepath.Join(home, "Downloads")
 	}
 
 	destDir, err := cfg.ResolveDownloadDir(destOverride)
+	if err != nil {
+		return nil, "", err
+	}
+
+	var targets []downloadTarget
+	for _, it := range items {
+		if it.RclonePath == "" {
+			continue // no rclone path; skip silently
+		}
+		name := filepath.Base(it.RclonePath)
+		targets = append(targets, downloadTarget{
+			item: it,
+			name: name,
+			dest: filepath.Join(destDir, downloadSubdir(it, cfg.SortDownloads), name),
+		})
+	}
+	return targets, destDir, nil
+}
+
+// CheckDownloadConflicts reports which of the given items already have their
+// final destination file on disk, using exactly the paths Download would write
+// to. The frontend calls this before Download so it can prompt the user.
+func (a *App) CheckDownloadConflicts(keys []string, destOverride string) ([]DownloadConflict, error) {
+	if len(keys) == 0 {
+		return []DownloadConflict{}, nil
+	}
+	targets, _, err := a.resolveDownloadTargets(keys, destOverride)
+	if err != nil {
+		return nil, err
+	}
+	conflicts := []DownloadConflict{}
+	for _, t := range targets {
+		if _, err := os.Stat(t.dest); err == nil {
+			conflicts = append(conflicts, DownloadConflict{Name: t.name, Dest: t.dest})
+		}
+	}
+	return conflicts, nil
+}
+
+// Download copies the given cached items (by Plex key) to the configured (or
+// overridden) download directory using rclone, emitting "download:progress"
+// events as each transfer advances.
+//
+// onExisting controls what happens to items whose destination file already
+// exists: "skip" drops those transfers, "replace" deletes the existing file
+// before downloading, and "" keeps the historical behavior (rclone overwrites
+// in place). The frontend picks the policy via CheckDownloadConflicts.
+//
+// It runs rclone directly (rather than via rclone-golib's executor) so it can
+// (a) honor the configured rclone path, (b) suppress the console window that
+// Windows otherwise pops up for a console subprocess of a GUI app, and
+// (c) surface failures in the UI instead of a silent black console.
+func (a *App) Download(keys []string, destOverride string, onExisting string) error {
+	if len(keys) == 0 {
+		return fmt.Errorf("no items to download")
+	}
+
+	cfg := a.config()
+	targets, destDir, err := a.resolveDownloadTargets(keys, destOverride)
 	if err != nil {
 		return err
 	}
@@ -112,33 +179,45 @@ func (a *App) Download(keys []string, destOverride string) error {
 	}
 
 	var jobs []downloadJob
-	for _, it := range items {
-		if it.RclonePath == "" {
-			continue // no rclone path; skip silently
+	skipped := 0
+	for _, t := range targets {
+		if _, statErr := os.Stat(t.dest); statErr == nil {
+			switch onExisting {
+			case "skip":
+				skipped++
+				continue
+			case "replace":
+				if err := os.Remove(t.dest); err != nil {
+					return fmt.Errorf("failed to remove existing file %q: %w", t.dest, err)
+				}
+			}
 		}
-		name := filepath.Base(it.RclonePath)
+		it := t.item
 		// Episodes carry the show title: that's the name rclonecp's poster
 		// search needs (TMDB is searched by show, not by episode).
 		title := it.Title
 		if it.Type == "episode" && it.ParentTitle != "" {
 			title = it.ParentTitle
 		}
-		dest := filepath.Join(destDir, downloadSubdir(it, cfg.SortDownloads), name)
-		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(t.dest), 0o755); err != nil {
 			return fmt.Errorf("failed to create download directory: %w", err)
 		}
 		seq := a.dlSeq.Add(1)
 		jobs = append(jobs, downloadJob{
-			id:    fmt.Sprintf("dl_%d_%s", seq, name),
+			id:    fmt.Sprintf("dl_%d_%s", seq, t.name),
 			seq:   seq,
 			src:   it.RclonePath,
-			dest:  dest,
-			name:  name,
+			dest:  t.dest,
+			name:  t.name,
 			title: title,
 			year:  it.Year,
 		})
 	}
 	if len(jobs) == 0 {
+		if skipped > 0 {
+			// Every requested file already exists and the user chose to skip.
+			return nil
+		}
 		return fmt.Errorf("none of the selected items have a downloadable path")
 	}
 
