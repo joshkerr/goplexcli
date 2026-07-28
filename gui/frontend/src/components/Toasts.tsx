@@ -2,6 +2,9 @@ export interface Toast {
   id: number;
   message: string;
   kind: "info" | "error";
+  // Toasts sharing a tag update in place instead of stacking, so a long-running
+  // flow (library sync) can live-update a single toast.
+  tag?: string;
 }
 
 interface Props {

@@ -16,6 +16,13 @@ const base = (props: IconProps) => ({
   ...props,
 });
 
+export const SyncIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M21 12a9 9 0 1 1-2.64-6.36L21 8" />
+    <path d="M21 3v5h-5" />
+  </svg>
+);
+
 export const FilmIcon = (p: IconProps) => (
   <svg {...base(p)}>
     <rect x="3" y="4" width="18" height="16" rx="2" />

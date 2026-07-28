@@ -9,11 +9,28 @@ import type {
 
 interface Props {
   status: Status;
-  onReindexed: () => void;
+  // Library index/sync state lives in App (shared with the header sync button,
+  // which must reflect ops started here and vice versa); the event listeners
+  // driving it are up there too, so this panel only renders and triggers.
+  indexing: null | "reindex" | "update" | "sync";
+  progress: ReindexProgress | null;
+  syncMsg: string;
+  onUpdate: () => void;
+  onSync: () => void;
+  onReindex: () => void;
   onToast: (msg: string, kind?: "info" | "error") => void;
 }
 
-export function Settings({ status, onReindexed, onToast }: Props) {
+export function Settings({
+  status,
+  indexing,
+  progress,
+  syncMsg,
+  onUpdate,
+  onSync,
+  onReindex,
+  onToast,
+}: Props) {
   const [cfg, setCfg] = useState<AppConfig>({
     downloadDir: "",
     mpvPath: "",
@@ -25,11 +42,6 @@ export function Settings({ status, onReindexed, onToast }: Props) {
     syncPeer: "",
   });
   const [saving, setSaving] = useState(false);
-  const [indexing, setIndexing] = useState<
-    null | "reindex" | "update" | "sync"
-  >(null);
-  const [progress, setProgress] = useState<ReindexProgress | null>(null);
-  const [syncMsg, setSyncMsg] = useState("");
 
   // App version + self-update state.
   const [appVersion, setAppVersion] = useState("");
@@ -54,65 +66,6 @@ export function Settings({ status, onReindexed, onToast }: Props) {
     );
   }, []);
 
-  useEffect(() => {
-    const off = onEvent<ReindexProgress>("reindex:progress", setProgress);
-    const offDone = onEvent<{
-      mode?: "reindex" | "update";
-      count: number;
-      added?: number;
-      error?: string;
-    }>("reindex:done", (d) => {
-      setIndexing(null);
-      if (d.error) onToast(d.error, "error");
-      else {
-        if (d.mode === "update") {
-          onToast(
-            d.added
-              ? `Added ${d.added} new item${d.added === 1 ? "" : "s"}`
-              : "Library already up to date"
-          );
-        } else {
-          onToast(`Indexed ${d.count} items`);
-        }
-        onReindexed();
-      }
-    });
-    return () => {
-      off();
-      offDone();
-    };
-  }, [onReindexed, onToast]);
-
-  useEffect(() => {
-    const off = onEvent<{ message: string }>("sync:progress", (d) =>
-      setSyncMsg(d.message)
-    );
-    const offDone = onEvent<{
-      updated?: boolean;
-      upToDate?: boolean;
-      count?: number;
-      source?: string;
-      error?: string;
-    }>("sync:done", (d) => {
-      setIndexing(null);
-      setSyncMsg("");
-      if (d.error) onToast(d.error, "error");
-      else if (d.upToDate) onToast("Already up to date — no newer cache found");
-      else {
-        onToast(
-          `Synced ${d.count?.toLocaleString() ?? ""} items${
-            d.source ? ` from ${d.source}` : ""
-          }`
-        );
-        onReindexed();
-      }
-    });
-    return () => {
-      off();
-      offDone();
-    };
-  }, [onReindexed, onToast]);
-
   const save = async () => {
     setSaving(true);
     try {
@@ -122,41 +75,6 @@ export function Settings({ status, onReindexed, onToast }: Props) {
       onToast(String(e?.message ?? e), "error");
     } finally {
       setSaving(false);
-    }
-  };
-
-  const reindex = async () => {
-    setIndexing("reindex");
-    setProgress(null);
-    try {
-      await api.reindex();
-    } catch (e: any) {
-      setIndexing(null);
-      onToast(String(e?.message ?? e), "error");
-    }
-  };
-
-  const update = async () => {
-    setIndexing("update");
-    setProgress(null);
-    try {
-      await api.update();
-    } catch (e: any) {
-      setIndexing(null);
-      onToast(String(e?.message ?? e), "error");
-    }
-  };
-
-  const sync = async () => {
-    setIndexing("sync");
-    setProgress(null);
-    setSyncMsg("Looking for other computers…");
-    try {
-      await api.syncFromLAN();
-    } catch (e: any) {
-      setIndexing(null);
-      setSyncMsg("");
-      onToast(String(e?.message ?? e), "error");
     }
   };
 
@@ -239,21 +157,21 @@ export function Settings({ status, onReindexed, onToast }: Props) {
 
         <div className="flex flex-wrap gap-3">
           <button
-            onClick={update}
+            onClick={onUpdate}
             disabled={!!indexing}
             className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-ink-900 transition-colors hover:bg-accent-soft disabled:opacity-50"
           >
             {indexing === "update" ? "Updating…" : "Update library"}
           </button>
           <button
-            onClick={sync}
+            onClick={onSync}
             disabled={!!indexing}
             className="rounded-lg bg-white/10 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-white/20 disabled:opacity-50"
           >
             {indexing === "sync" ? "Syncing…" : "Sync from LAN"}
           </button>
           <button
-            onClick={reindex}
+            onClick={onReindex}
             disabled={!!indexing}
             className="rounded-lg bg-white/10 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-white/20 disabled:opacity-50"
           >
