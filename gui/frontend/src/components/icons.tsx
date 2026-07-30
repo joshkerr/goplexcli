@@ -114,6 +114,14 @@ export const ResumeIcon = (p: IconProps) => (
   </svg>
 );
 
+// CheckIcon reuses the same checkmark path as the poster grid's watched badge
+// (see PosterCard.tsx), so the sidebar entry reads consistently with it.
+export const CheckIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M5 12l5 5L20 7" />
+  </svg>
+);
+
 export const DownloadIcon = (p: IconProps) => (
   <svg {...base(p)}>
     <path d="M12 3v12M7 11l5 4 5-4M5 21h14" />
