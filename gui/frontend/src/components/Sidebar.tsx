@@ -2,6 +2,7 @@ import type { Category } from "../lib/types";
 import { isMac } from "../lib/api";
 import {
   BrandMark,
+  CheckIcon,
   DownloadIcon,
   FilmIcon,
   ResumeIcon,
@@ -24,6 +25,7 @@ const ITEMS: NavItem[] = [
   { key: "movies", label: "Movies", icon: FilmIcon, group: "Library" },
   { key: "tv-shows", label: "TV Shows", icon: TvIcon, group: "Library" },
   { key: "continue-watching", label: "Continue Watching", icon: ResumeIcon, group: "Library" },
+  { key: "watch-again", label: "Watch Again", icon: CheckIcon, group: "Library" },
   { key: "favorites-movies", label: "Movies", icon: FilmIcon, group: "Favorites" },
   { key: "favorites-tv", label: "TV Shows", icon: TvIcon, group: "Favorites" },
   { key: "recently-added-movies", label: "New Movies", icon: SparkIcon, group: "Recently Added" },

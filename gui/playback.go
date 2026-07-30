@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"time"
 
@@ -112,6 +113,11 @@ func (a *App) Play(keys []string, resume bool) error {
 	if tracking {
 		tracker.Stop()
 		persistProgress(tracker)
+		// Ask Plex what it actually decided (it already got timeline reports
+		// throughout playback, so it knows better than any local heuristic
+		// whether this counts as watched) and patch just the played items,
+		// rather than waiting for a manual reindex to pick up the checkmark.
+		refreshWatchedStatus(context.Background(), client, tracker.Progress())
 		// The on-disk cache now has updated resume offsets; drop the in-memory
 		// copy so Continue Watching reflects them on the next browse.
 		a.invalidateMedia()
@@ -195,6 +201,54 @@ func persistProgress(tracker *progress.Tracker) {
 		return
 	}
 	if c.ApplyOffsets(offsets) {
+		_ = c.Save()
+	}
+}
+
+// refreshWatchedStatus re-fetches the played items' current watched status
+// directly from Plex and patches the local cache, so the checkmark reflects
+// whatever Plex settled on without waiting for a manual reindex. Best-effort,
+// like persistProgress — and like it, uses the playlist's primary client, so
+// (as with progress reporting) a mixed-server playlist only refreshes
+// correctly for items on the first item's server. offsets is keyed by
+// MediaItem.Key, as returned by Tracker.Progress().
+func refreshWatchedStatus(ctx context.Context, client *plex.Client, offsets map[string]int) {
+	if len(offsets) == 0 {
+		return
+	}
+
+	type status struct {
+		viewOffset   int
+		viewCount    int
+		lastViewedAt int64
+	}
+	statuses := make(map[string]status, len(offsets))
+	for key := range offsets {
+		viewOffset, viewCount, lastViewedAt, err := client.GetWatchStatus(ctx, key)
+		if err != nil {
+			log.Printf("failed to refresh watch status for %s: %v", key, err)
+			continue
+		}
+		statuses[key] = status{viewOffset, viewCount, lastViewedAt}
+	}
+	if len(statuses) == 0 {
+		return
+	}
+
+	c, err := cache.Load()
+	if err != nil {
+		return
+	}
+	updated := false
+	for i := range c.Media {
+		if s, ok := statuses[c.Media[i].Key]; ok {
+			c.Media[i].ViewOffset = s.viewOffset
+			c.Media[i].ViewCount = s.viewCount
+			c.Media[i].LastViewedAt = s.lastViewedAt
+			updated = true
+		}
+	}
+	if updated {
 		_ = c.Save()
 	}
 }

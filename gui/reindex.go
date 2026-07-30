@@ -193,11 +193,40 @@ func newestAddedFunc(existing []plex.MediaItem) func(serverName, libType string)
 }
 
 // mergeMedia combines newly fetched items into the existing cached items,
-// deduplicating by server name and key. Items present in both are replaced with
-// the freshly fetched version (picking up metadata changes). It returns the
-// merged slice and the number of items that were newly added.
+// deduplicating by server identity and key. Items present in both are replaced
+// with the freshly fetched version (picking up metadata changes). It returns
+// the merged slice and the number of items that were newly added.
 func mergeMedia(existing, fetched []plex.MediaItem) ([]plex.MediaItem, int) {
-	keyOf := func(m plex.MediaItem) string { return m.ServerName + "\x00" + m.Key }
+	// fetched items always carry a fresh ServerMachineID (populated by the
+	// TestContext call that precedes every fetch). existing items indexed
+	// before this field existed won't have one, so learn the ServerName ->
+	// MachineID mapping from this run's fetch and use it to key legacy
+	// entries the same way — otherwise the first merge after upgrading would
+	// itself duplicate every item, since a legacy entry and its freshly
+	// fetched counterpart would land on different keys.
+	nameToMachineID := make(map[string]string, len(fetched))
+	for _, m := range fetched {
+		if m.ServerMachineID != "" && m.ServerName != "" {
+			nameToMachineID[m.ServerName] = m.ServerMachineID
+		}
+	}
+
+	// Prefer the server's permanent machine identifier over its user-facing
+	// name: the name can change across config reformats or renames (e.g. a
+	// server indexed under its raw URL before multi-server naming existed,
+	// then again under a friendly name later), which would otherwise make the
+	// same physical library look like two different ones and duplicate every
+	// item.
+	keyOf := func(m plex.MediaItem) string {
+		id := m.ServerMachineID
+		if id == "" {
+			id = nameToMachineID[m.ServerName]
+		}
+		if id == "" {
+			id = m.ServerName
+		}
+		return id + "\x00" + m.Key
+	}
 
 	merged := make([]plex.MediaItem, len(existing))
 	copy(merged, existing)

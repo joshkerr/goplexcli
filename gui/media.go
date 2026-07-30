@@ -232,6 +232,9 @@ type BrowseOptions struct {
 //	recently-added-movies   — newest movies by AddedAt
 //	recently-added-tv       — shows with the newest episodes, one card per show
 //	continue-watching       — in-progress items, most recently viewed first
+//	watch-again             — every watched movie, plus one card per TV show
+//	                          with every episode watched; most recently
+//	                          watched first
 //	favorites-movies        — favorited movies, filtered/sorted per opts
 //	favorites-tv            — favorited shows, sorted per opts (no genre filter)
 func (a *App) ListCategory(category string, opts BrowseOptions) []MediaCardDTO {
@@ -312,6 +315,9 @@ func (a *App) ListCategory(category string, opts BrowseOptions) []MediaCardDTO {
 			out = append(out, a.toCard(it))
 		}
 		return a.warmedCards(out)
+
+	case "watch-again":
+		return a.warmedCards(watchAgainCards(a, c))
 	}
 
 	return []MediaCardDTO{}
@@ -530,6 +536,80 @@ func recentlyAddedCards(a *App, c *cache.Cache, mediaType string, limit int) []M
 	out := make([]MediaCardDTO, 0, len(items))
 	for _, it := range items {
 		out = append(out, a.toCard(it))
+	}
+	return out
+}
+
+// watchAgainCards returns every watched movie, plus one card per TV show
+// where every episode has been watched. A per-episode listing would be far
+// too many cards to browse usefully, and a show that's only partway watched
+// isn't really a "watch again" candidate, so shows only qualify as a whole.
+// Movies and qualifying shows are combined into one list, most recently
+// watched first.
+func watchAgainCards(a *App, c *cache.Cache) []MediaCardDTO {
+	type entry struct {
+		card         MediaCardDTO
+		lastViewedAt int64
+	}
+	var entries []entry
+
+	for i := range c.Media {
+		m := &c.Media[i]
+		if m.Type == "movie" && m.ViewCount > 0 {
+			entries = append(entries, entry{a.toCard(m), m.LastViewedAt})
+		}
+	}
+
+	type showStats struct {
+		episodeCount int
+		watchedCount int
+		lastViewedAt int64
+		sample       *plex.MediaItem // for Year/ThumbURL
+	}
+	order := []string{}
+	shows := map[string]*showStats{}
+	for i := range c.Media {
+		m := &c.Media[i]
+		if m.Type != "episode" || m.ParentTitle == "" {
+			continue
+		}
+		s, ok := shows[m.ParentTitle]
+		if !ok {
+			s = &showStats{sample: m}
+			shows[m.ParentTitle] = s
+			order = append(order, m.ParentTitle)
+		}
+		s.episodeCount++
+		if m.ViewCount > 0 {
+			s.watchedCount++
+		}
+		if m.LastViewedAt > s.lastViewedAt {
+			s.lastViewedAt = m.LastViewedAt
+		}
+	}
+	for _, name := range order {
+		s := shows[name]
+		if s.watchedCount != s.episodeCount {
+			continue // partially watched — not a "watch again" candidate
+		}
+		entries = append(entries, entry{
+			card: MediaCardDTO{
+				Key:          "show:" + name,
+				Type:         "show",
+				Title:        name,
+				DisplayTitle: name,
+				Year:         s.sample.Year,
+				ThumbURL:     a.showThumbURL(s.sample, 320, 480),
+				EpisodeCount: s.episodeCount,
+			},
+			lastViewedAt: s.lastViewedAt,
+		})
+	}
+
+	sort.Slice(entries, func(i, j int) bool { return entries[i].lastViewedAt > entries[j].lastViewedAt })
+	out := make([]MediaCardDTO, len(entries))
+	for i, e := range entries {
+		out[i] = e.card
 	}
 	return out
 }
