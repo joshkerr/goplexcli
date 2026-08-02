@@ -117,6 +117,30 @@ export interface DownloadProgress {
   speed: number; // bytes/sec (0 if unknown)
   eta: string; // rclone's remaining-time estimate ("" if unknown)
   error: string;
+  // Wall-clock queue time (unix ms). seq only orders jobs from one machine;
+  // queuedAt orders local and remote jobs in the merged Downloads list.
+  queuedAt?: number;
+  // Name of the remote server the job runs on; absent for local downloads.
+  origin?: string;
+}
+
+// A registered remote download server (a `goplexcli serve` daemon on another
+// machine), as edited in Settings.
+export interface RemoteServer {
+  name: string;
+  url: string;
+  token: string;
+  enabled: boolean;
+}
+
+// Result of probing a remote server from Settings: distinguishes offline
+// (online=false) from reachable-but-wrong-token (online=true with error).
+export interface RemoteTest {
+  online: boolean;
+  name: string;
+  version: string;
+  platform: string;
+  error?: string;
 }
 
 // A requested download whose destination file already exists on disk.

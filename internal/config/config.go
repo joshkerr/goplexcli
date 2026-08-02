@@ -105,6 +105,55 @@ type Config struct {
 	// sharing WebDAVUser/WebDAVPass), each of these is configured explicitly
 	// with a full base URL (scheme, host, port) and its own username/password.
 	WebDAVTargets []WebDAVTarget `json:"webdav_targets,omitempty"`
+
+	// ServeListen/ServeName/ServeToken configure this machine's `goplexcli
+	// serve` download daemon. Listen defaults to ":47821", name to the
+	// hostname. Token is the bearer token remote GUIs must present; it is
+	// generated on the first `serve` run and kept stable across restarts so
+	// registered clients don't break.
+	ServeListen string `json:"serve_listen,omitempty"`
+	ServeName   string `json:"serve_name,omitempty"`
+	ServeToken  string `json:"serve_token,omitempty"`
+
+	// RemoteServers are `goplexcli serve` daemons on other machines this GUI
+	// can send downloads to. Each is registered manually with the URL and
+	// token the daemon prints at startup. Individually enabled or disabled;
+	// disabled servers are hidden from the download-target picker but kept.
+	RemoteServers []RemoteServer `json:"remote_servers,omitempty"`
+}
+
+// RemoteServer is a registered `goplexcli serve` download daemon on another
+// machine. Downloads sent to it run there independently of this GUI.
+type RemoteServer struct {
+	// Name is a human-readable identifier shown in the download-target picker
+	// (e.g. "media-server"). It must not contain "!", which namespaces remote
+	// job IDs ("<name>!<id>") in the merged Downloads list.
+	Name string `json:"name"`
+	// URL is the daemon's base URL as printed in its startup banner,
+	// e.g. "http://192.168.1.50:47821".
+	URL string `json:"url"`
+	// Token is the daemon's bearer token, also printed in its startup banner.
+	Token string `json:"token"`
+	// Enabled determines whether this server appears in the target picker.
+	Enabled bool `json:"enabled"`
+}
+
+// Validate checks that a remote server has the required fields and a usable
+// URL. It is called when saving so misconfiguration is caught early.
+func (r RemoteServer) Validate() error {
+	if r.Name == "" {
+		return fmt.Errorf("name is required")
+	}
+	if strings.Contains(r.Name, "!") {
+		return fmt.Errorf("name must not contain %q", "!")
+	}
+	if r.URL == "" {
+		return fmt.Errorf("URL is required")
+	}
+	if err := validateServerURL(r.URL); err != nil {
+		return err
+	}
+	return nil
 }
 
 // WebDAVTarget represents an explicitly configured WebDAV server used as a
@@ -383,6 +432,18 @@ func (c *Config) GetEnabledOutplayerTargets() []OutplayerTarget {
 	for _, t := range c.OutplayerTargets {
 		if t.Enabled {
 			enabled = append(enabled, t)
+		}
+	}
+	return enabled
+}
+
+// GetEnabledRemoteServers returns all registered remote download servers that
+// are enabled and should be offered in the download-target picker.
+func (c *Config) GetEnabledRemoteServers() []RemoteServer {
+	var enabled []RemoteServer
+	for _, r := range c.RemoteServers {
+		if r.Enabled {
+			enabled = append(enabled, r)
 		}
 	}
 	return enabled

@@ -3,6 +3,7 @@ import { api, onEvent } from "../lib/api";
 import type {
   AppConfig,
   ReindexProgress,
+  RemoteServer,
   Status,
   UpdateInfo,
 } from "../lib/types";
@@ -19,6 +20,9 @@ interface Props {
   onSync: () => void;
   onReindex: () => void;
   onToast: (msg: string, kind?: "info" | "error") => void;
+  // Called after the remote-server list is saved, so App can refresh the
+  // download-target picker and the remote-jobs poll.
+  onRemoteServersChanged: () => void;
 }
 
 export function Settings({
@@ -30,6 +34,7 @@ export function Settings({
   onSync,
   onReindex,
   onToast,
+  onRemoteServersChanged,
 }: Props) {
   const [cfg, setCfg] = useState<AppConfig>({
     downloadDir: "",
@@ -43,6 +48,12 @@ export function Settings({
   });
   const [saving, setSaving] = useState(false);
 
+  // Remote download servers (`goplexcli serve` daemons on other machines).
+  // Edited locally and persisted by the main Save button.
+  const [servers, setServers] = useState<RemoteServer[]>([]);
+  // Per-row probe outcome, keyed by row index.
+  const [testResults, setTestResults] = useState<Record<number, string>>({});
+
   // App version + self-update state.
   const [appVersion, setAppVersion] = useState("");
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
@@ -52,6 +63,7 @@ export function Settings({
 
   useEffect(() => {
     api.getConfig().then(setCfg).catch(() => {});
+    api.listRemoteServers().then(setServers).catch(() => {});
     api.appVersion().then(setAppVersion).catch(() => {});
     // Check for a newer GUI release in the background on open.
     api
@@ -70,11 +82,35 @@ export function Settings({
     setSaving(true);
     try {
       await api.saveConfig(cfg);
+      // Drop rows the user never filled in rather than failing validation.
+      const kept = servers.filter((s) => s.url.trim() !== "");
+      await api.saveRemoteServers(kept);
+      setServers(await api.listRemoteServers()); // pick up cleaned names
+      onRemoteServersChanged();
       onToast("Settings saved");
     } catch (e: any) {
       onToast(String(e?.message ?? e), "error");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const updateServer = (i: number, patch: Partial<RemoteServer>) => {
+    setServers((prev) => prev.map((s, j) => (j === i ? { ...s, ...patch } : s)));
+  };
+
+  const testServer = async (i: number) => {
+    const s = servers[i];
+    setTestResults((prev) => ({ ...prev, [i]: "Testing…" }));
+    try {
+      const r = await api.testRemoteServer(s.url.trim(), s.token.trim());
+      let msg: string;
+      if (!r.online) msg = `Offline — ${r.error}`;
+      else if (r.error) msg = `Reachable, but the token was rejected — ${r.error}`;
+      else msg = `Online — ${r.name} (goplexcli v${r.version}, ${r.platform})`;
+      setTestResults((prev) => ({ ...prev, [i]: msg }));
+    } catch (e: any) {
+      setTestResults((prev) => ({ ...prev, [i]: String(e?.message ?? e) }));
     }
   };
 
@@ -259,6 +295,98 @@ export function Settings({
         >
           {saving ? "Saving…" : "Save settings"}
         </button>
+      </section>
+
+      <section className="space-y-4 rounded-2xl border border-white/5 bg-ink-700/50 p-6">
+        <h2 className="text-base font-semibold text-white">
+          Remote download servers
+        </h2>
+        <p className="text-xs text-white/30">
+          Send downloads to another computer running{" "}
+          <code className="text-white/50">goplexcli serve</code> — they run
+          there with that machine's rclone and download folder, and keep going
+          after this app closes. The serve command prints the URL and token to
+          enter here. Remote downloads appear in the Downloads panel with a ⇄
+          badge.
+        </p>
+        {servers.map((s, i) => (
+          <div
+            key={i}
+            className="space-y-2 rounded-xl border border-white/10 bg-ink-800 p-4"
+          >
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                value={s.name}
+                onChange={(e) => updateServer(i, { name: e.target.value })}
+                placeholder="Name (e.g. media-server)"
+                className="rounded-lg border border-white/10 bg-ink-900 px-3 py-2 text-sm text-white placeholder-white/30 outline-none focus:border-accent/60"
+              />
+              <input
+                value={s.url}
+                onChange={(e) => updateServer(i, { url: e.target.value })}
+                placeholder="http://192.168.1.50:47821"
+                className="rounded-lg border border-white/10 bg-ink-900 px-3 py-2 text-sm text-white placeholder-white/30 outline-none focus:border-accent/60"
+              />
+            </div>
+            <input
+              value={s.token}
+              onChange={(e) => updateServer(i, { token: e.target.value })}
+              placeholder="Access token (printed by goplexcli serve)"
+              className="w-full rounded-lg border border-white/10 bg-ink-900 px-3 py-2 text-sm text-white placeholder-white/30 outline-none focus:border-accent/60"
+            />
+            <div className="flex items-center gap-3">
+              <label className="flex cursor-pointer items-center gap-2 text-sm text-white/70">
+                <input
+                  type="checkbox"
+                  checked={s.enabled}
+                  onChange={(e) => updateServer(i, { enabled: e.target.checked })}
+                  className="h-4 w-4 accent-accent"
+                />
+                Enabled
+              </label>
+              <button
+                onClick={() => testServer(i)}
+                className="rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/20"
+              >
+                Test
+              </button>
+              <button
+                onClick={() => {
+                  setServers((prev) => prev.filter((_, j) => j !== i));
+                  setTestResults({});
+                }}
+                className="rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-red-300 hover:bg-red-500/20"
+              >
+                Remove
+              </button>
+              {testResults[i] && (
+                <span className="min-w-0 truncate text-xs text-white/50">
+                  {testResults[i]}
+                </span>
+              )}
+            </div>
+          </div>
+        ))}
+        <div className="flex flex-wrap gap-3">
+          <button
+            onClick={() =>
+              setServers((prev) => [
+                ...prev,
+                { name: "", url: "", token: "", enabled: true },
+              ])
+            }
+            className="rounded-lg bg-white/10 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-white/20"
+          >
+            Add server
+          </button>
+          <button
+            onClick={save}
+            disabled={saving}
+            className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-ink-900 transition-colors hover:bg-accent-soft disabled:opacity-50"
+          >
+            {saving ? "Saving…" : "Save settings"}
+          </button>
+        </div>
       </section>
 
       <section className="space-y-4 rounded-2xl border border-white/5 bg-ink-700/50 p-6">

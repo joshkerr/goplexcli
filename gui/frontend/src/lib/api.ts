@@ -13,6 +13,8 @@ import type {
   MediaCard,
   OnExisting,
   Person,
+  RemoteServer,
+  RemoteTest,
   Season,
   Server,
   ServerSelection,
@@ -59,6 +61,17 @@ type WailsApp = {
   PauseDownload(id: string): Promise<void>;
   ResumeDownload(id: string): Promise<void>;
   ClearDownloadHistory(): Promise<void>;
+  ListRemoteServers(): Promise<RemoteServer[] | null>;
+  SaveRemoteServers(servers: RemoteServer[]): Promise<void>;
+  TestRemoteServer(url: string, token: string): Promise<RemoteTest>;
+  DownloadRemote(
+    keys: string[],
+    server: string,
+    onExisting: OnExisting
+  ): Promise<void>;
+  ListRemoteDownloads(): Promise<DownloadProgress[] | null>;
+  CancelRemoteDownload(id: string): Promise<void>;
+  ClearRemoteDownloadHistory(): Promise<void>;
 };
 
 type WailsRuntime = {
@@ -142,6 +155,16 @@ export const api = {
   pauseDownload: (id: string) => app().PauseDownload(id),
   resumeDownload: (id: string) => app().ResumeDownload(id),
   clearDownloadHistory: () => app().ClearDownloadHistory(),
+  listRemoteServers: async () => (await app().ListRemoteServers()) ?? [],
+  saveRemoteServers: (servers: RemoteServer[]) =>
+    app().SaveRemoteServers(servers),
+  testRemoteServer: (url: string, token: string) =>
+    app().TestRemoteServer(url, token),
+  downloadRemote: (keys: string[], server: string, onExisting: OnExisting = "") =>
+    app().DownloadRemote(keys, server, onExisting),
+  listRemoteDownloads: async () => (await app().ListRemoteDownloads()) ?? [],
+  cancelRemoteDownload: (id: string) => app().CancelRemoteDownload(id),
+  clearRemoteDownloadHistory: () => app().ClearRemoteDownloadHistory(),
 };
 
 /** Subscribe to a backend event. Returns an unsubscribe function. */

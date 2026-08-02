@@ -8,6 +8,7 @@ import type {
   Person,
   PlaybackStatus,
   ReindexProgress,
+  RemoteServer,
   SortField,
   Status,
 } from "./lib/types";
@@ -46,6 +47,14 @@ const EMPTY_MESSAGES: Partial<Record<NavKey, string>> = {
 // Category nav keys (everything except the Downloads/Settings panels).
 function isCategory(k: NavKey): k is Category {
   return k !== "downloads" && k !== "settings";
+}
+
+function isFinished(d: DownloadProgress) {
+  return (
+    d.status === "completed" ||
+    d.status === "failed" ||
+    d.status === "cancelled"
+  );
 }
 
 // Per-category sort preferences, persisted to localStorage so each grid
@@ -222,6 +231,18 @@ export default function App() {
   const [downloads, setDownloads] = useState<Record<string, DownloadProgress>>({});
   const [toasts, setToasts] = useState<Toast[]>([]);
 
+  // Registered remote download servers (Settings → Remote download servers).
+  // Loaded once at startup and refreshed after Settings saves; drives the
+  // remote-jobs poll and the download-target picker in the detail modal.
+  const [remoteServers, setRemoteServers] = useState<RemoteServer[]>([]);
+  const refreshRemoteServers = useCallback(() => {
+    api.listRemoteServers().then(setRemoteServers).catch(() => {});
+  }, []);
+  useEffect(() => {
+    refreshRemoteServers();
+  }, [refreshRemoteServers]);
+  const enabledRemotes = remoteServers.filter((r) => r.enabled);
+
   // Favorited card keys (movie keys and synthetic "show:<title>" keys), loaded
   // once and kept in sync locally on toggle so stars update instantly.
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
@@ -284,6 +305,47 @@ export default function App() {
     return off;
   }, []);
 
+  // Remote clients' jobs arrive by polling (they run on other machines, so
+  // there are no Wails events for them): replace the remote slice of the list
+  // wholesale each tick and keep the local, event-driven jobs untouched.
+  // Skipped while the window is hidden and when no remote server is enabled.
+  useEffect(() => {
+    if (enabledRemotes.length === 0) {
+      // Drop stale remote entries when the last server is removed/disabled.
+      setDownloads((prev) => {
+        const entries = Object.entries(prev).filter(([, d]) => !d.origin);
+        return entries.length === Object.keys(prev).length
+          ? prev
+          : Object.fromEntries(entries);
+      });
+      return;
+    }
+    let stop = false;
+    const poll = async () => {
+      if (stop || document.hidden) return;
+      try {
+        const remote = await api.listRemoteDownloads();
+        if (stop) return;
+        setDownloads((prev) => {
+          const next: Record<string, DownloadProgress> = {};
+          for (const [id, d] of Object.entries(prev)) {
+            if (!d.origin) next[id] = d;
+          }
+          for (const d of remote) next[d.id] = d;
+          return next;
+        });
+      } catch {
+        // Servers unreachable — try again next tick.
+      }
+    };
+    poll();
+    const timer = window.setInterval(poll, 1500);
+    return () => {
+      stop = true;
+      window.clearInterval(timer);
+    };
+  }, [enabledRemotes.length]);
+
   // Backend-initiated toasts: background flows (e.g. auto-send to rclonecp)
   // have no bound-call return path, so their outcomes arrive as events.
   useEffect(() => {
@@ -326,7 +388,10 @@ export default function App() {
   const cancelDownload = useCallback(
     async (id: string) => {
       try {
-        await api.cancelDownload(id);
+        // Remote job IDs are namespaced "<server>!<id>" — route the cancel to
+        // the server the job runs on.
+        if (id.includes("!")) await api.cancelRemoteDownload(id);
+        else await api.cancelDownload(id);
       } catch (e: any) {
         toast(String(e?.message ?? e), "error");
       }
@@ -359,8 +424,18 @@ export default function App() {
   const clearDownloadHistory = useCallback(async () => {
     try {
       await api.clearDownloadHistory();
+      // Also clear finished jobs on remote servers; their lists refresh on
+      // the next poll tick, so only the local slice is rebuilt here.
+      await api.clearRemoteDownloadHistory().catch(() => {});
       const list = await api.listDownloads();
-      setDownloads(Object.fromEntries(list.map((d) => [d.id, d])));
+      setDownloads((prev) => {
+        const next: Record<string, DownloadProgress> = {};
+        for (const d of list) next[d.id] = d;
+        for (const [id, d] of Object.entries(prev)) {
+          if (d.origin && !isFinished(d)) next[id] = d;
+        }
+        return next;
+      });
     } catch (e: any) {
       toast(String(e?.message ?? e), "error");
     }
@@ -659,8 +734,12 @@ export default function App() {
     );
   }
 
-  // Newest downloads first.
-  const downloadList = Object.values(downloads).sort((a, b) => b.seq - a.seq);
+  // Newest downloads first. seq only orders jobs from one machine, so the
+  // wall-clock queue time is compared first to interleave local and remote
+  // jobs correctly (entries predating queuedAt sort last — they're oldest).
+  const downloadList = Object.values(downloads).sort(
+    (a, b) => (b.queuedAt ?? 0) - (a.queuedAt ?? 0) || b.seq - a.seq
+  );
   const activeDownloads = downloadList.filter(
     (d) => d.status === "in_progress" || d.status === "pending"
   ).length;
@@ -853,6 +932,7 @@ export default function App() {
                 onSync={() => startLibraryOp("sync")}
                 onReindex={() => startLibraryOp("reindex")}
                 onToast={toast}
+                onRemoteServersChanged={refreshRemoteServers}
               />
             </div>
           )}
@@ -886,6 +966,7 @@ export default function App() {
           media={selected}
           mpvAvailable={status.mpvAvailable}
           rcloneAvailable={status.rcloneAvailable}
+          remoteServers={enabledRemotes.map((r) => r.name)}
           isFavorite={favorites.has(selected.key)}
           onToggleFavorite={toggleFavorite}
           onClose={() => setSelected(null)}

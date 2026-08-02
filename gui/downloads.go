@@ -1,49 +1,26 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
-	"strconv"
-	"strings"
+	"time"
 
 	"github.com/joshkerr/goplexcli/internal/config"
+	"github.com/joshkerr/goplexcli/internal/dlengine"
 	"github.com/joshkerr/goplexcli/internal/plex"
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // DownloadProgress is emitted on "download:progress" for each active transfer.
-type DownloadProgress struct {
-	ID      string  `json:"id"`
-	Seq     int64   `json:"seq"` // monotonically increasing; higher = added later
-	Name    string  `json:"name"`
-	Percent float64 `json:"percent"`
-	Status  string  `json:"status"` // pending | in_progress | paused | completed | failed | cancelled
-	Bytes   int64   `json:"bytes"`
-	Total   int64   `json:"total"`
-	Speed   int64   `json:"speed"` // bytes/sec, as reported by rclone (0 if unknown)
-	ETA     string  `json:"eta"`   // rclone's remaining-time estimate ("" if unknown); transient, only set on in_progress records
-	Error   string  `json:"error"`
-
-	// Src/Dest are the rclone source and local destination, persisted so an
-	// interrupted download can be restarted on the next launch. Not shown in
-	// the UI.
-	Src  string `json:"src,omitempty"`
-	Dest string `json:"dest,omitempty"`
-
-	// Title/Year carry the item's Plex metadata (show title for episodes) so
-	// "Send to rclonecp" can seed rclonecp's poster search with the exact name
-	// instead of re-parsing the filename. Persisted with the history so the
-	// handoff still works for downloads finished in an earlier session.
-	Title string `json:"title,omitempty"`
-	Year  int    `json:"year,omitempty"`
-}
+// It is the shared engine's Progress record — the same shape the serve daemon
+// returns over REST, which is what lets remote jobs merge into the local
+// Downloads panel unchanged.
+type DownloadProgress = dlengine.Progress
 
 // downloadJob is a single file transfer.
 type downloadJob struct {
@@ -222,10 +199,12 @@ func (a *App) Download(keys []string, destOverride string, onExisting string) er
 	}
 
 	// Show every job as queued right away; each waits for dlMu below so only
-	// one transfer runs at a time, across all Download() calls.
+	// one transfer runs at a time, across all Download() calls. QueuedAt orders
+	// these against jobs running on remote serve daemons in the merged list.
+	queuedAt := time.Now().UnixMilli()
 	for _, j := range jobs {
 		a.recordDownload(DownloadProgress{
-			ID: j.id, Seq: j.seq, Name: j.name, Status: "pending",
+			ID: j.id, Seq: j.seq, Name: j.name, Status: "pending", QueuedAt: queuedAt,
 			Src: j.src, Dest: j.dest, Title: j.title, Year: j.year,
 		})
 	}
@@ -252,50 +231,15 @@ func (a *App) Download(keys []string, destOverride string, onExisting string) er
 // no filename guessing is involved; items of any other type (and episodes
 // missing a show title) land in the download directory itself.
 func downloadSubdir(it *plex.MediaItem, sorted bool) string {
-	if !sorted || it == nil {
+	if it == nil {
 		return ""
 	}
-	switch it.Type {
-	case "movie":
-		return "Movies"
-	case "episode":
-		if show := sanitizeDirName(it.ParentTitle); show != "" {
-			return filepath.Join("TV Shows", show)
-		}
-		return "TV Shows"
-	}
-	return ""
+	return dlengine.Subdir(it.Type, it.ParentTitle, sorted)
 }
 
-// sanitizeDirName makes a Plex title safe as a folder name: characters Windows
-// forbids become "-", control characters are dropped, and edge dots/spaces
-// (invalid on Windows) are trimmed along with any dashes those replacements
-// left dangling ("What If...?" -> "What If").
-func sanitizeDirName(name string) string {
-	name = strings.Map(func(r rune) rune {
-		switch r {
-		case '<', '>', ':', '"', '/', '\\', '|', '?', '*':
-			return '-'
-		}
-		if r < 0x20 {
-			return -1
-		}
-		return r
-	}, name)
-	return strings.Trim(name, " .-")
-}
-
-// statsRegex matches rclone's "Transferred:" progress lines (printed to stderr
-// with -v), e.g. "Transferred: 1.234 GiB / 5.678 GiB, 22%, 10 MiB/s, ETA 1m30s".
-// The trailing rate (group 6/7) and ETA (group 8) are optional — rclone may
-// omit them early on or print a non-numeric placeholder ("ETA -").
-var statsRegex = regexp.MustCompile(`Transferred:\s+([0-9.]+)\s*([kKMGTP]i?[Bb]?)\s*/\s*([0-9.]+)\s*([kKMGTP]i?[Bb]?),\s*([0-9]+)%(?:,\s*([0-9.]+)\s*([kKMGTP]?i?[Bb])/s)?(?:,\s*ETA\s+(\S+))?`)
-
-// runRclone executes a single transfer, parsing progress from stderr and
-// emitting events. The rclone subprocess is started with the OS-specific
-// attributes from configureSysProc (no console window on Windows). The
-// transfer can be aborted via CancelDownload, which cancels the context and
-// kills the subprocess.
+// runRclone executes a single transfer via the shared engine, recording
+// progress as events. The transfer can be aborted via CancelDownload, which
+// cancels the context and kills the subprocess.
 func (a *App) runRclone(bin string, j downloadJob) error {
 	// During shutdown, leave queued jobs untouched: their on-disk state is
 	// still "pending", so they restart on the next launch.
@@ -324,75 +268,15 @@ func (a *App) runRclone(bin string, j downloadJob) error {
 
 	a.recordDownload(DownloadProgress{ID: j.id, Seq: j.seq, Name: j.name, Status: "in_progress"})
 
-	// 16 streams because a single TCP stream caps around 3 MiB/s on
-	// high-latency links; 32M cutoff so mid-size files multi-thread too.
-	args := []string{"copyto", "-v", "--stats", "500ms", "--ignore-checksum", "--multi-thread-streams", "16", "--multi-thread-cutoff", "32M"}
-	if a.config().SlowDeviceMode {
-		// SD cards and USB drives collapse under concurrent random writes;
-		// large per-stream buffers make the writes sequential.
-		args = append(args, "--multi-thread-write-buffer-size", "128M")
-	}
-	args = append(args, j.src, j.dest)
-	cmd := exec.CommandContext(ctx, bin, args...)
-	configureSysProc(cmd)
-
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return a.failDownload(j, fmt.Errorf("failed to capture rclone output: %w", err))
-	}
-	if err := cmd.Start(); err != nil {
-		if ctx.Err() != nil {
-			if a.consumePauseReq(j.id) {
-				a.pausedDownload(j, 0, 0, 0)
-			} else if !a.quitting.Load() {
-				a.cancelledDownload(j, 0, 0, 0)
-			}
-			return nil
-		}
-		return a.failDownload(j, fmt.Errorf("failed to start rclone: %w", err))
-	}
-
-	var lastPct float64
-	var lastBytes, lastTotal int64
-	var errLines []string
-	scanner := bufio.NewScanner(stderr)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	scanner.Split(splitCROrLF)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		if m := statsRegex.FindStringSubmatch(line); len(m) >= 6 {
-			pct, _ := strconv.ParseFloat(m[5], 64)
-			lastPct = pct
-			lastBytes = parseSize(m[1], m[2])
-			lastTotal = parseSize(m[3], m[4])
-			var speed int64
-			if len(m) >= 8 && m[6] != "" {
-				speed = parseSize(m[6], m[7])
-			}
-			var eta string
-			if len(m) >= 9 && m[8] != "-" {
-				eta = m[8]
-			}
+	last, err := dlengine.Run(ctx, bin, j.src, j.dest,
+		dlengine.RunOptions{SlowDevice: a.config().SlowDeviceMode},
+		func(s dlengine.Stats) {
 			a.recordDownload(DownloadProgress{
 				ID: j.id, Seq: j.seq, Name: j.name, Status: "in_progress",
-				Percent: pct, Bytes: lastBytes, Total: lastTotal, Speed: speed, ETA: eta,
+				Percent: s.Percent, Bytes: s.Bytes, Total: s.Total, Speed: s.Speed, ETA: s.ETA,
 			})
-			continue
-		}
-		// Keep a short tail of diagnostic lines for error reporting.
-		if strings.Contains(line, "ERROR") || strings.Contains(line, "Failed") ||
-			strings.Contains(line, "error") || strings.Contains(line, "can't") {
-			errLines = append(errLines, line)
-			if len(errLines) > 5 {
-				errLines = errLines[len(errLines)-5:]
-			}
-		}
-	}
-
-	if err := cmd.Wait(); err != nil {
+		})
+	if err != nil {
 		// A cancelled transfer is not a failure — report it as such and don't
 		// bubble an error up to the Download() caller. A kill triggered by
 		// PauseDownload records "paused" (resumable) instead. If the cancel
@@ -400,22 +284,18 @@ func (a *App) runRclone(bin string, j downloadJob) error {
 		// "in_progress" entry alone so the download restarts on the next launch.
 		if ctx.Err() != nil {
 			if a.consumePauseReq(j.id) {
-				a.pausedDownload(j, lastPct, lastBytes, lastTotal)
+				a.pausedDownload(j, last.Percent, last.Bytes, last.Total)
 			} else if !a.quitting.Load() {
-				a.cancelledDownload(j, lastPct, lastBytes, lastTotal)
+				a.cancelledDownload(j, last.Percent, last.Bytes, last.Total)
 			}
 			return nil
 		}
-		msg := strings.Join(errLines, "; ")
-		if msg == "" {
-			msg = err.Error()
-		}
-		return a.failDownload(j, fmt.Errorf("%s", msg))
+		return a.failDownload(j, err)
 	}
 
 	a.recordDownload(DownloadProgress{
 		ID: j.id, Seq: j.seq, Name: j.name, Status: "completed",
-		Percent: 100, Bytes: lastTotal, Total: lastTotal,
+		Percent: 100, Bytes: last.Total, Total: last.Total,
 	})
 	a.maybeAutoSendToRclonecp(j.id)
 	return nil
@@ -475,6 +355,9 @@ func (a *App) recordDownload(dp DownloadProgress) {
 		}
 		if dp.Year == 0 {
 			dp.Year = prev.Year
+		}
+		if dp.QueuedAt == 0 {
+			dp.QueuedAt = prev.QueuedAt
 		}
 	}
 	statusChanged := prev == nil || prev.Status != dp.Status
@@ -773,48 +656,4 @@ func (a *App) resumeDownloads(jobs []downloadJob) {
 		_ = a.runRclone(bin, j) // failures are already recorded per job
 		a.dlMu.Unlock()
 	}
-}
-
-// splitCROrLF is a bufio.SplitFunc that treats both \r and \n as line
-// terminators, so rclone's in-place \r progress updates are read as they arrive.
-func splitCROrLF(data []byte, atEOF bool) (advance int, token []byte, err error) {
-	if atEOF && len(data) == 0 {
-		return 0, nil, nil
-	}
-	if i := strings.IndexAny(string(data), "\r\n"); i >= 0 {
-		advance = i + 1
-		if advance < len(data) && data[i] == '\r' && data[advance] == '\n' {
-			advance++
-		}
-		return advance, data[:i], nil
-	}
-	if atEOF {
-		return len(data), data, nil
-	}
-	return 0, nil, nil
-}
-
-// parseSize converts an rclone size value + unit (e.g. "1.234", "GiB") to bytes.
-func parseSize(value, unit string) int64 {
-	val, err := strconv.ParseFloat(value, 64)
-	if err != nil {
-		return 0
-	}
-	unit = strings.ToUpper(strings.TrimSpace(unit))
-	unit = strings.TrimSuffix(unit, "B")
-	unit = strings.TrimSuffix(unit, "I")
-	multiplier := int64(1)
-	switch unit {
-	case "K":
-		multiplier = 1 << 10
-	case "M":
-		multiplier = 1 << 20
-	case "G":
-		multiplier = 1 << 30
-	case "T":
-		multiplier = 1 << 40
-	case "P":
-		multiplier = 1 << 50
-	}
-	return int64(val * float64(multiplier))
 }

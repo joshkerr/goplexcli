@@ -73,8 +73,18 @@ export function DownloadsPanel({
         >
           <div className="flex items-center justify-between gap-4">
             <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium text-white/90">
-                {d.name}
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="truncate text-sm font-medium text-white/90">
+                  {d.name}
+                </span>
+                {d.origin && (
+                  <span
+                    className="shrink-0 rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-semibold text-sky-300"
+                    title={`Downloading on ${d.origin}`}
+                  >
+                    ⇄ {d.origin}
+                  </span>
+                )}
               </div>
               <div className="mt-0.5 text-xs text-white/40">
                 {STATUS_LABEL[d.status]}
@@ -96,7 +106,10 @@ export function DownloadsPanel({
             <div className="shrink-0 text-sm font-semibold tabular-nums text-white/70">
               {Math.round(d.percent)}%
             </div>
-            {d.status === "completed" && onSendToRclonecp && (
+            {/* Remote jobs: the files are on another machine, so rclonecp
+                handoff doesn't apply, and the daemon supports cancel but not
+                pause/resume. */}
+            {d.status === "completed" && !d.origin && onSendToRclonecp && (
               <button
                 onClick={() => onSendToRclonecp(d.id)}
                 title="Send to rclonecp (add cover art & copy onward)"
@@ -105,7 +118,7 @@ export function DownloadsPanel({
                 <SendIcon width={14} height={14} />
               </button>
             )}
-            {(d.status === "pending" || d.status === "in_progress") && (
+            {(d.status === "pending" || d.status === "in_progress") && !d.origin && (
               <button
                 onClick={() => onPause(d.id)}
                 title="Pause download"
@@ -114,7 +127,7 @@ export function DownloadsPanel({
                 <PauseIcon width={14} height={14} />
               </button>
             )}
-            {d.status === "paused" && (
+            {d.status === "paused" && !d.origin && (
               <button
                 onClick={() => onResume(d.id)}
                 title="Resume download (restarts from the beginning)"

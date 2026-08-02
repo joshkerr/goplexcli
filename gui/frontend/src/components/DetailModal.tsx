@@ -24,6 +24,9 @@ interface Props {
   media: Media;
   rcloneAvailable: boolean;
   mpvAvailable: boolean;
+  // Names of enabled remote download servers. When non-empty, a picker next
+  // to the Download button chooses where the transfer runs ("" = locally).
+  remoteServers: string[];
   isFavorite: boolean;
   onToggleFavorite: (key: string) => void;
   onClose: () => void;
@@ -162,12 +165,15 @@ function MetaRow({ media }: { media: Media }) {
 }
 
 function ItemDetail(props: Props) {
-  const { media, mpvAvailable, rcloneAvailable, onToast, onSearch } = props;
+  const { media, mpvAvailable, rcloneAvailable, remoteServers, onToast, onSearch } =
+    props;
   const [busy, setBusy] = useState(false);
   // Download button feedback: "queued" flips instantly on click (highlight +
   // disable, so the press visibly registered), "done" when the transfer
   // finishes. Reset when the modal swaps to another item ("More like this").
   const [dlState, setDlState] = useState<"idle" | "queued" | "done">("idle");
+  // Where the download runs: "" = this computer, else a remote server name.
+  const [target, setTarget] = useState("");
   // Destination files that already exist; non-null shows the conflict prompt.
   const [conflicts, setConflicts] = useState<DownloadConflict[] | null>(null);
   useEffect(() => {
@@ -192,8 +198,24 @@ function ItemDetail(props: Props) {
   };
 
   const download = async () => {
-    if (!rcloneAvailable) {
+    // A remote target downloads with its own rclone; only local downloads
+    // need rclone on this machine.
+    if (!target && !rcloneAvailable) {
       onToast("rclone is not installed", "error");
+      return;
+    }
+    if (target) {
+      // The files land on the remote machine, so existing-file conflicts
+      // can't be checked from here; the server overwrites in place.
+      setDlState("queued");
+      try {
+        await api.downloadRemote([media.key], target, "");
+        onToast(`Sent ${media.title} to ${target}`);
+        setDlState("done");
+      } catch (e: any) {
+        onToast(String(e?.message ?? e), "error");
+        setDlState("idle"); // allow a retry after a failure
+      }
       return;
     }
     // Ask how to handle destination files that already exist before starting.
@@ -302,9 +324,20 @@ function ItemDetail(props: Props) {
               {dlState === "idle"
                 ? "Download"
                 : dlState === "queued"
-                ? "Queued"
+                ? target
+                  ? "Sending…"
+                  : "Queued"
+                : target
+                ? "Sent"
                 : "Downloaded"}
             </button>
+            {remoteServers.length > 0 && (
+              <TargetPicker
+                target={target}
+                servers={remoteServers}
+                onChange={setTarget}
+              />
+            )}
             {media.type === "movie" && (
               <FavoriteButton
                 isFavorite={props.isFavorite}
@@ -326,6 +359,39 @@ function ItemDetail(props: Props) {
         />
       )}
     </div>
+  );
+}
+
+// TargetPicker chooses where a download runs: this computer or one of the
+// registered remote download servers. Only rendered when at least one remote
+// server is enabled; "" = this computer.
+function TargetPicker({
+  target,
+  servers,
+  onChange,
+  compact = false,
+}: {
+  target: string;
+  servers: string[];
+  onChange: (t: string) => void;
+  compact?: boolean;
+}) {
+  return (
+    <select
+      value={target}
+      onChange={(e) => onChange(e.target.value)}
+      title="Where the download runs"
+      className={`rounded-lg border border-white/10 bg-ink-800 text-white outline-none focus:border-accent/60 ${
+        compact ? "px-2 py-2 text-sm" : "px-2.5 py-2.5 text-sm"
+      }`}
+    >
+      <option value="">To: this computer</option>
+      {servers.map((s) => (
+        <option key={s} value={s}>
+          To: ⇄ {s}
+        </option>
+      ))}
+    </select>
   );
 }
 
@@ -399,7 +465,7 @@ function MoreLikeThis({
 }
 
 function ShowDetail(props: Props) {
-  const { media, mpvAvailable, rcloneAvailable, onToast } = props;
+  const { media, mpvAvailable, rcloneAvailable, remoteServers, onToast } = props;
   const [seasons, setSeasons] = useState<Season[]>([]);
   const [season, setSeason] = useState<number | null>(null);
   const [episodes, setEpisodes] = useState<Media[]>([]);
@@ -408,6 +474,8 @@ function ShowDetail(props: Props) {
   // Brief "Queued" confirmation on the episode Download button, mirroring the
   // movie download button's press feedback.
   const [epQueued, setEpQueued] = useState(false);
+  // Where the download runs: "" = this computer, else a remote server name.
+  const [target, setTarget] = useState("");
   // Destination files that already exist for the pending selection; non-null
   // shows the conflict prompt. keys captures the selection at check time so
   // the choice applies to exactly the files the user was warned about.
@@ -465,6 +533,19 @@ function ShowDetail(props: Props) {
   const downloadSelected = async () => {
     const keys = orderedSelection();
     if (keys.length === 0) return;
+    if (target) {
+      // The files land on the remote machine, so existing-file conflicts
+      // can't be checked from here; the server overwrites in place.
+      try {
+        await api.downloadRemote(keys, target, "");
+        onToast(`Sent ${keys.length} episode(s) to ${target}`);
+        setEpQueued(true);
+        setTimeout(() => setEpQueued(false), 2000);
+      } catch (e: any) {
+        onToast(String(e?.message ?? e), "error");
+      }
+      return;
+    }
     if (!rcloneAvailable) return onToast("rclone is not installed", "error");
     // Ask how to handle destination files that already exist before starting.
     try {
@@ -599,6 +680,14 @@ function ShowDetail(props: Props) {
         <div className="flex shrink-0 items-center justify-between border-t border-white/5 bg-ink-800/60 px-6 py-3">
           <span className="text-sm text-white/60">{selected.size} selected</span>
           <div className="flex gap-2">
+            {remoteServers.length > 0 && (
+              <TargetPicker
+                compact
+                target={target}
+                servers={remoteServers}
+                onChange={setTarget}
+              />
+            )}
             <button
               onClick={playSelected}
               className="flex items-center gap-2 rounded-lg bg-accent px-3.5 py-2 text-sm font-semibold text-ink-900 hover:bg-accent-soft"

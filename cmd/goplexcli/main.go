@@ -10,6 +10,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -24,6 +26,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/joshkerr/goplexcli/internal/cache"
 	"github.com/joshkerr/goplexcli/internal/config"
+	"github.com/joshkerr/goplexcli/internal/dlserver"
 	"github.com/joshkerr/goplexcli/internal/download"
 	apperrors "github.com/joshkerr/goplexcli/internal/errors"
 	"github.com/joshkerr/goplexcli/internal/favorites"
@@ -64,6 +67,13 @@ var (
 	syncServePort           int
 	syncServeUpdateInterval time.Duration
 	syncPullPeer            string
+)
+
+// serveListen/serveName override the configured listen address and display
+// name of the `serve` download daemon for this run.
+var (
+	serveListen string
+	serveName   string
 )
 
 // searchDescriptions when true also matches against item summaries
@@ -440,7 +450,29 @@ multicast), name it directly with --peer:
 	syncPullCmd.Flags().StringVar(&syncPullPeer, "peer", "", "Pull directly from this host[:port], bypassing mDNS discovery")
 	syncCmd.AddCommand(syncServeCmd, syncPullCmd)
 
-	rootCmd.AddCommand(loginCmd, browseCmd, cacheCmd, configCmd, streamCmd, serverCmd, webdavCmd, outplayerCmd, sortCmd, versionCmd, updateCmd, syncCmd, previewCmd)
+	// Serve command: run this machine as a headless download client for GUIs
+	// on other computers.
+	serveCmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Run as a download server that accepts requests from remote GUIs",
+		Long: `Run this machine as a headless download client. GoplexCLI GUIs on other
+computers can register this server (Settings → Remote download servers) and
+send downloads here; transfers run on this machine with its own rclone and
+download directory, and keep going after the sending GUI closes.
+
+The first run generates an access token and prints it together with this
+machine's URLs — paste both into the GUI to register the server. Interrupted
+transfers restart automatically the next time the server starts.
+
+This machine needs rclone and an rclone.conf that knows the same remotes as
+the sender (the download requests are rclone paths, not Plex references), but
+it does not need Plex credentials or a media cache.`,
+		RunE: runServe,
+	}
+	serveCmd.Flags().StringVar(&serveListen, "listen", "", "Address to listen on (default \""+dlserver.DefaultListen+"\", or serve_listen from config)")
+	serveCmd.Flags().StringVar(&serveName, "name", "", "Name shown in remote GUIs (default: hostname, or serve_name from config)")
+
+	rootCmd.AddCommand(loginCmd, browseCmd, cacheCmd, configCmd, streamCmd, serverCmd, serveCmd, webdavCmd, outplayerCmd, sortCmd, versionCmd, updateCmd, syncCmd, previewCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(errorStyle.Render("Error: " + err.Error()))
@@ -3742,6 +3774,108 @@ func runSyncPull(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Synced %d items from %s", len(res.Cache.Media), res.Source)))
+	return nil
+}
+
+// firstNonEmpty returns the first non-empty string, for flag > config > default
+// precedence chains.
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func runServe(cmd *cobra.Command, args []string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	rcloneBin := cfg.RclonePath
+	if rcloneBin == "" {
+		rcloneBin = "rclone"
+	}
+	if _, err := exec.LookPath(rcloneBin); err != nil {
+		return fmt.Errorf("rclone not found (%q) — install rclone or set rclone_path in config", rcloneBin)
+	}
+
+	// With nothing configured, ResolveDownloadDir falls back to the process
+	// working directory; a daemon should land somewhere predictable instead.
+	destOverride := ""
+	if cfg.DownloadDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("no download directory configured and no home directory found: %w", err)
+		}
+		destOverride = filepath.Join(home, "Downloads")
+	}
+	destDir, err := cfg.ResolveDownloadDir(destOverride)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create download directory: %w", err)
+	}
+
+	// The token gates every download request. Generate one on the first run
+	// and persist it so registered GUIs keep working across restarts.
+	if cfg.ServeToken == "" {
+		token, err := dlserver.GenerateToken()
+		if err != nil {
+			return fmt.Errorf("failed to generate access token: %w", err)
+		}
+		cfg.ServeToken = token
+		if err := cfg.Save(); err != nil {
+			return fmt.Errorf("failed to save access token: %w", err)
+		}
+	}
+
+	listen := firstNonEmpty(serveListen, cfg.ServeListen, dlserver.DefaultListen)
+	hostname, _ := os.Hostname()
+	name := firstNonEmpty(serveName, cfg.ServeName, hostname, "goplexcli")
+
+	mgr := dlserver.NewManager(dlserver.Options{
+		RcloneBin:   rcloneBin,
+		DownloadDir: destDir,
+		Sort:        cfg.SortDownloads,
+		SlowDevice:  cfg.SlowDeviceMode,
+	})
+	srv := dlserver.New(name, version, cfg.ServeToken, mgr)
+
+	listener, err := net.Listen("tcp", listen)
+	if err != nil {
+		return fmt.Errorf("failed to listen on %s: %w", listen, err)
+	}
+	httpSrv := &http.Server{Handler: srv.Handler(), ReadHeaderTimeout: 5 * time.Second}
+	go func() { _ = httpSrv.Serve(listener) }()
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	fmt.Println(titleStyle.Render("Download Server"))
+	fmt.Println(successStyle.Render(fmt.Sprintf("✓ Serving as %q on port %d", name, port)))
+	fmt.Println(infoStyle.Render(fmt.Sprintf("  Saving to %s (sorted folders: %v)", destDir, cfg.SortDownloads)))
+	fmt.Println()
+	fmt.Println(infoStyle.Render("Register this server in a GUI under Settings → Remote download servers:"))
+	for _, u := range dlserver.LanURLs(fmt.Sprintf(":%d", port)) {
+		fmt.Println(infoStyle.Render("  URL:   " + u))
+	}
+	fmt.Println(infoStyle.Render("  Token: " + cfg.ServeToken))
+
+	// Requeue transfers interrupted by the last shutdown after the banner so
+	// the restart note isn't buried by progress output.
+	if restarted := mgr.Restore(); restarted > 0 {
+		fmt.Println(successStyle.Render(fmt.Sprintf("✓ Restarting %d interrupted download(s)", restarted)))
+	}
+	fmt.Println(infoStyle.Render("\nPress Ctrl+C to stop; interrupted downloads restart on the next run.\n"))
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	<-sigChan
+	fmt.Println(infoStyle.Render("\nStopping download server..."))
+	mgr.Shutdown()
+	_ = httpSrv.Close()
 	return nil
 }
 
