@@ -102,7 +102,10 @@ var statsRegex = regexp.MustCompile(`Transferred:\s+([0-9.]+)\s*([kKMGTP]i?[Bb]?
 func Run(ctx context.Context, bin, src, dest string, opts RunOptions, onStats func(Stats)) (Stats, error) {
 	// 16 streams because a single TCP stream caps around 3 MiB/s on
 	// high-latency links; 32M cutoff so mid-size files multi-thread too.
-	args := []string{"copyto", "-v", "--stats", "500ms", "--ignore-checksum", "--multi-thread-streams", "16", "--multi-thread-cutoff", "32M"}
+	// --local-no-set-modtime keeps the downloaded file stamped with the time it
+	// arrived instead of the source's (possibly years-old) modtime, so
+	// "newest first" sorts in gowebdav put fresh downloads on top.
+	args := []string{"copyto", "-v", "--stats", "500ms", "--ignore-checksum", "--multi-thread-streams", "16", "--multi-thread-cutoff", "32M", "--local-no-set-modtime"}
 	if opts.SlowDevice {
 		args = append(args, "--multi-thread-write-buffer-size", "128M")
 	}
