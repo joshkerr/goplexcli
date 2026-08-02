@@ -59,6 +59,10 @@ var downloadDest string
 // updateCheckOnly, when true, makes `update` report availability without installing.
 var updateCheckOnly bool
 
+// configShow, when true, makes `config` print settings instead of opening the
+// interactive editor.
+var configShow bool
+
 // syncServePort is the port `sync serve` binds; syncServeUpdateInterval is how
 // often the serving machine refreshes its own cache from Plex (0 = never);
 // syncPullPeer, when set, makes `sync pull` target that host directly instead of
@@ -197,9 +201,16 @@ Downloading queued items:
 	// Config command
 	configCmd := &cobra.Command{
 		Use:   "config",
-		Short: "Show configuration",
-		RunE:  runConfig,
+		Short: "View and edit configuration",
+		Long: `Edit settings through an interactive menu: download directory, sorted
+folders, tool paths, sync peer, and the 'serve' download daemon's address,
+name, and access token.
+
+When run without a terminal (piped/scripted) or with --show, prints the
+current configuration instead.`,
+		RunE: runConfig,
 	}
+	configCmd.Flags().BoolVar(&configShow, "show", false, "Print the configuration without the interactive editor")
 
 	// Stream command
 	streamCmd := &cobra.Command{
@@ -3232,6 +3243,14 @@ func runCacheInfo(cmd *cobra.Command, args []string) error {
 }
 
 func runConfig(cmd *cobra.Command, args []string) error {
+	// The menu needs a terminal; scripts and pipes get the plain listing.
+	if configShow || !term.IsTerminal(int(os.Stdin.Fd())) {
+		return runConfigShow()
+	}
+	return runConfigMenu()
+}
+
+func runConfigShow() error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
@@ -3268,6 +3287,152 @@ func runConfig(cmd *cobra.Command, args []string) error {
 	fmt.Println(infoStyle.Render("Cache file: " + cachePath))
 
 	return nil
+}
+
+// runConfigMenu is the interactive settings editor: a numbered menu over the
+// settings a headless or remote (SSH) machine needs — most importantly the
+// download directory, sorted folders, and the `serve` daemon settings, which
+// otherwise require editing config.json by hand. Changes are held in memory
+// until saved, so quitting without saving is always safe.
+func runConfigMenu() error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	return configMenuLoop(bufio.NewReader(os.Stdin), cfg)
+}
+
+// configMenuLoop drives the menu over the given input stream (split from
+// runConfigMenu so tests can script it).
+func configMenuLoop(reader *bufio.Reader, cfg *config.Config) error {
+	dirty := false
+
+	// or returns the value or a dimmed default hint.
+	or := func(v, hint string) string {
+		if v == "" {
+			return infoStyle.Render("(" + hint + ")")
+		}
+		return v
+	}
+	onOff := func(b bool) string {
+		if b {
+			return successStyle.Render("on")
+		}
+		return "off"
+	}
+
+	for {
+		title := "Configuration"
+		if dirty {
+			title += warningStyle.Render("  * unsaved changes")
+		}
+		fmt.Println()
+		fmt.Println(titleStyle.Render(title))
+		fmt.Println("Downloads")
+		fmt.Printf("  1) Download directory        %s\n", or(cfg.DownloadDir, "~/Downloads"))
+		fmt.Printf("  2) Sort into Movies/TV Shows %s\n", onOff(cfg.SortDownloads))
+		fmt.Printf("  3) Slow-device write buffer  %s\n", onOff(cfg.SlowDeviceMode))
+		fmt.Println("Tools")
+		fmt.Printf("  4) rclone path               %s\n", or(cfg.RclonePath, "search PATH"))
+		fmt.Printf("  5) mpv path                  %s\n", or(cfg.MPVPath, "search PATH"))
+		fmt.Println("Library sync")
+		fmt.Printf("  6) Sync peer (LAN)           %s\n", or(cfg.SyncPeer, "auto-discover"))
+		fmt.Println("Download server (goplexcli serve)")
+		fmt.Printf("  7) Listen address            %s\n", or(cfg.ServeListen, "default "+dlserver.DefaultListen))
+		fmt.Printf("  8) Server name               %s\n", or(cfg.ServeName, "hostname"))
+		tokenDisplay := infoStyle.Render("(generated on first serve run)")
+		if cfg.ServeToken != "" {
+			tokenDisplay = cfg.ServeToken[:min(10, len(cfg.ServeToken))] + "…"
+		}
+		fmt.Printf("  9) Access token              %s\n", tokenDisplay)
+		fmt.Println()
+		fmt.Print("Choose 1-9, s to save, q to quit: ")
+
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return nil // EOF (Ctrl+D / closed stdin) — leave without saving
+		}
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "1":
+			dirty = promptSetting(reader, "Download directory (~ expands; where serve and CLI downloads land)", &cfg.DownloadDir) || dirty
+		case "2":
+			cfg.SortDownloads = !cfg.SortDownloads
+			dirty = true
+		case "3":
+			cfg.SlowDeviceMode = !cfg.SlowDeviceMode
+			dirty = true
+		case "4":
+			dirty = promptSetting(reader, "rclone path", &cfg.RclonePath) || dirty
+		case "5":
+			dirty = promptSetting(reader, "mpv path", &cfg.MPVPath) || dirty
+		case "6":
+			dirty = promptSetting(reader, "Sync peer host[:port]", &cfg.SyncPeer) || dirty
+		case "7":
+			dirty = promptSetting(reader, "Listen address (e.g. :47821 or 192.168.1.50:47821)", &cfg.ServeListen) || dirty
+		case "8":
+			dirty = promptSetting(reader, "Server name shown in remote GUIs", &cfg.ServeName) || dirty
+		case "9":
+			fmt.Print("Generate a new access token? Every GUI that registered this server must be updated [y/N]: ")
+			answer, _ := reader.ReadString('\n')
+			if strings.ToLower(strings.TrimSpace(answer)) == "y" {
+				tok, err := dlserver.GenerateToken()
+				if err != nil {
+					fmt.Println(errorStyle.Render("Failed to generate token: " + err.Error()))
+					continue
+				}
+				cfg.ServeToken = tok
+				dirty = true
+				fmt.Println(successStyle.Render("New token: " + tok))
+			}
+		case "s":
+			if err := cfg.Save(); err != nil {
+				return fmt.Errorf("failed to save config: %w", err)
+			}
+			fmt.Println(successStyle.Render("✓ Settings saved"))
+			fmt.Println(infoStyle.Render("A running 'goplexcli serve' picks the changes up on its next start."))
+			return nil
+		case "q", "":
+			if dirty {
+				fmt.Print("Discard unsaved changes? [y/N]: ")
+				answer, _ := reader.ReadString('\n')
+				if strings.ToLower(strings.TrimSpace(answer)) != "y" {
+					continue
+				}
+			}
+			return nil
+		default:
+			fmt.Println(warningStyle.Render("Unknown option"))
+		}
+	}
+}
+
+// promptSetting edits a single string setting in place: Enter keeps the
+// current value, "-" clears it (back to the default), anything else replaces
+// it. Reports whether the value changed.
+func promptSetting(reader *bufio.Reader, label string, value *string) bool {
+	current := *value
+	if current == "" {
+		current = "(not set)"
+	}
+	fmt.Printf("%s\n  current: %s\n  new value (Enter = keep, \"-\" = clear): ", label, current)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return false
+	}
+	line = strings.TrimSpace(line)
+	switch line {
+	case "":
+		return false
+	case "-":
+		if *value == "" {
+			return false
+		}
+		*value = ""
+		return true
+	default:
+		*value = line
+		return true
+	}
 }
 
 func runUpdate(cmd *cobra.Command, args []string) error {
