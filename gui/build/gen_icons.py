@@ -8,6 +8,7 @@ Outputs:
   appicon.png        1024px Wails/macOS/Linux icon
   windows/icon.ico   multi-size Windows icon
   icons/preview.png  256px quick-look preview
+  ../frontend/public/appicon.png 256px React splash/brand mark
 """
 
 import os
@@ -19,6 +20,7 @@ SOURCE = os.path.normpath(
 )
 OUT_ICONS = os.path.join(HERE, "icons")
 OUT_WINDOWS = os.path.join(HERE, "windows")
+OUT_PUBLIC = os.path.normpath(os.path.join(HERE, "..", "frontend", "public"))
 CORNER_RADIUS = 0.225
 
 
@@ -44,9 +46,12 @@ def main():
 
     os.makedirs(OUT_ICONS, exist_ok=True)
     os.makedirs(OUT_WINDOWS, exist_ok=True)
+    os.makedirs(OUT_PUBLIC, exist_ok=True)
 
     render(source, 1024).save(os.path.join(HERE, "appicon.png"))
-    render(source, 256).save(os.path.join(OUT_ICONS, "preview.png"))
+    preview = render(source, 256)
+    preview.save(os.path.join(OUT_ICONS, "preview.png"))
+    preview.save(os.path.join(OUT_PUBLIC, "appicon.png"))
 
     sizes = (256, 128, 64, 48, 32, 24, 16)
     icons = {size: render(source, size) for size in sizes}
@@ -56,7 +61,10 @@ def main():
         append_images=[icons[size] for size in sizes[1:]],
         sizes=[(size, size) for size in sizes],
     )
-    print("wrote appicon.png, windows/icon.ico, icons/preview.png")
+    print(
+        "wrote appicon.png, windows/icon.ico, icons/preview.png, "
+        "frontend/public/appicon.png"
+    )
 
 
 if __name__ == "__main__":
