@@ -146,6 +146,9 @@ else
 	@if [ "$$(uname)" = "Darwin" ]; then \
 		rm -rf /Applications/goplexcli-gui.app; \
 		ditto gui/build/bin/goplexcli-gui.app /Applications/goplexcli-gui.app; \
+		touch /Applications/goplexcli-gui.app; \
+		/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/goplexcli-gui.app; \
+		killall Dock 2>/dev/null || true; \
 		echo "Installed to /Applications/goplexcli-gui.app"; \
 	else \
 		echo "Automatic GUI installation is currently available on Windows and macOS only."; \
