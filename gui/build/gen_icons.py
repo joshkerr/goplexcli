@@ -1,246 +1,62 @@
-"""Generate goplexcli GUI app icons (3 variants) with PIL.
+"""Generate desktop icons from the approved Go Plex glass mark.
 
-Design goals: full-bleed rounded-square so the icon reads large in
-taskbar/dock; bold single glyph that survives 16px; a diagonal light-blue ->
-pink -> red gradient (echoing the Mediabox app icon).
+The 1024px ``../assets/appicon-source.png`` is the reviewed full-bleed artwork
+shared with goplexcli-ios. Desktop outputs receive the transparent rounded-
+square mask expected by macOS, Windows, and Linux launchers.
 
-Variant A (recommended): dark squircle, gradient downward play-triangle over a
-tray bar -- reads as both "media" (play) and "download" (arrow into tray).
-Variant B: dark squircle, classic right-facing gradient play triangle.
-Variant C: inverted -- gradient squircle, dark glyph of A.
+Outputs:
+  appicon.png        1024px Wails/macOS/Linux icon
+  windows/icon.ico   multi-size Windows icon
+  icons/preview.png  256px quick-look preview
 """
 
-import math
 import os
-from PIL import Image, ImageChops, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw
 
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
-
-# Brand gradient: cyan-blue -> blue-violet -> magenta/pink -> red, swept along
-# the top-left -> bottom-right diagonal. The extra blue/violet stops keep the
-# cool half of the glyph from being swamped by pink; the neon-glow bloom (see
-# render) gives it the luminous Apple Creator Studio look.
-GRAD_CYAN = (46, 202, 255)    # #2ECAFF bright cyan-blue
-GRAD_BLUE = (105, 118, 242)   # #6976F2 blue-violet
-GRAD_PINK = (226, 74, 205)    # #E24ACD magenta/pink
-GRAD_RED = (255, 74, 88)      # #FF4A58 pink-red
-GRAD_STOPS = [(0.0, GRAD_CYAN), (0.40, GRAD_BLUE),
-              (0.70, GRAD_PINK), (1.0, GRAD_RED)]
-
-DARK_TOP = (42, 47, 58)       # #2A2F3A
-DARK_BOT = (18, 21, 27)       # #12151B
-GLYPH_DARK = (24, 27, 34)     # dark glyph for variant C
+HERE = os.path.dirname(os.path.abspath(__file__))
+SOURCE = os.path.normpath(
+    os.path.join(HERE, "..", "assets", "appicon-source.png")
+)
+OUT_ICONS = os.path.join(HERE, "icons")
+OUT_WINDOWS = os.path.join(HERE, "windows")
+CORNER_RADIUS = 0.225
 
 
-def lerp(a, b, t):
-    return tuple(round(a[i] + (b[i] - a[i]) * t) for i in range(3))
-
-
-def brighten(img_rgb, amt):
-    """Blend an RGB image toward white by amt in [0, 1] (for the glow colour)."""
-    white = Image.new("RGB", img_rgb.size, (255, 255, 255))
-    return Image.blend(img_rgb, white, amt)
-
-
-def vgrad(size, stops):
-    """Vertical gradient image from [(pos, rgb), ...] stops."""
-    im = Image.new("RGB", (1, size))
-    px = im.load()
-    for y in range(size):
-        t = y / max(1, size - 1)
-        for (p0, c0), (p1, c1) in zip(stops, stops[1:]):
-            if t <= p1 or (p1 == stops[-1][0]):
-                if p1 == p0:
-                    px[0, y] = c0
-                else:
-                    tt = min(1.0, max(0.0, (t - p0) / (p1 - p0)))
-                    px[0, y] = lerp(c0, c1, tt)
-                if t <= p1:
-                    break
-    return im.resize((size, size))
-
-
-def dgrad(size, stops, lo=0.0, hi=1.0):
-    """Diagonal top-left -> bottom-right gradient from vertical `stops`.
-
-    Built by rotating a square vertical gradient 45 degrees and center-cropping,
-    so a stop at position p lands on the canvas diagonal at fraction p (p=0 is
-    the top-left corner, p=1 the bottom-right). Pure PIL; fast at large sizes.
-
-    lo/hi squeeze the whole stop range into the diagonal band [lo, hi], holding
-    the end colors solid outside it. Use this to make a centered glyph show the
-    full gradient: map the stops onto the glyph's diagonal extent rather than
-    the canvas corners (where the ends would fall outside the glyph).
-    """
-    if (lo, hi) != (0.0, 1.0):
-        stops = ([(0.0, stops[0][1])]
-                 + [(lo + p * (hi - lo), c) for p, c in stops]
-                 + [(1.0, stops[-1][1])])
-    diag = int(math.ceil(size * math.sqrt(2))) + 2
-    g = vgrad(diag, stops).rotate(45, resample=Image.BICUBIC, expand=False)
-    left = (diag - size) // 2
-    return g.crop((left, left, left + size, left + size))
-
-
-def rounded_poly(points, radius, steps=24):
-    """Round polygon corners with arcs of `radius`; returns point list."""
-    n = len(points)
-    out = []
-    for i in range(n):
-        a = points[(i - 1) % n]
-        b = points[i]
-        c = points[(i + 1) % n]
-        ux, uy = a[0] - b[0], a[1] - b[1]
-        vx, vy = c[0] - b[0], c[1] - b[1]
-        lu = math.hypot(ux, uy)
-        lv = math.hypot(vx, vy)
-        ux, uy = ux / lu, uy / lv if False else uy / lu
-        vx, vy = vx / lv, vy / lv
-        # angle between edges at b
-        dot = ux * vx + uy * vy
-        ang = math.acos(max(-1.0, min(1.0, dot)))
-        r = min(radius, 0.45 * min(lu, lv) * math.tan(ang / 2))
-        d = r / math.tan(ang / 2)
-        p1 = (b[0] + ux * d, b[1] + uy * d)
-        p2 = (b[0] + vx * d, b[1] + vy * d)
-        # arc center
-        bx, by = ux + vx, uy + vy
-        lb = math.hypot(bx, by)
-        oc = (b[0] + bx / lb * (r / math.sin(ang / 2)),
-              b[1] + by / lb * (r / math.sin(ang / 2)))
-        a1 = math.atan2(p1[1] - oc[1], p1[0] - oc[0])
-        a2 = math.atan2(p2[1] - oc[1], p2[0] - oc[0])
-        # sweep the short way
-        da = a2 - a1
-        while da > math.pi:
-            da -= 2 * math.pi
-        while da < -math.pi:
-            da += 2 * math.pi
-        for s in range(steps + 1):
-            t = a1 + da * s / steps
-            out.append((oc[0] + r * math.cos(t), oc[1] + r * math.sin(t)))
-    return out
-
-
-def glyph_mask(size, variant, scale=1.0):
-    """L-mode mask of the glyph for a canvas of `size`."""
-    m = Image.new("L", (size, size), 0)
-    d = ImageDraw.Draw(m)
-    S = size
-
-    def sc(v):  # scale around center
-        return 0.5 + (v - 0.5) * scale
-
-    if variant in ("a", "c"):
-        # downward play triangle
-        tri = [(sc(0.225) * S, sc(0.235) * S),
-               (sc(0.775) * S, sc(0.235) * S),
-               (sc(0.5) * S, sc(0.60) * S)]
-        d.polygon(rounded_poly(tri, 0.045 * S * scale), fill=255)
-        # tray bar
-        y0, y1 = sc(0.685) * S, sc(0.765) * S
-        x0, x1 = sc(0.225) * S, sc(0.775) * S
-        d.rounded_rectangle([x0, y0, x1, y1],
-                            radius=(y1 - y0) / 2, fill=255)
-    else:
-        # right-facing play triangle, optically centered (nudged right)
-        tri = [(sc(0.335) * S, sc(0.22) * S),
-               (sc(0.335) * S, sc(0.78) * S),
-               (sc(0.80) * S, sc(0.5) * S)]
-        d.polygon(rounded_poly(tri, 0.055 * S * scale), fill=255)
-    return m
-
-
-def render(size, variant="a"):
-    ss = 8 if size <= 64 else 4
-    S = size * ss
-    img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-
-    dark_bg = variant in ("a", "b")
-    margin = 0.0 * S
-    rad = 0.225 * S
-
-    # background squircle
-    bg_mask = Image.new("L", (S, S), 0)
-    ImageDraw.Draw(bg_mask).rounded_rectangle(
-        [margin, margin, S - 1 - margin, S - 1 - margin], radius=rad, fill=255)
-    if dark_bg:
-        bg = vgrad(S, [(0.0, DARK_TOP), (1.0, DARK_BOT)])
-    else:
-        bg = dgrad(S, GRAD_STOPS)
-    img.paste(bg, (0, 0), bg_mask)
-
-    # subtle top inner highlight
-    hl = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    hd = ImageDraw.Draw(hl)
-    hd.rounded_rectangle([margin + S * 0.004, margin + S * 0.004,
-                          S - 1 - margin - S * 0.004, S * 0.55],
-                         radius=rad * 0.98,
-                         outline=(255, 255, 255, 26 if dark_bg else 60),
-                         width=max(1, round(S * 0.006)))
-    fade = Image.new("L", (S, S), 0)
-    ImageDraw.Draw(fade).rectangle([0, 0, S, S * 0.30], fill=255)
-    fade = fade.filter(ImageFilter.GaussianBlur(S * 0.08))
-    hl.putalpha(Image.composite(hl.getchannel("A"), Image.new("L", (S, S), 0), fade))
-    img = Image.alpha_composite(img, hl)
-
-    # glyph: bigger at tiny sizes for legibility
-    gscale = 1.12 if size <= 32 else 1.0
-    gm = glyph_mask(S, variant, gscale)
-    gm = Image.composite(gm, Image.new("L", (S, S), 0), bg_mask)  # clip to bg
-
-    if dark_bg:
-        # Squeeze the gradient onto the glyph's diagonal extent (~0.23..0.77 of
-        # the canvas) so the whole cyan -> pink -> red range shows on the glyph.
-        fill = dgrad(S, GRAD_STOPS, 0.23, 0.77)
-    else:
-        fill = Image.new("RGB", (S, S), GLYPH_DARK)
-
-    if dark_bg and size >= 48:
-        # Subtle neon halo: a single soft, dim glow of the glyph's colour behind
-        # it -- like a coloured drop shadow with no offset. The crisp glyph is
-        # composited on top, so its edges stay sharp against the dark tile
-        # (Apple Creator Studio style) while the tile gains a luminous accent.
-        # The glow under the glyph is masked out so nothing bleeds at the edge.
-        glow_fill = brighten(fill, 0.15)
-        halo = gm.filter(ImageFilter.GaussianBlur(S * 0.05))
-        halo = Image.composite(halo, Image.new("L", (S, S), 0), bg_mask)
-        halo = ImageChops.subtract(halo, gm)  # only outside the crisp glyph
-        halo = halo.point(lambda v: v * 65 // 255)
-        layer = glow_fill.convert("RGBA")
-        layer.putalpha(halo)
-        img = Image.alpha_composite(img, layer)
-    elif not dark_bg and size >= 48:
-        # Light variant keeps a soft dark drop shadow instead of a glow.
-        sh = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-        sh.paste(Image.new("RGBA", (S, S), (0, 0, 0, 70)),
-                 (0, round(S * 0.018)), gm)
-        sh = sh.filter(ImageFilter.GaussianBlur(S * 0.02))
-        img = Image.alpha_composite(img, sh)
-
-    # crisp glyph on top of its glow
-    glyph = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    glyph.paste(fill, (0, 0), gm)
-    img = Image.alpha_composite(img, glyph)
-
-    return img.resize((size, size), Image.LANCZOS)
+def render(source, size):
+    """Resize the approved artwork and apply a desktop squircle alpha mask."""
+    image = source.resize((size, size), Image.Resampling.LANCZOS)
+    supersample = 4
+    mask_size = size * supersample
+    mask = Image.new("L", (mask_size, mask_size), 0)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        (0, 0, mask_size - 1, mask_size - 1),
+        radius=round(mask_size * CORNER_RADIUS),
+        fill=255,
+    )
+    image.putalpha(mask.resize((size, size), Image.Resampling.LANCZOS))
+    return image
 
 
 def main():
-    os.makedirs(OUT, exist_ok=True)
-    for v in ("a", "b", "c"):
-        vd = os.path.join(OUT, v)
-        os.makedirs(vd, exist_ok=True)
-        render(1024, v).save(os.path.join(vd, "appicon.png"))
-        for s in (256, 128, 64, 48, 32, 24, 16):
-            render(s, v).save(os.path.join(vd, f"icon_{s}.png"))
-        # multi-size ico from individually rendered sizes
-        imgs = {s: render(s, v) for s in (16, 24, 32, 48, 64, 128, 256)}
-        base = imgs[256]
-        base.save(os.path.join(vd, "icon.ico"), format="ICO",
-                  append_images=[imgs[s] for s in (128, 64, 48, 32, 24, 16)],
-                  sizes=[(s, s) for s in (256, 128, 64, 48, 32, 24, 16)])
-        print("done", v)
+    source = Image.open(SOURCE).convert("RGBA")
+    if source.size != (1024, 1024):
+        raise ValueError("appicon-source.png must be exactly 1024x1024 pixels")
+
+    os.makedirs(OUT_ICONS, exist_ok=True)
+    os.makedirs(OUT_WINDOWS, exist_ok=True)
+
+    render(source, 1024).save(os.path.join(HERE, "appicon.png"))
+    render(source, 256).save(os.path.join(OUT_ICONS, "preview.png"))
+
+    sizes = (256, 128, 64, 48, 32, 24, 16)
+    icons = {size: render(source, size) for size in sizes}
+    icons[256].save(
+        os.path.join(OUT_WINDOWS, "icon.ico"),
+        format="ICO",
+        append_images=[icons[size] for size in sizes[1:]],
+        sizes=[(size, size) for size in sizes],
+    )
+    print("wrote appicon.png, windows/icon.ico, icons/preview.png")
 
 
 if __name__ == "__main__":
