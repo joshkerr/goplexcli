@@ -52,6 +52,7 @@ type Client struct {
 	sdk          *plexgo.PlexAPI
 	serverURL    string
 	serverName   string
+	machineID    string
 	token        string
 	pathMappings []PathMapping
 }
@@ -91,6 +92,7 @@ type MediaItem struct {
 	GrandparentThumb string // For episodes: the show poster path (grandparentThumb)
 	ServerName       string // Name of the Plex server this item belongs to
 	ServerURL        string // URL of the Plex server this item belongs to
+	ServerMachineID  string // Permanent Plex machineIdentifier of the server, stable across renames ("" if unavailable)
 	ViewOffset       int    // Playback position in milliseconds (0 if not started)
 	ViewCount        int    // Number of times fully watched
 	LastViewedAt     int64  // Unix timestamp of last playback (0 if never viewed)
@@ -139,13 +141,27 @@ func (c *Client) Test() error {
 }
 
 // TestContext validates the connection to the Plex server, honoring the
-// caller's context for cancellation and deadlines.
+// caller's context for cancellation and deadlines. It also captures the
+// server's permanent machineIdentifier (see MachineID) as a side effect,
+// since the identity call already returns it.
 func (c *Client) TestContext(ctx context.Context) error {
-	_, err := c.sdk.General.GetIdentity(ctx)
+	res, err := c.sdk.General.GetIdentity(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to connect to plex server: %w", err)
 	}
+	if res != nil && res.Object != nil && res.Object.MediaContainer != nil && res.Object.MediaContainer.MachineIdentifier != nil {
+		c.machineID = *res.Object.MediaContainer.MachineIdentifier
+	}
 	return nil
+}
+
+// MachineID returns the Plex server's permanent machine identifier, as
+// captured by the most recent TestContext call ("" if TestContext has not
+// been called yet, or the server didn't report one). Unlike serverName (a
+// user-configured label) or serverURL, this is stable across renames and
+// reconfiguration, so it's the right identity to key cache dedup on.
+func (c *Client) MachineID() string {
+	return c.machineID
 }
 
 // Library represents a Plex library section
@@ -581,6 +597,7 @@ func (c *Client) getMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 				Thumb:           valueOrEmpty(metadata.Thumb),
 				ServerName:      c.serverName,
 				ServerURL:       c.serverURL,
+				ServerMachineID: c.machineID,
 				ViewOffset:      valueOrZeroInt(metadata.ViewOffset),
 				ViewCount:       valueOrZeroInt(metadata.ViewCount),
 				LastViewedAt:    valueOrZeroInt64(metadata.LastViewedAt),
@@ -633,6 +650,7 @@ func (c *Client) getMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 				ParentIndex:      int64(valueOrZeroInt(metadata.ParentIndex)),
 				ServerName:       c.serverName,
 				ServerURL:        c.serverURL,
+				ServerMachineID:  c.machineID,
 				ViewOffset:       valueOrZeroInt(metadata.ViewOffset),
 				ViewCount:        valueOrZeroInt(metadata.ViewCount),
 				LastViewedAt:     valueOrZeroInt64(metadata.LastViewedAt),
@@ -1076,6 +1094,71 @@ func (c *Client) UpdateTimeline(ratingKey string, state string, timeMs int, dura
 	}
 
 	return nil
+}
+
+// watchStatusResponse is the minimal shape needed from a single-item
+// metadata lookup to refresh watched/progress state after playback.
+type watchStatusResponse struct {
+	MediaContainer struct {
+		Metadata []struct {
+			ViewOffset   *int   `json:"viewOffset"`
+			ViewCount    *int   `json:"viewCount"`
+			LastViewedAt *int64 `json:"lastViewedAt"`
+		} `json:"Metadata"`
+	} `json:"MediaContainer"`
+}
+
+// GetWatchStatus fetches the current viewOffset/viewCount/lastViewedAt for a
+// single item directly from the server, bypassing the local cache. itemKey is
+// the item's MediaItem.Key (e.g. "/library/metadata/12345"). It's used after
+// playback closes to pick up Plex's own watched determination (Plex decides
+// this itself from the timeline reports already sent during playback) without
+// the cost of a full library re-fetch.
+func (c *Client) GetWatchStatus(ctx context.Context, itemKey string) (viewOffset, viewCount int, lastViewedAt int64, err error) {
+	ratingKey := itemKey
+	if idx := strings.LastIndex(itemKey, "/"); idx != -1 {
+		ratingKey = itemKey[idx+1:]
+	}
+	if ratingKey == "" {
+		return 0, 0, 0, fmt.Errorf("empty item key")
+	}
+
+	url := fmt.Sprintf("%s/library/metadata/%s?X-Plex-Token=%s", c.serverURL, ratingKey, c.token)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Plex-Client-Identifier", plexClientIdentifier)
+	req.Header.Set("X-Plex-Product", plexProduct)
+	req.Header.Set("X-Plex-Version", plexVersion)
+
+	resp, err := timelineClient.Do(req)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("failed to get item status: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, 0, 0, fmt.Errorf("unexpected status code %d fetching item status", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var parsed watchStatusResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return 0, 0, 0, fmt.Errorf("failed to parse item status: %w", err)
+	}
+	if len(parsed.MediaContainer.Metadata) == 0 {
+		return 0, 0, 0, fmt.Errorf("item %s not found", ratingKey)
+	}
+
+	m := parsed.MediaContainer.Metadata[0]
+	return valueOrZeroInt(m.ViewOffset), valueOrZeroInt(m.ViewCount), valueOrZeroInt64(m.LastViewedAt), nil
 }
 
 // convertToRclonePath converts a Plex on-disk file path to an rclone remote

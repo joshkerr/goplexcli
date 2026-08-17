@@ -32,6 +32,44 @@ func TestProgressPct(t *testing.T) {
 	}
 }
 
+func TestListCategoryWatchAgain(t *testing.T) {
+	a := NewApp()
+	a.setMedia(&cache.Cache{Media: []plex.MediaItem{
+		{Key: "m1", Type: "movie", Title: "Never Watched", ViewCount: 0, LastViewedAt: 0},
+		{Key: "m2", Type: "movie", Title: "Watched Long Ago", ViewCount: 1, LastViewedAt: 100},
+		{Key: "m3", Type: "movie", Title: "Watched Recently", ViewCount: 2, LastViewedAt: 300},
+		// Fully watched — both episodes have ViewCount > 0 — must collapse to
+		// a single "Complete Show" card, not one per episode.
+		{Key: "e1", Type: "episode", Title: "Ep1", ParentTitle: "Complete Show", ViewCount: 1, LastViewedAt: 200},
+		{Key: "e2", Type: "episode", Title: "Ep2", ParentTitle: "Complete Show", ViewCount: 1, LastViewedAt: 250},
+		// Only partially watched — must not appear at all.
+		{Key: "e3", Type: "episode", Title: "Ep1", ParentTitle: "Partial Show", ViewCount: 1, LastViewedAt: 999},
+		{Key: "e4", Type: "episode", Title: "Ep2", ParentTitle: "Partial Show", ViewCount: 0, LastViewedAt: 0},
+	}})
+
+	got := a.ListCategory("watch-again", BrowseOptions{})
+
+	want := []string{"Watched Recently", "Complete Show", "Watched Long Ago"}
+	if len(got) != len(want) {
+		t.Fatalf("got %d items, want %d (unwatched movies and partially-watched shows must be excluded): %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i].Title != want[i] {
+			t.Errorf("position %d = %q, want %q (most recently watched first)", i, got[i].Title, want[i])
+		}
+	}
+	for _, c := range got {
+		if c.Title == "Complete Show" {
+			if c.Type != "show" {
+				t.Errorf("Complete Show card Type = %q, want \"show\"", c.Type)
+			}
+			if c.EpisodeCount != 2 {
+				t.Errorf("Complete Show EpisodeCount = %d, want 2", c.EpisodeCount)
+			}
+		}
+	}
+}
+
 func TestGroupShows(t *testing.T) {
 	a := NewApp()
 	c := &cache.Cache{Media: []plex.MediaItem{

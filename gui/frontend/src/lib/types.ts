@@ -167,6 +167,7 @@ export type Category =
   | "recently-added-movies"
   | "recently-added-tv"
   | "continue-watching"
+  | "watch-again"
   | "favorites-movies"
   | "favorites-tv";
 

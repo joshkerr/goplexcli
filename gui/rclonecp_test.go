@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -25,12 +26,23 @@ func TestFindRclonecpConfiguredPath(t *testing.T) {
 	}
 
 	// A bare name (what the Settings placeholder suggests) must resolve
-	// against PATH, exactly like the mpv/rclone overrides do.
+	// against PATH, exactly like the mpv/rclone overrides do. exec.LookPath
+	// only applies Windows' implicit .exe resolution on Windows itself, so
+	// the PATH-resident binary needs a real, platform-correct name here —
+	// unlike the explicit-path case above, where the literal name doesn't
+	// matter.
+	bareBin := filepath.Join(dir, rclonecpBinName)
+	if runtime.GOOS == "windows" {
+		bareBin += ".exe"
+	}
+	if err := os.WriteFile(bareBin, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("PATH", dir)
-	app.cfg = &config.Config{RclonecpPath: "rclonecp"}
+	app.cfg = &config.Config{RclonecpPath: rclonecpBinName}
 	got, err = app.findRclonecp()
 	if err != nil || got == "" {
-		t.Fatalf("bare-name findRclonecp = %q, %v; want %q", got, err, bin)
+		t.Fatalf("bare-name findRclonecp = %q, %v; want %q", got, err, bareBin)
 	}
 
 	// A configured-but-missing path is an explicit error, not a PATH fallback:
