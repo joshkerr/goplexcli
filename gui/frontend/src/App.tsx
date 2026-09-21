@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, onEvent } from "./lib/api";
+import { api, isMac, onEvent } from "./lib/api";
 import type {
   Category,
   DownloadProgress,
@@ -20,19 +20,6 @@ import { Splash } from "./components/Splash";
 import { Toasts, type Toast } from "./components/Toasts";
 import { Setup } from "./views/Setup";
 import { Settings } from "./views/Settings";
-import { SearchIcon, SyncIcon } from "./components/icons";
-
-const CATEGORY_TITLES: Record<NavKey, string> = {
-  movies: "Movies",
-  "tv-shows": "TV Shows",
-  "continue-watching": "Continue Watching",
-  "favorites-movies": "Favorite Movies",
-  "favorites-tv": "Favorite TV Shows",
-  "recently-added-movies": "Recently Added Movies",
-  "recently-added-tv": "Recently Added Episodes",
-  downloads: "Downloads",
-  settings: "Settings",
-};
 
 const EMPTY_MESSAGES: Partial<Record<NavKey, string>> = {
   movies: "No movies in your library yet.",
@@ -96,21 +83,28 @@ function loadSortPrefs(): Partial<Record<Category, SortPref>> {
   }
 }
 
-// searchHeading turns a query into the header shown above the results. A
-// field-scoped query (director:"…" / cast:"…" / genre:"…", produced by clicking
-// a name in the detail modal) gets a friendly label; anything else falls back to
-// the raw search string.
-function searchHeading(query: string): string {
+// searchSummary is the line shown under the sidebar search box while results
+// are up. A field-scoped query (director:"…" / cast:"…" / genre:"…", produced by
+// clicking a name in the detail modal) gets a friendly label; a plain query is
+// already visible in the box, so it just gets the count.
+function searchSummary(query: string, count: number): string {
+  const results = `${count.toLocaleString()} result${count === 1 ? "" : "s"}`;
   const m = /^(director|cast|genre):"?(.+?)"?$/i.exec(query.trim());
-  if (m) {
-    const field = m[1].toLowerCase();
-    const value = m[2];
-    if (field === "director") return `Directed by ${value}`;
-    if (field === "cast") return `Starring ${value}`;
-    return `${value} movies`; // genre
-  }
-  return `Search: “${query}”`;
+  if (!m) return results;
+  const field = m[1].toLowerCase();
+  const value = m[2];
+  const label =
+    field === "director"
+      ? `Directed by ${value}`
+      : field === "cast"
+      ? `Starring ${value}`
+      : `${value} movies`; // genre
+  return `${label} · ${results}`;
 }
+
+// Shared look for the sidebar's genre/sort controls.
+const CONTROL =
+  "rounded-lg border border-white/10 bg-ink-700 px-2.5 py-1.5 text-sm text-white outline-none focus:border-accent/60";
 
 // One toast tag shared by every message of a library sync/update/reindex run,
 // so progress updates replace the toast in place instead of stacking.
@@ -763,145 +757,94 @@ export default function App() {
           setQuery("");
           setSearchResults(null);
         }}
+        query={query}
+        onQueryChange={setQuery}
+        searchSummary={showSearch ? searchSummary(query, gridItems.length) : undefined}
+        people={showSearch ? people : []}
+        onPickPerson={(p) =>
+          runFieldSearch(`${p.role === "director" ? "director" : "cast"}:"${p.name}"`)
+        }
+        syncing={!!indexing}
+        onSync={() => startLibraryOp("sync")}
+        controls={
+          sortCategory &&
+          sortPref && (
+            <div className="space-y-2">
+              {!sortIsTv && (
+                <select
+                  value={genre}
+                  onChange={(e) => setGenre(e.target.value)}
+                  className={`w-full ${CONTROL}`}
+                  title="Filter by genre"
+                >
+                  <option value="">All Genres</option>
+                  {movieGenres.map((g) => (
+                    <option key={g} value={g}>
+                      {g}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <div className="flex gap-2">
+                <select
+                  value={sortPref.sortField}
+                  onChange={(e) =>
+                    updateSortPref(sortCategory, {
+                      ...sortPref,
+                      sortField: e.target.value as SortField,
+                    })
+                  }
+                  className={`min-w-0 flex-1 ${CONTROL}`}
+                  title="Sort by"
+                >
+                  <option value="title">Title</option>
+                  <option value="year">Year</option>
+                  <option value="added">Date Added</option>
+                  {!sortIsTv && (
+                    <>
+                      <option value="rating">Rating</option>
+                      <option value="duration">Duration</option>
+                    </>
+                  )}
+                </select>
+                <button
+                  onClick={() =>
+                    updateSortPref(sortCategory, { ...sortPref, desc: !sortPref.desc })
+                  }
+                  className={`px-3 hover:border-accent/60 ${CONTROL}`}
+                  title={sortPref.desc ? "Descending" : "Ascending"}
+                >
+                  {sortPref.desc ? "↓" : "↑"}
+                </button>
+              </div>
+              {!sortIsTv && (
+                <label
+                  className="flex cursor-pointer select-none items-center gap-2 px-1 pt-0.5 text-sm text-white/70 hover:text-white"
+                  title="Hide foreign-language films"
+                >
+                  <input
+                    type="checkbox"
+                    checked={hideForeign}
+                    onChange={(e) => updateHideForeign(e.target.checked)}
+                    className="accent-accent"
+                  />
+                  Hide foreign
+                </label>
+              )}
+            </div>
+          )
+        }
       />
 
-      <main className="flex min-w-0 flex-1 flex-col">
-        {/* Top bar */}
-        <header
-          className="flex shrink-0 items-center gap-4 border-b border-white/5 px-8 py-4"
-          style={{ ["--wails-draggable" as any]: "drag" }}
-        >
-          <h1 className="text-lg font-semibold tracking-tight text-white">
-            {showSearch ? searchHeading(query) : CATEGORY_TITLES[active]}
-          </h1>
-
-          {sortCategory && sortPref && (
-            <div
-              className="flex items-center gap-2"
-              style={{ ["--wails-draggable" as any]: "no-drag" }}
-            >
-              {!sortIsTv && (
-                <>
-                  <select
-                    value={genre}
-                    onChange={(e) => setGenre(e.target.value)}
-                    className="rounded-lg border border-white/10 bg-ink-700 px-2.5 py-2 text-sm text-white outline-none focus:border-accent/60"
-                    title="Filter by genre"
-                  >
-                    <option value="">All Genres</option>
-                    {movieGenres.map((g) => (
-                      <option key={g} value={g}>
-                        {g}
-                      </option>
-                    ))}
-                  </select>
-                  <label
-                    className="flex cursor-pointer select-none items-center gap-1.5 rounded-lg border border-white/10 bg-ink-700 px-2.5 py-2 text-sm text-white outline-none hover:border-accent/60"
-                    title="Hide foreign-language films"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={hideForeign}
-                      onChange={(e) => updateHideForeign(e.target.checked)}
-                      className="accent-accent"
-                    />
-                    Hide foreign
-                  </label>
-                </>
-              )}
-              <select
-                value={sortPref.sortField}
-                onChange={(e) =>
-                  updateSortPref(sortCategory, {
-                    ...sortPref,
-                    sortField: e.target.value as SortField,
-                  })
-                }
-                className="rounded-lg border border-white/10 bg-ink-700 px-2.5 py-2 text-sm text-white outline-none focus:border-accent/60"
-                title="Sort by"
-              >
-                <option value="title">Title</option>
-                <option value="year">Year</option>
-                <option value="added">Date Added</option>
-                {!sortIsTv && (
-                  <>
-                    <option value="rating">Rating</option>
-                    <option value="duration">Duration</option>
-                  </>
-                )}
-              </select>
-              <button
-                onClick={() =>
-                  updateSortPref(sortCategory, { ...sortPref, desc: !sortPref.desc })
-                }
-                className="rounded-lg border border-white/10 bg-ink-700 px-3 py-2 text-sm text-white outline-none hover:border-accent/60"
-                title={sortPref.desc ? "Descending" : "Ascending"}
-              >
-                {sortPref.desc ? "↓" : "↑"}
-              </button>
-            </div>
-          )}
-
-          <div className="flex-1" />
-          <button
-            onClick={() => startLibraryOp("sync")}
-            disabled={!!indexing}
-            title={
-              indexing
-                ? "Library sync in progress…"
-                : "Sync library — copy the latest index from your sync computer (set in Settings)"
-            }
-            style={{ ["--wails-draggable" as any]: "no-drag" }}
-            className="rounded-lg border border-white/10 bg-ink-700 p-2.5 text-white/80 outline-none transition-colors hover:border-accent/60 hover:text-white disabled:opacity-60"
-          >
-            <SyncIcon
-              width={16}
-              height={16}
-              className={indexing ? "animate-spin" : ""}
-            />
-          </button>
+      <main className="relative flex min-w-0 flex-1 flex-col">
+        {/* With the title bar hidden on macOS and no top bar of our own, keep a
+            thin invisible strip along the top edge so the window can still be
+            dragged from there. It sits inside the grid's top padding. */}
+        {isMac && (
           <div
-            className="relative w-72"
-            style={{ ["--wails-draggable" as any]: "no-drag" }}
-          >
-            <SearchIcon
-              width={16}
-              height={16}
-              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/40"
-            />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search library…"
-              className="w-full rounded-lg border border-white/10 bg-ink-700 py-2 pl-9 pr-3 text-sm text-white placeholder-white/30 outline-none focus:border-accent/60"
-            />
-          </div>
-        </header>
-
-        {/* People suggestions: click a person to run the exact cast:/director:
-            filter that previously required typing the query syntax by hand. */}
-        {showSearch && people.length > 0 && (
-          <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-white/5 bg-ink-750 px-8 py-3">
-            <span className="text-[10px] font-semibold uppercase tracking-widest text-white/30">
-              People
-            </span>
-            {people.map((p) => (
-              <button
-                key={`${p.role}:${p.name}`}
-                onClick={() =>
-                  runFieldSearch(
-                    `${p.role === "director" ? "director" : "cast"}:"${p.name}"`
-                  )
-                }
-                className="flex items-center gap-1.5 rounded-full border border-white/10 bg-ink-700 px-3 py-1 text-sm text-white/80 transition-colors hover:border-accent/60 hover:text-white"
-              >
-                {p.name}
-                <span className="text-[10px] font-medium uppercase tracking-wider text-accent/70">
-                  {p.role}
-                </span>
-              </button>
-            ))}
-          </div>
+            className="absolute inset-x-0 top-0 z-10 h-5"
+            style={{ ["--wails-draggable" as any]: "drag" }}
+          />
         )}
 
         {/* Content. The poster grid owns its own scroll (it's virtualized) and
