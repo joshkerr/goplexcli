@@ -759,6 +759,7 @@ export default function App() {
         }}
         query={query}
         onQueryChange={setQuery}
+        searchHotkey={!selected}
         searchSummary={showSearch ? searchSummary(query, gridItems.length) : undefined}
         people={showSearch ? people : []}
         onPickPerson={(p) =>

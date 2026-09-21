@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import type { Category, Person } from "../lib/types";
 import { isMac } from "../lib/api";
 import {
@@ -46,6 +46,9 @@ interface Props {
 
   query: string;
   onQueryChange: (q: string) => void;
+  // Whether pressing "/" jumps to the search box. Off while a modal covers the
+  // window, so the search can't change underneath it.
+  searchHotkey: boolean;
   // Shown under the search box while results are up (e.g. "Directed by …").
   searchSummary?: string;
   // Actor/director suggestions for the current query; picking one runs the
@@ -67,6 +70,7 @@ export function Sidebar({
   downloadCount,
   query,
   onQueryChange,
+  searchHotkey,
   searchSummary,
   people,
   onPickPerson,
@@ -74,6 +78,24 @@ export function Sidebar({
   onSync,
   controls,
 }: Props) {
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  // "/" focuses the search box from anywhere, unless the keystroke is already
+  // going into a text field.
+  useEffect(() => {
+    if (!searchHotkey) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      e.preventDefault();
+      searchRef.current?.focus();
+      searchRef.current?.select();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [searchHotkey]);
+
   let lastGroup = "";
   return (
     <aside className="flex h-full w-60 shrink-0 flex-col border-r border-white/5 bg-ink-800/80">
@@ -115,11 +137,17 @@ export function Sidebar({
             className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/40"
           />
           <input
+            ref={searchRef}
             value={query}
             onChange={(e) => onQueryChange(e.target.value)}
             placeholder="Search library…"
             className="w-full rounded-lg border border-white/10 bg-ink-700 py-2 pl-9 pr-8 text-sm text-white placeholder-white/30 outline-none focus:border-accent/60"
           />
+          {query === "" && (
+            <kbd className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 rounded border border-white/10 px-1.5 font-sans text-[10px] text-white/30">
+              /
+            </kbd>
+          )}
           {query !== "" && (
             <button
               onClick={() => onQueryChange("")}
