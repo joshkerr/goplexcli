@@ -24,13 +24,14 @@ type DownloadProgress = dlengine.Progress
 
 // downloadJob is a single file transfer.
 type downloadJob struct {
-	id    string
-	seq   int64
-	src   string
-	dest  string
-	name  string
-	title string
-	year  int
+	id        string
+	seq       int64
+	src       string
+	dest      string
+	name      string
+	title     string
+	year      int
+	mediaType string
 }
 
 // DownloadConflict describes a requested download whose final destination file
@@ -181,13 +182,14 @@ func (a *App) Download(keys []string, destOverride string, onExisting string) er
 		}
 		seq := a.dlSeq.Add(1)
 		jobs = append(jobs, downloadJob{
-			id:    fmt.Sprintf("dl_%d_%s", seq, t.name),
-			seq:   seq,
-			src:   it.RclonePath,
-			dest:  t.dest,
-			name:  t.name,
-			title: title,
-			year:  it.Year,
+			id:        fmt.Sprintf("dl_%d_%s", seq, t.name),
+			seq:       seq,
+			src:       it.RclonePath,
+			dest:      t.dest,
+			name:      t.name,
+			title:     title,
+			year:      it.Year,
+			mediaType: it.Type,
 		})
 	}
 	if len(jobs) == 0 {
@@ -205,7 +207,7 @@ func (a *App) Download(keys []string, destOverride string, onExisting string) er
 	for _, j := range jobs {
 		a.recordDownload(DownloadProgress{
 			ID: j.id, Seq: j.seq, Name: j.name, Status: "pending", QueuedAt: queuedAt,
-			Src: j.src, Dest: j.dest, Title: j.title, Year: j.year,
+			Src: j.src, Dest: j.dest, Title: j.title, Year: j.year, MediaType: j.mediaType,
 		})
 	}
 
@@ -355,6 +357,9 @@ func (a *App) recordDownload(dp DownloadProgress) {
 		}
 		if dp.Year == 0 {
 			dp.Year = prev.Year
+		}
+		if dp.MediaType == "" {
+			dp.MediaType = prev.MediaType
 		}
 		if dp.QueuedAt == 0 {
 			dp.QueuedAt = prev.QueuedAt

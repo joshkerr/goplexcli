@@ -54,6 +54,11 @@ type Progress struct {
 	// handoff still works for downloads finished in an earlier session.
 	Title string `json:"title,omitempty"`
 	Year  int    `json:"year,omitempty"`
+
+	// MediaType is the Plex media type ("movie" | "episode"), so the Downloads
+	// list can show a film or TV icon. Empty on records written before the
+	// field existed.
+	MediaType string `json:"mediaType,omitempty"`
 }
 
 // IsTerminal reports whether a status is final (no further transitions).

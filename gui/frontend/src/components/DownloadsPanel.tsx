@@ -1,6 +1,14 @@
 import type { DownloadProgress } from "../lib/types";
 import { formatBytes, formatSpeed } from "../lib/format";
-import { CloseIcon, DownloadIcon, PauseIcon, PlayIcon, SendIcon } from "./icons";
+import {
+  CloseIcon,
+  DownloadIcon,
+  FilmIcon,
+  PauseIcon,
+  PlayIcon,
+  SendIcon,
+  TvIcon,
+} from "./icons";
 
 interface Props {
   downloads: DownloadProgress[];
@@ -30,6 +38,13 @@ function isActive(d: DownloadProgress) {
     d.status === "in_progress" ||
     d.status === "paused"
   );
+}
+
+// Older history entries (and jobs on older serve daemons) carry no media type;
+// fall back to spotting an SxxExx marker in the file name.
+function isEpisode(d: DownloadProgress) {
+  if (d.mediaType) return d.mediaType === "episode";
+  return /\bS\d{1,3}\s?E\d{1,4}\b/i.test(d.name);
 }
 
 export function DownloadsPanel({
@@ -74,6 +89,16 @@ export function DownloadsPanel({
           <div className="flex items-center justify-between gap-4">
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 items-center gap-2">
+                <span
+                  className="shrink-0 text-white/40"
+                  title={isEpisode(d) ? "TV episode" : "Movie"}
+                >
+                  {isEpisode(d) ? (
+                    <TvIcon width={15} height={15} />
+                  ) : (
+                    <FilmIcon width={15} height={15} />
+                  )}
+                </span>
                 <span className="truncate text-sm font-medium text-white/90">
                   {d.name}
                 </span>

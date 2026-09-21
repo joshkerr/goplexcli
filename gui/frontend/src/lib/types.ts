@@ -122,6 +122,8 @@ export interface DownloadProgress {
   queuedAt?: number;
   // Name of the remote server the job runs on; absent for local downloads.
   origin?: string;
+  // Plex media type; absent on entries recorded before the field existed.
+  mediaType?: "movie" | "episode";
 }
 
 // A registered remote download server (a `goplexcli serve` daemon on another

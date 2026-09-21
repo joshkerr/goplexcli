@@ -139,7 +139,7 @@ func (m *Manager) Submit(reqs []DownloadRequest) (SubmitResult, error) {
 		j := job{id: fmt.Sprintf("dl_%d_%s", seq, name), seq: seq, src: r.Src, dest: dest, name: name}
 		m.record(dlengine.Progress{
 			ID: j.id, Seq: j.seq, Name: j.name, Status: "pending", QueuedAt: queuedAt,
-			Src: j.src, Dest: j.dest, Title: r.Title, Year: r.Year,
+			Src: j.src, Dest: j.dest, Title: r.Title, Year: r.Year, MediaType: r.Type,
 		})
 		jobs = append(jobs, j)
 		res.Accepted++
@@ -241,6 +241,9 @@ func (m *Manager) record(p dlengine.Progress) {
 		}
 		if p.Year == 0 {
 			p.Year = prev.Year
+		}
+		if p.MediaType == "" {
+			p.MediaType = prev.MediaType
 		}
 		if p.QueuedAt == 0 {
 			p.QueuedAt = prev.QueuedAt
