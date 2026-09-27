@@ -107,6 +107,7 @@ func NewApp() *App {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.restoreWindowState(ctx)
+	slimTitleBar()
 	if jobs := a.loadDownloadHistory(); len(jobs) > 0 {
 		go a.resumeDownloads(jobs)
 	}
@@ -205,13 +206,13 @@ func (a *App) emitToast(kind, message string) {
 // StatusDTO describes the app's readiness on launch so the frontend can route
 // to login, first-run indexing, or the library.
 type StatusDTO struct {
-	Configured      bool     `json:"configured"`
-	HasCache        bool     `json:"hasCache"`
-	CacheCount      int      `json:"cacheCount"`
-	LastUpdated     string   `json:"lastUpdated"`
-	MovieCount      int      `json:"movieCount"`
-	ShowCount       int      `json:"showCount"`
-	EpisodeCount    int      `json:"episodeCount"`
+	Configured        bool     `json:"configured"`
+	HasCache          bool     `json:"hasCache"`
+	CacheCount        int      `json:"cacheCount"`
+	LastUpdated       string   `json:"lastUpdated"`
+	MovieCount        int      `json:"movieCount"`
+	ShowCount         int      `json:"showCount"`
+	EpisodeCount      int      `json:"episodeCount"`
 	MPVAvailable      bool     `json:"mpvAvailable"`
 	RcloneAvailable   bool     `json:"rcloneAvailable"`
 	RclonecpAvailable bool     `json:"rclonecpAvailable"`
