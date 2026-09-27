@@ -33,6 +33,12 @@ func main() {
 		Height:    860,
 		MinWidth:  minWindowW,
 		MinHeight: minWindowH,
+		// Wails' Linux backend turns a zero max size into the size of the
+		// monitor the window opened on and bakes that into the GTK geometry
+		// hints, which then caps maximize on any larger display the window
+		// is moved to. A large explicit max sidesteps that.
+		MaxWidth:  maxWindowW,
+		MaxHeight: maxWindowH,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

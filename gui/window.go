@@ -14,6 +14,10 @@ import (
 const (
 	minWindowW = 800
 	minWindowH = 520
+	// The max is deliberately huge: it only exists so Wails never substitutes
+	// the startup monitor's size as the limit (see main.go).
+	maxWindowW = 16384
+	maxWindowH = 16384
 )
 
 // windowState is the window geometry persisted across launches. Width/Height
