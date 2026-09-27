@@ -10,6 +10,21 @@ VERSION ?= $(shell cat VERSION 2>/dev/null || echo 0.1.0)
 endif
 LDFLAGS = -ldflags "-s -w -X main.version=$(VERSION)"
 
+# Newer Linux distros ship only webkit2gtk-4.1, which Wails v2 selects with a
+# build tag; older ones still have 4.0, which is the default. Pick whichever
+# pkg-config can see so gui-build/gui-dev work on both without hand flags.
+WEBKIT_TAG :=
+ifneq ($(OS),Windows_NT)
+ifeq ($(shell pkg-config --exists webkit2gtk-4.0 2>/dev/null || echo no),no)
+ifeq ($(shell pkg-config --exists webkit2gtk-4.1 2>/dev/null && echo yes),yes)
+WEBKIT_TAG := webkit2_41
+endif
+endif
+endif
+comma := ,
+GUI_TAGS = $(if $(WEBKIT_TAG),-tags $(WEBKIT_TAG))
+GUI_DEV_TAGS = -tags dev$(if $(WEBKIT_TAG),$(comma)$(WEBKIT_TAG))
+
 # GitHub repository used by the release flow.
 REPO = joshkerr/goplexcli
 
@@ -127,18 +142,18 @@ gui-deps:
 # Run the GUI in development mode with hot reload.
 gui-dev:
 	@cd gui/frontend && npm run build
-	@cd gui && $(GO) run -tags dev .
+	@cd gui && $(GO) run $(GUI_DEV_TAGS) .
 
 # Build the native GUI binary for the current platform.
 gui-build:
 	@echo "Building GoplexCLI desktop app v$(VERSION)..."
-	@cd gui && wails build -m -nosyncgomod -ldflags "-X main.version=$(VERSION)"
+	@cd gui && wails build -m -nosyncgomod $(GUI_TAGS) -ldflags "-X main.version=$(VERSION)"
 	@echo "Build complete: ./gui/build/bin/"
 
 # Install the icon-enabled desktop GUI. On Windows this installs per-user under
 # LOCALAPPDATA and creates a Start Menu shortcut. Pass DESKTOP=1 to also create
-# a desktop shortcut. Other platforms currently keep the built app in
-# gui/build/bin and print platform-specific manual installation guidance.
+# a desktop shortcut. macOS copies the .app into /Applications; Linux installs
+# the binary, icon and launcher entry under ~/.local (scripts/install-gui-linux.sh).
 gui-install: gui-build
 ifeq ($(OS),Windows_NT)
 	@powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-gui-windows.ps1 -Source "gui/build/bin/goplexcli-gui.exe" $(if $(filter 1,$(DESKTOP)),-DesktopShortcut,)
@@ -151,8 +166,7 @@ else
 		killall Dock 2>/dev/null || true; \
 		echo "Installed to /Applications/goplexcli-gui.app"; \
 	else \
-		echo "Automatic GUI installation is currently available on Windows and macOS only."; \
-		echo "Install the application from ./gui/build/bin/ using your platform's application directory."; \
+		sh scripts/install-gui-linux.sh gui/build/bin/goplexcli-gui gui/build/appicon.png; \
 	fi
 endif
 

@@ -20,6 +20,7 @@ import { Splash } from "./components/Splash";
 import { Toasts, type Toast } from "./components/Toasts";
 import { Setup } from "./views/Setup";
 import { Settings } from "./views/Settings";
+import Select from "./components/Select";
 
 const EMPTY_MESSAGES: Partial<Record<NavKey, string>> = {
   movies: "No movies in your library yet.",
@@ -772,42 +773,37 @@ export default function App() {
           sortPref && (
             <div className="space-y-2">
               {!sortIsTv && (
-                <select
+                <Select
                   value={genre}
-                  onChange={(e) => setGenre(e.target.value)}
+                  onChange={setGenre}
+                  options={[
+                    { value: "", label: "All Genres" },
+                    ...movieGenres.map((g) => ({ value: g, label: g })),
+                  ]}
                   className={`w-full ${CONTROL}`}
                   title="Filter by genre"
-                >
-                  <option value="">All Genres</option>
-                  {movieGenres.map((g) => (
-                    <option key={g} value={g}>
-                      {g}
-                    </option>
-                  ))}
-                </select>
+                />
               )}
               <div className="flex gap-2">
-                <select
+                <Select<SortField>
                   value={sortPref.sortField}
-                  onChange={(e) =>
-                    updateSortPref(sortCategory, {
-                      ...sortPref,
-                      sortField: e.target.value as SortField,
-                    })
+                  onChange={(sortField) =>
+                    updateSortPref(sortCategory, { ...sortPref, sortField })
                   }
+                  options={[
+                    { value: "title", label: "Title" },
+                    { value: "year", label: "Year" },
+                    { value: "added", label: "Date Added" },
+                    ...(sortIsTv
+                      ? []
+                      : [
+                          { value: "rating" as const, label: "Rating" },
+                          { value: "duration" as const, label: "Duration" },
+                        ]),
+                  ]}
                   className={`min-w-0 flex-1 ${CONTROL}`}
                   title="Sort by"
-                >
-                  <option value="title">Title</option>
-                  <option value="year">Year</option>
-                  <option value="added">Date Added</option>
-                  {!sortIsTv && (
-                    <>
-                      <option value="rating">Rating</option>
-                      <option value="duration">Duration</option>
-                    </>
-                  )}
-                </select>
+                />
                 <button
                   onClick={() =>
                     updateSortPref(sortCategory, { ...sortPref, desc: !sortPref.desc })

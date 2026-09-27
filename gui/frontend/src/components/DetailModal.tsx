@@ -19,6 +19,7 @@ import {
   StarOutlineIcon,
   TvIcon,
 } from "./icons";
+import Select from "./Select";
 
 interface Props {
   media: Media;
@@ -377,21 +378,16 @@ function TargetPicker({
   compact?: boolean;
 }) {
   return (
-    <select
+    <Select
       value={target}
-      onChange={(e) => onChange(e.target.value)}
+      onChange={onChange}
+      options={[
+        { value: "", label: "To: this computer" },
+        ...servers.map((s) => ({ value: s, label: `To: ⇄ ${s}` })),
+      ]}
       title="Where the download runs"
-      className={`rounded-lg border border-white/10 bg-ink-800 text-white outline-none focus:border-accent/60 ${
-        compact ? "px-2 py-2 text-sm" : "px-2.5 py-2.5 text-sm"
-      }`}
-    >
-      <option value="">To: this computer</option>
-      {servers.map((s) => (
-        <option key={s} value={s}>
-          To: ⇄ {s}
-        </option>
-      ))}
-    </select>
+      className={`bg-ink-800 text-white ${compact ? "px-2 py-2 text-sm" : "px-2.5 py-2.5 text-sm"}`}
+    />
   );
 }
 
