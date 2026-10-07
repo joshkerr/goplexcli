@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -12,7 +13,13 @@ import (
 func TestFindRclonecpConfiguredPath(t *testing.T) {
 	useTempConfigDir(t)
 	dir := t.TempDir()
-	bin := filepath.Join(dir, "rclonecp.exe")
+	// The bare-name lookup below goes through exec.LookPath, which only
+	// appends ".exe" on Windows, so the fixture takes the host's name.
+	name := "rclonecp"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	bin := filepath.Join(dir, name)
 	if err := os.WriteFile(bin, []byte("x"), 0o755); err != nil {
 		t.Fatal(err)
 	}
