@@ -404,6 +404,37 @@ type daemonState struct {
 	saveAt  time.Time
 	service *library.Service
 	server  string
+	// scanning serializes scans so a signal or timer can't start a second
+	// one while the first is still running.
+	scanning sync.Mutex
+	// diskMod is the cache file's mtime after our own last load or save;
+	// a different mtime means another process (a manual 'library scan', a
+	// LAN sync pull) rewrote it and the in-memory copy should be reloaded.
+	diskMod time.Time
+}
+
+// noteDisk records the cache file's current mtime as "ours".
+func (d *daemonState) noteDisk() {
+	if p, err := cache.GetCachePath(); err == nil {
+		if st, err := os.Stat(p); err == nil {
+			d.diskMod = st.ModTime()
+		}
+	}
+}
+
+// diskChanged reports whether the cache file was rewritten by someone else.
+func (d *daemonState) diskChanged() bool {
+	p, err := cache.GetCachePath()
+	if err != nil {
+		return false
+	}
+	st, err := os.Stat(p)
+	if err != nil {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return !st.ModTime().Equal(d.diskMod)
 }
 
 func (d *daemonState) timeline(key, state string, timeMs, durationMs int) {
@@ -451,6 +482,7 @@ func (d *daemonState) flush(force bool) {
 	}
 	d.dirty = false
 	d.saveAt = time.Time{}
+	d.noteDisk()
 }
 
 // replace installs a freshly indexed cache (already saved to disk).
@@ -459,6 +491,7 @@ func (d *daemonState) replace(c *cache.Cache) {
 	d.cache = c
 	d.dirty = false
 	d.saveAt = time.Time{}
+	d.noteDisk()
 	d.mu.Unlock()
 	if d.service != nil {
 		d.service.SetItems(c.Media, d.server)
@@ -563,7 +596,21 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 			}
 		}
 	}
+	reload := func(reason string) {
+		fresh, err := cache.Load()
+		if err != nil {
+			fmt.Println(warningStyle.Render("Failed to reload cache: " + err.Error()))
+			return
+		}
+		state.replace(fresh)
+		fmt.Println(infoStyle.Render(fmt.Sprintf("[%s] %s: now serving %d item(s), %d local", time.Now().Format("15:04"), reason, len(fresh.Media), state.service.Count())))
+	}
 	scan := func(reason string) {
+		if !state.scanning.TryLock() {
+			fmt.Println(infoStyle.Render("A scan is already running; request ignored."))
+			return
+		}
+		defer state.scanning.Unlock()
 		cfg, err := config.Load() // pick up libraries added while running
 		if err != nil {
 			fmt.Println(warningStyle.Render("Scan skipped, config unreadable: " + err.Error()))
@@ -578,12 +625,7 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 			fmt.Println(warningStyle.Render("Scan failed: " + err.Error()))
 			return
 		}
-		fresh, err := cache.Load()
-		if err != nil {
-			fmt.Println(warningStyle.Render("Failed to reload cache: " + err.Error()))
-			return
-		}
-		state.replace(fresh)
+		reload("Scan finished")
 	}
 	if !daemonNoLibrary && (len(libs) > 0 || cfg.HasPlex()) {
 		if daemonScanOnStart {
@@ -605,7 +647,9 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 			}()
 		}
 	}
-	// Flush playback progress shortly after it changes.
+	// Flush playback progress shortly after it changes, and pick up a cache
+	// rewritten by another process (a manual 'library scan' or a LAN sync
+	// pull) so the library server resolves the new items without a restart.
 	go func() {
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
@@ -615,16 +659,31 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 				return
 			case <-ticker.C:
 				state.flush(false)
+				if !daemonNoLibrary && state.diskChanged() && state.scanning.TryLock() {
+					reload("Cache changed on disk")
+					state.scanning.Unlock()
+				}
 			}
 		}
 	}()
 
-	fmt.Println(infoStyle.Render("\nPress Ctrl+C to stop.\n"))
+	fmt.Println(infoStyle.Render("\nPress Ctrl+C to stop. Send SIGHUP to rescan now (systemctl --user kill -s HUP goplexcli-daemon).\n"))
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	<-sigChan
-	fmt.Println(infoStyle.Render("\nStopping daemon..."))
-	cancel()
-	state.flush(true)
-	return nil
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	for {
+		select {
+		case <-hup:
+			if daemonNoLibrary {
+				continue
+			}
+			go scan("Rescan requested (SIGHUP)…")
+		case <-sigChan:
+			fmt.Println(infoStyle.Render("\nStopping daemon..."))
+			cancel()
+			state.flush(true)
+			return nil
+		}
+	}
 }

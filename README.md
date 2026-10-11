@@ -291,7 +291,8 @@ couldn't identify are listed as warnings and retried on the next scan.
   `sync serve`);
 - accepts download requests from remote GUIs on port **47821** (like `serve`);
 - rescans the library folders on an interval (default 1h, or
-  `library_scan_interval` in config), so new files show up on every device
+  `library_scan_interval` in config; send `SIGHUP` to rescan right away,
+  e.g. `systemctl --user kill -s HUP goplexcli-daemon`), so new files show up on every device
   that syncs from this machine.
 
 ```bash
