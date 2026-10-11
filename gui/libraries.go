@@ -99,11 +99,14 @@ func (a *App) AddLibrary(path, libType, name, remote string) error {
 	if err != nil {
 		return err
 	}
+	// With a remote, the folder may be a mount that isn't up yet: scanning
+	// lists the remote and streaming falls back to rclone.
 	st, err := os.Stat(abs)
 	if err != nil {
-		return fmt.Errorf("cannot read %s: %v", abs, err)
-	}
-	if !st.IsDir() {
+		if strings.TrimSpace(remote) == "" {
+			return fmt.Errorf("cannot read %s: %v", abs, err)
+		}
+	} else if !st.IsDir() {
 		return fmt.Errorf("%s is not a folder", abs)
 	}
 	name = strings.TrimSpace(name)

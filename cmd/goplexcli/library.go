@@ -149,11 +149,15 @@ func runLibraryAdd(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	// With a remote, the folder may be a mount that isn't up yet: scanning
+	// lists the remote and streaming falls back to rclone, so only warn.
 	st, err := os.Stat(p)
 	if err != nil {
-		return fmt.Errorf("cannot read %s: %w", p, err)
-	}
-	if !st.IsDir() {
+		if strings.TrimSpace(libraryAddRemote) == "" {
+			return fmt.Errorf("cannot read %s: %w", p, err)
+		}
+		fmt.Println(warningStyle.Render(fmt.Sprintf("Note: %s is not accessible right now; the rclone remote will be used until it is mounted.", p)))
+	} else if !st.IsDir() {
 		return fmt.Errorf("%s is not a directory", p)
 	}
 	name := strings.TrimSpace(libraryAddName)
