@@ -6,6 +6,7 @@ import (
 
 	"github.com/joshkerr/goplexcli/internal/cache"
 	"github.com/joshkerr/goplexcli/internal/config"
+	"github.com/joshkerr/goplexcli/internal/library"
 	"github.com/joshkerr/goplexcli/internal/plex"
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -39,17 +40,39 @@ func (a *App) Reindex() error {
 		return err
 	}
 
-	serverConfigs, err := buildServerConfigs(cfg)
-	if err != nil {
-		return err
+	var media []plex.MediaItem
+	if cfg.HasPlex() {
+		serverConfigs, err := buildServerConfigs(cfg)
+		if err != nil {
+			return err
+		}
+		mappings := pathMappings(cfg)
+		media, err = plex.GetAllMediaFromServers(context.Background(), serverConfigs, mappings, a.reindexProgress())
+		if err != nil {
+			a.emitReindexDone("reindex", 0, 0, err)
+			return err
+		}
 	}
 
-	mappings := pathMappings(cfg)
-
-	media, err := plex.GetAllMediaFromServers(context.Background(), serverConfigs, mappings, a.reindexProgress())
-	if err != nil {
-		a.emitReindexDone("reindex", 0, 0, err)
-		return err
+	if len(cfg.GetEnabledLibraries()) > 0 {
+		// Bring the previous local items along so playback progress carries
+		// over; they are still re-enriched from scratch.
+		prior := media
+		if old := a.media(); old != nil {
+			server := library.ServerName(cfg)
+			for _, it := range old.Media {
+				if it.ServerName == server {
+					prior = append(prior, it)
+				}
+			}
+		}
+		merged, res, err := a.indexLocalLibraries(cfg, prior, true)
+		if err != nil {
+			a.emitReindexDone("reindex", 0, 0, err)
+			return err
+		}
+		media = merged
+		a.migrateFavorites(res)
 	}
 
 	newCache := &cache.Cache{Media: media}
@@ -88,29 +111,40 @@ func (a *App) Update() error {
 	}
 	incremental := len(existing.Media) > 0
 
-	serverConfigs, err := buildServerConfigs(cfg)
-	if err != nil {
-		return err
-	}
-
-	mappings := pathMappings(cfg)
-	cb := a.reindexProgress()
-
 	var media []plex.MediaItem
-	if incremental {
-		media, err = plex.GetNewMediaFromServers(context.Background(), serverConfigs, mappings, newestAddedFunc(existing.Media), cb)
-	} else {
-		media, err = plex.GetAllMediaFromServers(context.Background(), serverConfigs, mappings, cb)
-	}
-	if err != nil {
-		a.emitReindexDone("update", 0, 0, err)
-		return err
+	if cfg.HasPlex() {
+		serverConfigs, err := buildServerConfigs(cfg)
+		if err != nil {
+			return err
+		}
+		mappings := pathMappings(cfg)
+		cb := a.reindexProgress()
+		if incremental {
+			media, err = plex.GetNewMediaFromServers(context.Background(), serverConfigs, mappings, newestAddedFunc(existing.Media), cb)
+		} else {
+			media, err = plex.GetAllMediaFromServers(context.Background(), serverConfigs, mappings, cb)
+		}
+		if err != nil {
+			a.emitReindexDone("update", 0, 0, err)
+			return err
+		}
 	}
 
 	finalMedia := media
 	added := len(media)
 	if incremental {
 		finalMedia, added = mergeMedia(existing.Media, media)
+	}
+
+	if len(cfg.GetEnabledLibraries()) > 0 {
+		merged, res, err := a.indexLocalLibraries(cfg, finalMedia, false)
+		if err != nil {
+			a.emitReindexDone("update", 0, 0, err)
+			return err
+		}
+		finalMedia = merged
+		added += len(res.Items) - res.Reused
+		a.migrateFavorites(res)
 	}
 
 	newCache := &cache.Cache{Media: finalMedia}

@@ -12,6 +12,9 @@ export interface Status {
   rcloneAvailable: boolean;
   rclonecpAvailable: boolean;
   serverNames: string[] | null;
+  hasPlex: boolean; // a Plex server is configured
+  hasLibraries: boolean; // at least one enabled local library
+  libraryNames: string[] | null;
 }
 
 export interface Server {
@@ -35,6 +38,32 @@ export interface AppConfig {
   slowDeviceMode: boolean;
   sortDownloads: boolean;
   syncPeer: string;
+  tmdbApiKey: string; // TMDB API key (v3 key or v4 read token)
+  // Base URL other devices use to reach this machine's library server, e.g.
+  // http://192.168.0.155:47822. Blank = auto (first LAN IP + port 47822).
+  libraryUrl: string;
+  libraryName: string; // label for locally indexed items (blank = hostname)
+  libraryProbe: boolean; // run ffprobe for exact durations (slow on cloud mounts)
+}
+
+// A folder of media that goplexcli indexes itself (no Plex) and serves from
+// this machine. Edited in Settings → Local libraries.
+export interface Library {
+  name: string;
+  path: string;
+  type: "movie" | "show";
+  remote: string; // optional rclone path, e.g. gdrive:Media/Movies
+  enabled: boolean;
+  items: number; // indexed item count
+}
+
+export interface LibraryInfo {
+  libraries: Library[] | null;
+  serverName: string;
+  serverURL: string;
+  serverPort: number;
+  tmdbConfigured: boolean;
+  rcloneRemotes: string[] | null;
 }
 
 // MediaCard is the lightweight row used by the poster grid (see GetItem for

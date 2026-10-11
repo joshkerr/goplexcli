@@ -14,6 +14,7 @@ import (
 	"github.com/joshkerr/goplexcli/internal/download"
 	"github.com/joshkerr/goplexcli/internal/favorites"
 	"github.com/joshkerr/goplexcli/internal/lansync"
+	"github.com/joshkerr/goplexcli/internal/library"
 	"github.com/joshkerr/goplexcli/internal/player"
 	"github.com/joshkerr/goplexcli/internal/plex"
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -89,6 +90,13 @@ type App struct {
 	// lan advertises this instance's media cache on the LAN and pulls a newer
 	// cache from a peer (the "Sync from LAN" action).
 	lan *lansync.Server
+
+	// lib serves this machine's locally indexed items (streaming, artwork,
+	// playback progress) while the GUI is open; nil when it failed to start.
+	lib *library.Service
+	// saveMu/saveTimer coalesce cache writes triggered by playback reports.
+	saveMu    sync.Mutex
+	saveTimer *time.Timer
 }
 
 // NewApp creates a new App. Config is loaded lazily in startup.
@@ -125,6 +133,7 @@ func (a *App) startup(ctx context.Context) {
 		a.cfg = cfg
 		a.mu.Unlock()
 	}
+	a.startLibraryServer()
 	go a.posters.prune()
 }
 
@@ -150,9 +159,15 @@ func (a *App) shutdown(ctx context.Context) {
 	go func() {
 		defer close(done)
 		var wg sync.WaitGroup
-		wg.Add(2)
+		wg.Add(3)
 		go func() { defer wg.Done(); a.posters.close(ctx) }()
 		go func() { defer wg.Done(); a.lan.Close(ctx) }()
+		go func() {
+			defer wg.Done()
+			if a.lib != nil {
+				a.lib.Close(ctx)
+			}
+		}()
 		wg.Wait()
 	}()
 	select {
@@ -217,6 +232,11 @@ type StatusDTO struct {
 	RcloneAvailable   bool     `json:"rcloneAvailable"`
 	RclonecpAvailable bool     `json:"rclonecpAvailable"`
 	ServerNames       []string `json:"serverNames"`
+	// HasPlex/HasLibraries say which index sources are configured; the
+	// frontend offers Plex login or local folders accordingly.
+	HasPlex      bool     `json:"hasPlex"`
+	HasLibraries bool     `json:"hasLibraries"`
+	LibraryNames []string `json:"libraryNames"`
 }
 
 // ServerDTO is a Plex server discovered during login.
@@ -243,6 +263,11 @@ type ConfigDTO struct {
 	SlowDeviceMode   bool   `json:"slowDeviceMode"`
 	SortDownloads    bool   `json:"sortDownloads"`
 	SyncPeer         string `json:"syncPeer"`
+	// Local library settings.
+	TMDBAPIKey   string `json:"tmdbApiKey"`
+	LibraryURL   string `json:"libraryUrl"`
+	LibraryName  string `json:"libraryName"`
+	LibraryProbe bool   `json:"libraryProbe"`
 }
 
 // ---- Bound methods: status & config ----
@@ -258,9 +283,14 @@ func (a *App) GetStatus() StatusDTO {
 	_, rcpErr := a.findRclonecp()
 	dto.RclonecpAvailable = rcpErr == nil
 	dto.Configured = cfg.Validate() == nil
+	dto.HasPlex = cfg.HasPlex()
 	for _, s := range cfg.Servers {
 		dto.ServerNames = append(dto.ServerNames, s.Name)
 	}
+	for _, lib := range cfg.GetEnabledLibraries() {
+		dto.LibraryNames = append(dto.LibraryNames, lib.Name)
+	}
+	dto.HasLibraries = len(dto.LibraryNames) > 0
 
 	if mediaCache := a.media(); mediaCache != nil {
 		dto.CacheCount = len(mediaCache.Media)
@@ -363,6 +393,10 @@ func (a *App) GetConfig() ConfigDTO {
 		SlowDeviceMode:   cfg.SlowDeviceMode,
 		SortDownloads:    cfg.SortDownloads,
 		SyncPeer:         cfg.SyncPeer,
+		TMDBAPIKey:       cfg.TMDBAPIKey,
+		LibraryURL:       cfg.LibraryURL,
+		LibraryName:      cfg.LibraryName,
+		LibraryProbe:     cfg.LibraryProbe,
 	}
 }
 
@@ -377,6 +411,10 @@ func (a *App) SaveConfig(dto ConfigDTO) error {
 	cfg.SlowDeviceMode = dto.SlowDeviceMode
 	cfg.SortDownloads = dto.SortDownloads
 	cfg.SyncPeer = strings.TrimSpace(dto.SyncPeer)
+	cfg.TMDBAPIKey = strings.TrimSpace(dto.TMDBAPIKey)
+	cfg.LibraryURL = strings.TrimSpace(dto.LibraryURL)
+	cfg.LibraryName = strings.TrimSpace(dto.LibraryName)
+	cfg.LibraryProbe = dto.LibraryProbe
 	if err := cfg.Save(); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
 	}

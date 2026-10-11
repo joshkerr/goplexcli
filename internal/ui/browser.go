@@ -518,13 +518,19 @@ func (m *BrowserModel) maybeDownloadPoster() tea.Cmd {
 
 	// Mark as loading and download
 	m.posterLoading[item.Thumb] = true
-	return m.downloadPosterAsync(item.Thumb)
+	return m.downloadPosterAsync(item.Thumb, item.ServerURL)
 }
 
-// downloadPosterAsync downloads a poster in the background
-func (m *BrowserModel) downloadPosterAsync(thumbPath string) tea.Cmd {
+// downloadPosterAsync downloads a poster in the background. Items carry the
+// URL of the server that holds their artwork (a Plex server or a goplexcli
+// library server); the configured Plex URL is only a fallback for old caches.
+func (m *BrowserModel) downloadPosterAsync(thumbPath, serverURL string) tea.Cmd {
+	base := m.plexURL
+	if serverURL != "" {
+		base = serverURL
+	}
 	return func() tea.Msg {
-		path := DownloadPoster(m.plexURL, thumbPath, m.plexToken)
+		path := DownloadPoster(base, thumbPath, m.plexToken)
 		return posterDownloadedMsg{
 			thumbPath:  thumbPath,
 			posterPath: path,

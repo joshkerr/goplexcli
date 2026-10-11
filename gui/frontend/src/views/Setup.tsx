@@ -1,7 +1,14 @@
 import { useEffect, useState } from "react";
 import { api, onEvent } from "../lib/api";
-import type { ReindexProgress, Server, Status } from "../lib/types";
+import type {
+  Library,
+  ReindexProgress,
+  Server,
+  Status,
+} from "../lib/types";
 import { BrandMark } from "../components/icons";
+import { LibraryForm } from "../components/LibraryForm";
+import { LibraryList } from "../components/LibraryList";
 
 interface Props {
   status: Status;
@@ -9,7 +16,9 @@ interface Props {
   onToast: (msg: string, kind?: "info" | "error") => void;
 }
 
-type Step = "login" | "servers" | "index";
+// login → servers → index is the Plex path; login → local → index indexes
+// folders on this machine instead (no Plex account needed).
+type Step = "login" | "servers" | "local" | "index";
 
 export function Setup({ status, onReady, onToast }: Props) {
   // If already configured but no cache, jump straight to indexing.
@@ -31,18 +40,39 @@ export function Setup({ status, onReady, onToast }: Props) {
             GoplexCLI
           </h1>
           <p className="mt-1 text-sm text-white/50">
-            Browse and stream your Plex library
+            Browse and stream your media library
           </p>
         </div>
 
         <div className="rounded-2xl border border-white/10 bg-ink-700/70 p-6 shadow-card">
           {step === "login" && (
-            <LoginForm
+            <>
+              <LoginForm
+                onToast={onToast}
+                onLoggedIn={(srv) => {
+                  setServers(srv);
+                  setStep("servers");
+                }}
+              />
+              <div className="my-5 flex items-center gap-3 text-xs text-white/30">
+                <span className="h-px flex-1 bg-white/10" />
+                or
+                <span className="h-px flex-1 bg-white/10" />
+              </div>
+              <button
+                type="button"
+                onClick={() => setStep("local")}
+                className="w-full rounded-lg bg-white/10 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-white/20"
+              >
+                Index local folders instead
+              </button>
+            </>
+          )}
+          {step === "local" && (
+            <LocalStep
               onToast={onToast}
-              onLoggedIn={(srv) => {
-                setServers(srv);
-                setStep("servers");
-              }}
+              onBack={() => setStep("login")}
+              onContinue={() => setStep("index")}
             />
           )}
           {step === "servers" && (
@@ -203,6 +233,129 @@ function ServerSelect({
         className="w-full rounded-lg bg-accent py-2.5 text-sm font-semibold text-ink-900 transition-colors hover:bg-accent-soft disabled:opacity-50"
       >
         {busy ? "Saving…" : "Continue"}
+      </button>
+    </div>
+  );
+}
+
+function LocalStep({
+  onBack,
+  onContinue,
+  onToast,
+}: {
+  onBack: () => void;
+  onContinue: () => void;
+  onToast: (m: string, k?: "info" | "error") => void;
+}) {
+  const [libraries, setLibraries] = useState<Library[]>([]);
+  const [tmdbKey, setTmdbKey] = useState("");
+  const [tmdbSaved, setTmdbSaved] = useState("");
+  const [savingKey, setSavingKey] = useState(false);
+
+  const refresh = () =>
+    api
+      .getLibraryInfo()
+      .then((info) => setLibraries(info.libraries ?? []))
+      .catch(() => {});
+
+  useEffect(() => {
+    refresh();
+    api
+      .getConfig()
+      .then((c) => {
+        setTmdbKey(c.tmdbApiKey);
+        setTmdbSaved(c.tmdbApiKey);
+      })
+      .catch(() => {});
+  }, []);
+
+  // Persist only the TMDB key: reload the config first so no other field
+  // the backend may have filled in meanwhile is clobbered.
+  const saveKey = async () => {
+    setSavingKey(true);
+    try {
+      const cfg = await api.getConfig();
+      await api.saveConfig({ ...cfg, tmdbApiKey: tmdbKey.trim() });
+      setTmdbSaved(tmdbKey.trim());
+      onToast("TMDB key saved");
+    } catch (err: any) {
+      onToast(String(err?.message ?? err), "error");
+    } finally {
+      setSavingKey(false);
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="text-base font-semibold text-white">
+          Index local folders
+        </h2>
+        <p className="text-sm text-white/50">
+          Pick folders of movies or TV shows on this computer (or a mounted
+          drive). You can add more later under Settings.
+        </p>
+      </div>
+
+      <LibraryForm
+        compact
+        onToast={onToast}
+        onAdded={(name) => {
+          refresh();
+          onToast(`Added ${name}`);
+        }}
+      />
+
+      {libraries.length > 0 && (
+        <LibraryList
+          compact
+          libraries={libraries}
+          onChanged={refresh}
+          onToast={onToast}
+        />
+      )}
+
+      <div>
+        <label className="mb-1.5 block text-xs font-medium text-white/50">
+          TMDB API key (optional)
+        </label>
+        <div className="flex gap-2">
+          <input
+            type="password"
+            value={tmdbKey}
+            onChange={(e) => setTmdbKey(e.target.value)}
+            placeholder="For summaries, ratings and artwork"
+            autoComplete="off"
+            className="w-full rounded-lg border border-white/10 bg-ink-800 px-3 py-2.5 text-sm text-white placeholder-white/30 outline-none focus:border-accent/60"
+          />
+          <button
+            type="button"
+            onClick={saveKey}
+            disabled={savingKey || tmdbKey.trim() === tmdbSaved}
+            className="shrink-0 rounded-lg bg-white/10 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-white/20 disabled:opacity-50"
+          >
+            {savingKey ? "Saving…" : "Save key"}
+          </button>
+        </div>
+        <p className="mt-1 text-xs text-white/30">
+          Free key from themoviedb.org → Settings → API. Without one, titles
+          come from file names only.
+        </p>
+      </div>
+
+      <button
+        onClick={onContinue}
+        disabled={libraries.length === 0}
+        className="w-full rounded-lg bg-accent py-2.5 text-sm font-semibold text-ink-900 transition-colors hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        Continue
+      </button>
+      <button
+        type="button"
+        onClick={onBack}
+        className="block w-full text-center text-xs text-white/40 hover:text-white/70"
+      >
+        Back to Plex sign-in
       </button>
     </div>
   );

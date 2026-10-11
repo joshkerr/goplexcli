@@ -270,3 +270,39 @@ func (st *Store) MergeData(data []byte) (bool, error) {
 	}
 	return true, nil
 }
+
+// Remap copies the favorite state of each old key onto its new key (when the
+// new key has no newer state of its own) and persists the result. It is used
+// when items change identity — e.g. a library moving from Plex keys to local
+// keys — so stars survive. Returns how many keys were carried over.
+func (st *Store) Remap(oldToNew map[string]string) (int, error) {
+	if len(oldToNew) == 0 {
+		return 0, nil
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	now := time.Now()
+	s, path, err := st.load(now)
+	if err != nil {
+		return 0, err
+	}
+	moved := 0
+	for oldKey, newKey := range oldToNew {
+		e, ok := s.Items[oldKey]
+		if !ok || !e.Fav || oldKey == newKey || newKey == "" {
+			continue
+		}
+		if cur, exists := s.Items[newKey]; exists && cur.TS >= e.TS {
+			continue
+		}
+		s.Items[newKey] = e
+		moved++
+	}
+	if moved == 0 {
+		return 0, nil
+	}
+	if err := st.save(s, path, now); err != nil {
+		return moved, fmt.Errorf("failed to save favorites: %w", err)
+	}
+	return moved, nil
+}

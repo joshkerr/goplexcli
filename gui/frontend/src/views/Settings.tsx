@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import { api, onEvent } from "../lib/api";
+import { LibraryForm } from "../components/LibraryForm";
+import { LibraryList } from "../components/LibraryList";
 import type {
   AppConfig,
+  LibraryInfo,
   ReindexProgress,
   RemoteServer,
   Status,
@@ -45,8 +48,20 @@ export function Settings({
     slowDeviceMode: false,
     sortDownloads: false,
     syncPeer: "",
+    tmdbApiKey: "",
+    libraryUrl: "",
+    libraryName: "",
+    libraryProbe: false,
   });
   const [saving, setSaving] = useState(false);
+  const [showTmdbKey, setShowTmdbKey] = useState(false);
+
+  // Local libraries (folders goplexcli indexes itself and serves from this
+  // machine). Rows are changed through their own bindings, so the list is
+  // refetched after each change rather than saved with the config.
+  const [libInfo, setLibInfo] = useState<LibraryInfo | null>(null);
+  const refreshLibraries = () =>
+    api.getLibraryInfo().then(setLibInfo).catch(() => {});
 
   // Remote download servers (`goplexcli serve` daemons on other machines).
   // Edited locally and persisted by the main Save button.
@@ -64,6 +79,7 @@ export function Settings({
   useEffect(() => {
     api.getConfig().then(setCfg).catch(() => {});
     api.listRemoteServers().then(setServers).catch(() => {});
+    refreshLibraries();
     api.appVersion().then(setAppVersion).catch(() => {});
     // Check for a newer GUI release in the background on open.
     api
@@ -87,6 +103,7 @@ export function Settings({
       await api.saveRemoteServers(kept);
       setServers(await api.listRemoteServers()); // pick up cleaned names
       onRemoteServersChanged();
+      refreshLibraries(); // tmdbConfigured / server name & URL may have changed
       onToast("Settings saved");
     } catch (e: any) {
       onToast(String(e?.message ?? e), "error");
@@ -145,7 +162,7 @@ export function Settings({
     label: string,
     key: Exclude<
       keyof AppConfig,
-      "autoSendRclonecp" | "slowDeviceMode" | "sortDownloads"
+      "autoSendRclonecp" | "slowDeviceMode" | "sortDownloads" | "libraryProbe"
     >,
     placeholder: string,
     hint?: string
@@ -215,10 +232,52 @@ export function Settings({
           </button>
         </div>
         <p className="text-xs text-white/30">
-          Update fetches only newly added titles. Sync from LAN pulls the cache
-          from the computer set in Preferences below (or auto-discovers one if
+          Update fetches only newly added titles and also rescans local
+          library folders for new files. Sync from LAN pulls the cache from
+          the computer set in Preferences below (or auto-discovers one if
           blank). Reindex rebuilds the whole library from scratch.
         </p>
+      </section>
+
+      <section className="space-y-4 rounded-2xl border border-white/5 bg-ink-700/50 p-6">
+        <h2 className="text-base font-semibold text-white">Local libraries</h2>
+        <p className="text-xs text-white/30">
+          Folders of movies or TV shows that GoplexCLI indexes itself — no
+          Plex needed — and serves to other devices on your network.
+        </p>
+        {libInfo && !libInfo.tmdbConfigured && (
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
+            No TMDB API key set — titles come from file names only. Add a key
+            under Preferences for summaries, ratings and artwork.
+          </div>
+        )}
+        <LibraryList
+          libraries={libInfo?.libraries ?? []}
+          onChanged={refreshLibraries}
+          onToast={onToast}
+        />
+        {libInfo && (
+          <p className="text-xs text-white/40">
+            Served as{" "}
+            <span className="font-medium text-white/70">
+              {libInfo.serverName}
+            </span>{" "}
+            at <code className="text-white/60">{libInfo.serverURL}</code>.
+            Run <code className="text-white/50">goplexcli daemon</code> to keep
+            the library served when this app is closed.
+          </p>
+        )}
+        <div className="space-y-3 rounded-xl border border-white/10 bg-ink-800/60 p-4">
+          <h3 className="text-sm font-semibold text-white/80">Add folder…</h3>
+          <LibraryForm
+            onAdded={(name) => {
+              refreshLibraries();
+              onToast(`Added ${name}. Run Update library to index it.`);
+            }}
+            onToast={onToast}
+            rcloneRemotes={libInfo?.rcloneRemotes ?? []}
+          />
+        </div>
       </section>
 
       <section className="space-y-4 rounded-2xl border border-white/5 bg-ink-700/50 p-6">
@@ -283,6 +342,56 @@ export function Settings({
           "e.g. ghost-2.local",
           "Hostname or IP of another computer running GoplexCLI to pull the cache from with “Sync from LAN”. Leave blank to auto-discover."
         )}
+        <div>
+          <label className="mb-1.5 block text-xs font-medium text-white/50">
+            TMDB API key
+          </label>
+          <div className="flex gap-2">
+            <input
+              type={showTmdbKey ? "text" : "password"}
+              value={cfg.tmdbApiKey}
+              onChange={(e) => setCfg({ ...cfg, tmdbApiKey: e.target.value })}
+              placeholder="v3 API key or v4 read access token"
+              autoComplete="off"
+              className="w-full rounded-lg border border-white/10 bg-ink-800 px-3 py-2.5 text-sm text-white placeholder-white/30 outline-none focus:border-accent/60"
+            />
+            <button
+              type="button"
+              onClick={() => setShowTmdbKey((v) => !v)}
+              className="shrink-0 rounded-lg bg-white/10 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-white/20"
+            >
+              {showTmdbKey ? "Hide" : "Show"}
+            </button>
+          </div>
+          <p className="mt-1 text-xs text-white/30">
+            Free key from themoviedb.org → Settings → API. Used by the local
+            indexer.
+          </p>
+        </div>
+        {field(
+          "Library server URL",
+          "libraryUrl",
+          "http://192.168.0.155:47822",
+          "How other devices reach this machine's local libraries. Must be an address they can open, not localhost. Leave blank to use the first LAN IP on port 47822."
+        )}
+        {field(
+          "Library server name",
+          "libraryName",
+          "This computer's hostname",
+          "Label shown on locally indexed items. Leave blank to use the hostname."
+        )}
+        <label className="flex cursor-pointer items-center gap-2.5 text-sm text-white/70">
+          <input
+            type="checkbox"
+            checked={cfg.libraryProbe}
+            onChange={(e) =>
+              setCfg({ ...cfg, libraryProbe: e.target.checked })
+            }
+            className="h-4 w-4 accent-accent"
+          />
+          Probe files with ffprobe for exact durations and audio languages
+          (slow on cloud mounts)
+        </label>
         <div className="flex items-center gap-3 pt-1 text-xs">
           <Availability label="mpv" ok={status.mpvAvailable} />
           <Availability label="rclone" ok={status.rcloneAvailable} />

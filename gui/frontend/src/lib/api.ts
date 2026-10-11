@@ -9,6 +9,7 @@ import type {
   Category,
   DownloadConflict,
   DownloadProgress,
+  LibraryInfo,
   Media,
   MediaCard,
   OnExisting,
@@ -72,6 +73,16 @@ type WailsApp = {
   ListRemoteDownloads(): Promise<DownloadProgress[] | null>;
   CancelRemoteDownload(id: string): Promise<void>;
   ClearRemoteDownloadHistory(): Promise<void>;
+  GetLibraryInfo(): Promise<LibraryInfo>;
+  PickLibraryFolder(): Promise<string>;
+  AddLibrary(
+    path: string,
+    type: string,
+    name: string,
+    remote: string
+  ): Promise<void>;
+  RemoveLibrary(name: string): Promise<void>;
+  SetLibraryEnabled(name: string, enabled: boolean): Promise<void>;
 };
 
 type WailsRuntime = {
@@ -165,6 +176,18 @@ export const api = {
   listRemoteDownloads: async () => (await app().ListRemoteDownloads()) ?? [],
   cancelRemoteDownload: (id: string) => app().CancelRemoteDownload(id),
   clearRemoteDownloadHistory: () => app().ClearRemoteDownloadHistory(),
+  getLibraryInfo: () => app().GetLibraryInfo(),
+  // Native folder picker; resolves to "" when cancelled.
+  pickLibraryFolder: () => app().PickLibraryFolder(),
+  addLibrary: (
+    path: string,
+    type: "movie" | "show",
+    name: string,
+    remote: string
+  ) => app().AddLibrary(path, type, name, remote),
+  removeLibrary: (name: string) => app().RemoveLibrary(name),
+  setLibraryEnabled: (name: string, enabled: boolean) =>
+    app().SetLibraryEnabled(name, enabled),
 };
 
 /** Subscribe to a backend event. Returns an unsubscribe function. */

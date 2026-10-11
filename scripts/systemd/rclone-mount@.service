@@ -1,0 +1,40 @@
+# rclone FUSE mount for one remote, as a user service.
+#
+#   systemctl --user enable --now rclone-mount@gdrive
+#
+# mounts the rclone remote "gdrive:" at ~/mnt/gdrive. Playback seeks and
+# re-reads are served from the VFS cache under ~/.cache/rclone/vfs (override
+# RCLONE_CACHE_DIR below or in ~/.config/rclone/mount.env to put it on a big
+# volume). Directory listings are cached for a long time and refreshed by
+# change polling, so library scans stay fast after the first one.
+[Unit]
+Description=rclone mount of %i
+After=network-online.target
+Wants=network-online.target
+AssertPathIsDirectory=%h/mnt
+
+[Service]
+Type=notify
+Environment=RCLONE_CACHE_DIR=%h/.cache/rclone
+EnvironmentFile=-%h/.config/rclone/mount.env
+ExecStartPre=/bin/mkdir -p %h/mnt/%i
+ExecStart=/usr/bin/rclone mount %i: %h/mnt/%i \
+    --cache-dir ${RCLONE_CACHE_DIR} \
+    --vfs-cache-mode full \
+    --vfs-cache-max-size 100G \
+    --vfs-cache-max-age 720h \
+    --vfs-read-chunk-size 32M \
+    --vfs-read-chunk-size-limit 2G \
+    --vfs-read-ahead 128M \
+    --buffer-size 32M \
+    --dir-cache-time 720h \
+    --poll-interval 1m \
+    --attr-timeout 10s \
+    --umask 002 \
+    --log-level NOTICE
+ExecStop=/bin/fusermount -uz %h/mnt/%i
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

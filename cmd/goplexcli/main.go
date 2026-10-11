@@ -31,6 +31,7 @@ import (
 	apperrors "github.com/joshkerr/goplexcli/internal/errors"
 	"github.com/joshkerr/goplexcli/internal/favorites"
 	"github.com/joshkerr/goplexcli/internal/lansync"
+	"github.com/joshkerr/goplexcli/internal/library"
 	"github.com/joshkerr/goplexcli/internal/logging"
 	"github.com/joshkerr/goplexcli/internal/outplayer"
 	"github.com/joshkerr/goplexcli/internal/player"
@@ -483,7 +484,7 @@ it does not need Plex credentials or a media cache.`,
 	serveCmd.Flags().StringVar(&serveListen, "listen", "", "Address to listen on (default \""+dlserver.DefaultListen+"\", or serve_listen from config)")
 	serveCmd.Flags().StringVar(&serveName, "name", "", "Name shown in remote GUIs (default: hostname, or serve_name from config)")
 
-	rootCmd.AddCommand(loginCmd, browseCmd, cacheCmd, configCmd, streamCmd, serverCmd, serveCmd, webdavCmd, outplayerCmd, sortCmd, versionCmd, updateCmd, syncCmd, previewCmd)
+	rootCmd.AddCommand(loginCmd, browseCmd, cacheCmd, configCmd, streamCmd, serverCmd, serveCmd, webdavCmd, outplayerCmd, sortCmd, versionCmd, updateCmd, syncCmd, previewCmd, newLibraryCmd(), newDaemonCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(errorStyle.Render("Error: " + err.Error()))
@@ -1436,6 +1437,29 @@ func handleMediaAction(cfg *config.Config, q *queue.Queue, selectedMediaItems []
 	}
 }
 
+// itemServerURL returns the base URL of the server an item lives on: the
+// URL stamped on the item (a Plex server or a goplexcli library server), or
+// the legacy single Plex URL for caches that predate per-item server URLs.
+func itemServerURL(cfg *config.Config, media *plex.MediaItem) string {
+	if media != nil && media.ServerURL != "" {
+		return media.ServerURL
+	}
+	return cfg.PlexURL
+}
+
+// clientForItem builds a Plex-protocol client for the server holding an item.
+func clientForItem(cfg *config.Config, media *plex.MediaItem) (*plex.Client, error) {
+	serverURL := itemServerURL(cfg, media)
+	if serverURL == "" {
+		return nil, fmt.Errorf("no server URL for %s - run 'goplexcli login' or 'goplexcli cache reindex'", media.FormatMediaTitle())
+	}
+	name := ""
+	if media != nil {
+		name = media.ServerName
+	}
+	return plex.NewWithName(serverURL, cfg.TokenForURL(serverURL), name)
+}
+
 func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error {
 	if len(mediaItems) == 0 {
 		return fmt.Errorf("no media items provided")
@@ -1448,8 +1472,10 @@ func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error
 
 	fmt.Println(infoStyle.Render(fmt.Sprintf("\nPreparing to play %d items...", len(mediaItems))))
 
-	// Create Plex client
-	client, err := plex.New(cfg.PlexURL, cfg.TokenForURL(cfg.PlexURL))
+	// Create a client for the server holding the first item (playlists are
+	// normally from one server); each item's stream URL is resolved against
+	// its own server below.
+	client, err := clientForItem(cfg, mediaItems[0])
 	if err != nil {
 		return fmt.Errorf("failed to create plex client: %w", err)
 	}
@@ -1539,7 +1565,12 @@ func handleWatchMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) error
 			media.FormatMediaTitle(),
 		)
 
-		streamURL, err := client.GetStreamURL(media.Key)
+		itemClient, err := clientForItem(cfg, media)
+		if err != nil {
+			fmt.Println()
+			return fmt.Errorf("failed to create plex client: %w", err)
+		}
+		streamURL, err := itemClient.GetStreamURL(media.Key)
 		if err != nil {
 			fmt.Println()
 			return fmt.Errorf("failed to get stream URL for %s: %w", media.FormatMediaTitle(), err)
@@ -2485,7 +2516,7 @@ func handleSenPlayer(cfg *config.Config, mediaItems []*plex.MediaItem, mode stri
 	fmt.Println(infoStyle.Render(fmt.Sprintf("\nPreparing for SenPlayer (%s): %s", actionText, media.FormatMediaTitle())))
 
 	// Create Plex client
-	client, err := plex.New(cfg.PlexURL, cfg.TokenForURL(cfg.PlexURL))
+	client, err := clientForItem(cfg, media)
 	if err != nil {
 		return fmt.Errorf("failed to create plex client: %w", err)
 	}
@@ -2544,7 +2575,7 @@ func handleStream(cfg *config.Config, media *plex.MediaItem) error {
 	fmt.Println(infoStyle.Render("\nPublishing stream: " + media.FormatMediaTitle()))
 
 	// Create Plex client
-	client, err := plex.New(cfg.PlexURL, cfg.TokenForURL(cfg.PlexURL))
+	client, err := clientForItem(cfg, media)
 	if err != nil {
 		return fmt.Errorf("failed to create plex client: %w", err)
 	}
@@ -2562,7 +2593,8 @@ func handleStream(cfg *config.Config, media *plex.MediaItem) error {
 	}
 
 	// Publish the stream
-	streamID := server.PublishStream(media, streamURL, cfg.PlexURL, cfg.TokenForURL(cfg.PlexURL))
+	serverURL := itemServerURL(cfg, media)
+	streamID := server.PublishStream(media, streamURL, serverURL, cfg.TokenForURL(serverURL))
 
 	localIP := stream.GetLocalIP()
 	webURL := fmt.Sprintf("http://%s:%d", localIP, stream.DefaultPort)
@@ -3024,7 +3056,9 @@ func updateCache(fullReindex bool) error {
 	var media []plex.MediaItem
 	ctx := context.Background()
 
-	if len(enabledServers) > 1 {
+	if !cfg.HasPlex() {
+		// Local libraries only: nothing to fetch from Plex.
+	} else if len(enabledServers) > 1 {
 		// Multi-server mode
 		fmt.Println(infoStyle.Render(fmt.Sprintf("Found %d enabled servers", len(enabledServers))))
 
@@ -3132,8 +3166,34 @@ func updateCache(fullReindex bool) error {
 		} else {
 			fmt.Println(successStyle.Render(fmt.Sprintf("✓ Added %d new item(s)", added)))
 		}
-	} else {
+	} else if cfg.HasPlex() {
 		fmt.Println(successStyle.Render(fmt.Sprintf("✓ Retrieved %d media items", len(finalMedia))))
+	}
+
+	// Local libraries: scan folders and swap this machine's items in. A
+	// full reindex re-enriches everything; an update reuses unchanged files.
+	if len(cfg.GetEnabledLibraries()) > 0 {
+		prior := finalMedia
+		// A full reindex replaced everything above; bring the previous local
+		// items back in so playback progress carries over (they are still
+		// re-enriched from TMDB).
+		if !incremental {
+			if c, err := cache.Load(); err == nil {
+				server := library.ServerName(cfg)
+				for _, it := range c.Media {
+					if it.ServerName == server {
+						prior = append(prior, it)
+					}
+				}
+			}
+		}
+		merged, res, err := indexLibrariesWithProgress(ctx, cfg, prior, fullReindex)
+		if err != nil {
+			return fmt.Errorf("failed to index libraries: %w", err)
+		}
+		finalMedia = merged
+		fmt.Println(successStyle.Render(fmt.Sprintf("✓ Indexed %d local item(s) (%d unchanged, %d unmatched on TMDB)", len(res.Items), res.Reused, res.Unmatched)))
+		migrateFavorites(res)
 	}
 
 	// Save to cache
@@ -3958,13 +4018,29 @@ func runServe(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
+	stop, err := startDownloadServer(cfg)
+	if err != nil {
+		return err
+	}
+	fmt.Println(infoStyle.Render("\nPress Ctrl+C to stop; interrupted downloads restart on the next run.\n"))
 
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	<-sigChan
+	fmt.Println(infoStyle.Render("\nStopping download server..."))
+	stop()
+	return nil
+}
+
+// startDownloadServer starts the remote download daemon in the background and
+// prints its banner. The returned function shuts it down.
+func startDownloadServer(cfg *config.Config) (func(), error) {
 	rcloneBin := cfg.RclonePath
 	if rcloneBin == "" {
 		rcloneBin = "rclone"
 	}
 	if _, err := exec.LookPath(rcloneBin); err != nil {
-		return fmt.Errorf("rclone not found (%q) — install rclone or set rclone_path in config", rcloneBin)
+		return nil, fmt.Errorf("rclone not found (%q) — install rclone or set rclone_path in config", rcloneBin)
 	}
 
 	// With nothing configured, ResolveDownloadDir falls back to the process
@@ -3973,16 +4049,16 @@ func runServe(cmd *cobra.Command, args []string) error {
 	if cfg.DownloadDir == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return fmt.Errorf("no download directory configured and no home directory found: %w", err)
+			return nil, fmt.Errorf("no download directory configured and no home directory found: %w", err)
 		}
 		destOverride = filepath.Join(home, "Downloads")
 	}
 	destDir, err := cfg.ResolveDownloadDir(destOverride)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
-		return fmt.Errorf("failed to create download directory: %w", err)
+		return nil, fmt.Errorf("failed to create download directory: %w", err)
 	}
 
 	// The token gates every download request. Generate one on the first run
@@ -3990,11 +4066,11 @@ func runServe(cmd *cobra.Command, args []string) error {
 	if cfg.ServeToken == "" {
 		token, err := dlserver.GenerateToken()
 		if err != nil {
-			return fmt.Errorf("failed to generate access token: %w", err)
+			return nil, fmt.Errorf("failed to generate access token: %w", err)
 		}
 		cfg.ServeToken = token
 		if err := cfg.Save(); err != nil {
-			return fmt.Errorf("failed to save access token: %w", err)
+			return nil, fmt.Errorf("failed to save access token: %w", err)
 		}
 	}
 
@@ -4012,7 +4088,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	listener, err := net.Listen("tcp", listen)
 	if err != nil {
-		return fmt.Errorf("failed to listen on %s: %w", listen, err)
+		return nil, fmt.Errorf("failed to listen on %s: %w", listen, err)
 	}
 	httpSrv := &http.Server{Handler: srv.Handler(), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = httpSrv.Serve(listener) }()
@@ -4033,15 +4109,10 @@ func runServe(cmd *cobra.Command, args []string) error {
 	if restarted := mgr.Restore(); restarted > 0 {
 		fmt.Println(successStyle.Render(fmt.Sprintf("✓ Restarting %d interrupted download(s)", restarted)))
 	}
-	fmt.Println(infoStyle.Render("\nPress Ctrl+C to stop; interrupted downloads restart on the next run.\n"))
-
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	<-sigChan
-	fmt.Println(infoStyle.Render("\nStopping download server..."))
-	mgr.Shutdown()
-	_ = httpSrv.Close()
-	return nil
+	return func() {
+		mgr.Shutdown()
+		_ = httpSrv.Close()
+	}, nil
 }
 
 func runSort(cmd *cobra.Command, args []string) error {

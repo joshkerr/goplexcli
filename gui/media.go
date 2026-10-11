@@ -96,6 +96,7 @@ func (a *App) setMedia(c *cache.Cache) {
 	a.mediaMu.Lock()
 	a.mediaCache = c
 	a.mediaMu.Unlock()
+	a.refreshLibraryServer()
 }
 
 // invalidateMedia drops the in-memory copy so the next access reloads from disk.

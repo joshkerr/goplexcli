@@ -1,0 +1,25 @@
+# goplexcli daemon: library server (47822), LAN cache sync (47820), remote
+# download server (47821) and scheduled library scans, as a user service.
+#
+#   cp goplexcli-daemon.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now goplexcli-daemon
+#   loginctl enable-linger $USER     # keep it running when logged out
+#
+# If the library folders are rclone mounts started by rclone-mount@.service,
+# list them in After=/Requires= so the daemon waits for them, e.g.
+#   After=rclone-mount@gdrive.service
+#   Requires=rclone-mount@gdrive.service
+[Unit]
+Description=goplexcli daemon (library server, LAN sync, downloads, scans)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=%h/go/bin/goplexcli daemon
+Restart=on-failure
+RestartSec=5
+Environment=PATH=%h/go/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target

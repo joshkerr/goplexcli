@@ -1,10 +1,11 @@
 # GoplexCLI
 
-A powerful, fast, and elegant command-line interface for browsing and streaming media from your Plex server.
+A powerful, fast, and elegant command-line interface for browsing and streaming media — from your Plex server, or from media folders GoplexCLI indexes itself with no Plex Media Server at all.
 
 ## Features
 
-- **Browse Media** — Quickly browse your entire Plex library using fzf's fuzzy finder
+- **Browse Media** — Quickly browse your entire library using fzf's fuzzy finder
+- **Plex-free** — Index your own media folders (or rclone mounts of cloud storage) with TMDB metadata and serve them to every GoplexCLI client; no Plex Media Server needed
 - **Search** — Pass a search term directly to find movies and TV shows instantly
 - **Multi-Select** — Select multiple items with TAB for batch downloads or sequential playback
 - **Download Queue** — Add items to a persistent queue for batch downloads later
@@ -20,7 +21,7 @@ A powerful, fast, and elegant command-line interface for browsing and streaming 
 - **SenPlayer Integration** — Play or download media in SenPlayer via deep links (macOS)
 - **Sort & Filter** — Sort your library by name, date added, year, rating, or duration
 - **Smart Caching** — Cache your media library locally for instant offline browsing
-- **Multi-Server Support** — Connect to and manage multiple Plex servers
+- **Multi-Server Support** — Connect to and manage multiple Plex servers (and local libraries, side by side)
 - **Hierarchical TV Browsing** — Drill down through Show → Season → Episode
 - **Self-Updating** — Update to the latest release with a single command
 - **Shell Completions** — Tab completions for Bash, Zsh, Fish, and PowerShell
@@ -46,6 +47,7 @@ Before using GoplexCLI, ensure you have the following installed:
 - **chafa** (optional) — Terminal image viewer for poster art in the TUI browser
   - macOS: `brew install chafa`
   - Linux: `sudo apt install chafa`
+- **ffprobe** (optional) — Only used when indexing your own folders with `library_probe` enabled, to record exact durations and audio languages. Ships with ffmpeg (`brew install ffmpeg` / `sudo apt install ffmpeg`).
 
 ## Installation
 
@@ -114,7 +116,9 @@ icon-enabled executable is installed under
 
 ### Using the GUI
 
-1. **Sign in** with your Plex account and pick the servers to index.
+1. **Sign in** with your Plex account and pick the servers to index — or
+   choose **Index local folders instead** to point the app at your own media
+   folders with no Plex server (see [Indexing Your Own Media](#indexing-your-own-media-no-plex)).
 2. **Build library** to populate the local cache (shows live progress).
 3. **Browse** Movies, TV Shows, Recently Added, and Continue Watching from the
    sidebar; **search** filters the grid instantly. On the Movies grid, filter by
@@ -134,6 +138,8 @@ around a large library fills in quickly without re-downloading artwork.
 
 ## Quick Start
 
+**With a Plex server:**
+
 ```bash
 # 1. Authenticate with Plex
 goplexcli login
@@ -144,6 +150,246 @@ goplexcli cache reindex
 # 3. Browse and play
 goplexcli browse
 ```
+
+**Without Plex** (index your own folders — see [Indexing Your Own Media](#indexing-your-own-media-no-plex)):
+
+```bash
+# 1. Point GoplexCLI at your media folders
+goplexcli library add /mnt/media/Movies --type movie
+goplexcli library add /mnt/media/TV --type show
+
+# 2. Add a TMDB API key to config.json for metadata and posters (optional)
+#    { "tmdb_api_key": "..." }
+
+# 3. Index them, then keep them served (playback streams from this server;
+#    the desktop GUI serves them too while it is open)
+goplexcli library scan
+goplexcli daemon
+
+# 4. Browse and play (from another terminal or another computer)
+goplexcli browse
+```
+
+## Indexing Your Own Media (No Plex)
+
+GoplexCLI can index media folders itself and act as the server for every
+GoplexCLI client (CLI, desktop GUI, other computers that sync from it), so a
+Plex Media Server is no longer required. Each folder is scanned for video
+files, titles are read from the folder and file names, metadata and artwork
+come from [TMDB](https://www.themoviedb.org), and the results land in the same
+cache Plex items use — so `browse`, the GUI, LAN sync, playback progress and
+rclone downloads all work unchanged. Plex servers and local libraries can be
+mixed in one config.
+
+### Adding libraries
+
+```bash
+goplexcli library add <path> --type movie|show [--name "Label"] [--remote remote:folder]
+
+goplexcli library add /mnt/media/Movies --type movie
+goplexcli library add /mnt/media/TV --type show --name "TV"
+goplexcli library add /mnt/gdrive/Media/Movies --type movie --remote gdrive:Media/Movies
+
+goplexcli library list                # folders, item counts, server name and URL
+goplexcli library enable "TV"         # include in scans
+goplexcli library disable "TV"        # exclude from scans
+goplexcli library remove "TV"         # items drop from the cache on the next scan
+```
+
+- `--type` is `movie` (default) or `show` and decides how names are
+  interpreted (`movies`, `tv`, `series`, … are accepted as aliases).
+- `--name` defaults to the folder name. The name is part of each item's
+  identity, so renaming a library resets its playback positions and favorites.
+- `--remote` is the rclone path that mirrors the folder (e.g. the remote an
+  rclone mount is backed by). It does two things: downloads and transfers can
+  fetch the files via rclone, and the scan lists the remote directly with
+  `rclone lsjson -R --fast-list` instead of walking the mount — far faster for
+  cloud storage (it falls back to walking the folder if rclone fails). Without
+  it, files are only reachable through this machine's library server, unless a
+  `path_mappings` entry covers the path.
+
+### Folder layout
+
+Plex-style naming works best. For **movies**, a folder per title (with an
+optional IMDB/TMDB id for an exact match) or plain release-style file names:
+
+```
+Movies/
+├── Blade Runner 2049 (2017) [imdb-tt1856101]/Blade Runner 2049 (2017).mkv
+├── Dune (2021) {tmdb-438631}/Dune.2021.2160p.WEB-DL.mkv
+├── The.Lincoln.Lawyer.2011.1080p.BluRay.x264-GROUP.mkv
+└── Heat (1995).mp4
+```
+
+A folder name with a `(Year)` or an id wins; otherwise the file name is parsed
+as a scene release (the title ends at the first resolution/source/codec token,
+and the last plausible year before it is the release year); a folder holding
+a single file lends it its name.
+
+For **shows**, a show folder (optionally with `(Year)` and ids), season
+folders, and `SxxEyy`-tagged files:
+
+```
+TV/
+├── The Expanse (2015) [imdb-tt3230854]/
+│   ├── Season 01/The.Expanse.S01E01.Dulcinea.mkv
+│   ├── Season 01/The.Expanse.S01E02.mkv
+│   └── Specials/The.Expanse.S00E01.mkv
+└── Severance/
+    └── Season 1/Severance - 1x01 - Good News About Hell.mkv
+```
+
+`S01E02` (including multi-episode `S01E01E02` / `S01E01-E02`), `1x02`,
+`Season 1 Episode 2` and the anime-style `Show - 01` are all recognized; a
+`Season NN`, `S01` or `Specials` folder supplies the season when the file name
+has none. Files at the library root are grouped by the show name in the file
+name.
+
+Hidden files, `sample`/`samples`, Plex extras folders (`Trailers`, `Featurettes`,
+`Behind The Scenes`, `Deleted Scenes`, …) and files ending in `-trailer`,
+`-sample`, `-featurette`, etc. are skipped. Recognized video extensions: `.mkv
+.mp4 .m4v .avi .mov .wmv .webm .ts .m2ts .mpg .mpeg .flv`.
+
+### TMDB metadata
+
+Get a free API key from [themoviedb.org](https://www.themoviedb.org/settings/api)
+(a v3 key or a v4 read token both work) and add it to your config:
+
+```json
+{ "tmdb_api_key": "your-tmdb-key" }
+```
+
+With a key, every title gets its summary, rating, genres, cast, runtime,
+content rating and poster. TMDB responses are cached on disk for 30 days, so
+rescans are cheap. Without a key, titles and years come from the names only
+and there is no artwork. Set `library_probe: true` to additionally run
+`ffprobe` on each new file for exact durations and audio languages (off by
+default — it opens every file, which is slow on cloud mounts).
+
+### Scanning
+
+```bash
+goplexcli library scan          # index now; unchanged files keep their metadata
+goplexcli library scan --full   # re-enrich every title from TMDB (progress is kept)
+```
+
+`goplexcli cache update` and `goplexcli cache reindex` — and the GUI's
+**Update** / **Reindex** buttons — now also scan local libraries, so one
+command refreshes Plex servers and local folders together. Titles TMDB
+couldn't identify are listed as warnings and retried on the next scan.
+
+### Running the daemon
+
+`goplexcli daemon` turns a machine into an always-on server. In one process it:
+
+- serves locally indexed media to players and other GoplexCLI instances
+  (streaming, posters, playback progress) on port **47822** — the library
+  server. A file that isn't on disk (no mount, or the mount is down) is
+  streamed straight from its `--remote` path with `rclone cat`, so a FUSE
+  mount is optional — though a mount with a VFS cache seeks faster;
+- advertises and serves the media cache on the LAN on port **47820** (like
+  `sync serve`);
+- accepts download requests from remote GUIs on port **47821** (like `serve`);
+- rescans the library folders on an interval (default 1h, or
+  `library_scan_interval` in config), so new files show up on every device
+  that syncs from this machine.
+
+```bash
+goplexcli daemon
+#   --scan-interval 30m   how often to rescan (default library_scan_interval, else 1h; 0 disables)
+#   --scan-on-start=false skip the scan that normally runs at startup
+#   --no-library          don't serve local media or scan libraries
+#   --no-sync             don't advertise the cache on the LAN
+#   --no-downloads        don't run the remote download server
+```
+
+The library server speaks just enough of the Plex wire protocol (identity,
+item metadata, part streaming with range requests, poster images, timeline
+progress reports) that existing clients stream, fetch posters and report
+progress unchanged. Posters are proxied from TMDB and kept in a bounded cache
+under the GoplexCLI cache directory. The server is open to the LAN (like the
+cache sync server) unless `library_token` is set, in which case every request
+except `/identity` must carry it as an `X-Plex-Token` header or query
+parameter.
+
+### Other devices
+
+Other computers don't index anything themselves — they pull the cache from the
+machine running the daemon via [LAN Cache Sync](#lan-cache-sync)
+(`goplexcli sync pull`, or **Sync from LAN** in the GUI), and playback streams
+from the daemon's library server. Each local item carries the server address
+as its `library_url`, so that URL must be reachable from wherever the cache is
+used: it defaults to the machine's first LAN IPv4 address plus the library
+port, and can be pinned with `library_url` (e.g. `http://nas.local:47822`) if
+the machine has several interfaces or a stable hostname. Downloads on other
+devices use the library's `--remote` rclone path when set.
+
+### NAS / home-server setup (systemd)
+
+A typical setup is a NAS or small server with the media (or an rclone mount of
+cloud storage) attached and `goplexcli daemon` running as a user service:
+
+```ini
+# ~/.config/systemd/user/goplexcli.service
+[Unit]
+Description=GoplexCLI daemon (library server, LAN sync, downloads)
+After=network-online.target rclone-gdrive.service
+Wants=network-online.target
+
+[Service]
+ExecStart=%h/bin/goplexcli daemon
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+```
+
+If the media lives in cloud storage, mount it with rclone first. Use
+`--vfs-cache-mode full` so players can seek:
+
+```ini
+# ~/.config/systemd/user/rclone-gdrive.service
+[Unit]
+Description=rclone mount of gdrive:Media
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/rclone mount gdrive:Media %h/media/gdrive \
+    --vfs-cache-mode full --vfs-cache-max-size 20G \
+    --vfs-read-chunk-size 32M --dir-cache-time 1h --umask 002
+ExecStop=/bin/fusermount -uz %h/media/gdrive
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+mkdir -p ~/media/gdrive
+systemctl --user daemon-reload
+systemctl --user enable --now rclone-gdrive.service goplexcli.service
+loginctl enable-linger "$USER"      # keep user services running without a login session
+
+goplexcli library add ~/media/gdrive/Movies --type movie --remote gdrive:Media/Movies
+goplexcli library add ~/media/gdrive/TV --type show --remote gdrive:Media/TV
+```
+
+The daemon picks up libraries added while it is running on its next scan.
+Set `GOPLEXCLI_CONFIG_DIR` in the unit's `Environment=` to keep the daemon's
+config and cache separate from an interactive user's.
+
+### In the GUI
+
+The desktop app exposes the same setup: **Settings → Local libraries** adds,
+enables/disables and removes folders, sets the TMDB key and library server
+options, and shows the server name and URL. On first launch, **Setup →
+"Index local folders instead"** skips the Plex sign-in and walks through
+adding folders. **Update** and **Reindex** on the Library tab scan local
+libraries along with any Plex servers, and the GUI serves its local items and
+cache while it is open, so it can be the source for other machines without
+running the daemon.
 
 ## Usage
 
@@ -202,6 +448,9 @@ goplexcli cache update          # Incremental update with new media
 goplexcli cache info            # Show cache statistics
 goplexcli cache search "title"  # Search in both cache and Plex server
 ```
+
+`reindex` and `update` cover both Plex servers and any local libraries you
+have added with `goplexcli library add`.
 
 ### Server Management
 
@@ -327,6 +576,8 @@ contains Plex tokens (those live in config, not the cache).
 
 ```bash
 goplexcli login       # Authenticate with Plex (supports multi-server)
+goplexcli library     # Index local media folders without a Plex server (see above)
+goplexcli daemon      # Library server + LAN sync + download server + scheduled scans
 goplexcli config      # Show current configuration
 goplexcli version     # Show version
 ```
@@ -340,6 +591,11 @@ Configuration is stored in a platform-specific directory:
 | macOS | `~/.config/goplexcli/config.json` |
 | Linux | `~/.config/goplexcli/config.json` (or `$XDG_CONFIG_HOME`) |
 | Windows | `%APPDATA%\goplexcli\config.json` |
+
+Setting the `GOPLEXCLI_CONFIG_DIR` environment variable overrides the
+directory on every platform (the cache lives under it too), which lets a
+second instance — a daemon under another account, or tests — keep its own
+config and cache.
 
 ### Config File
 
@@ -368,11 +624,30 @@ Configuration is stored in a platform-specific directory:
   "webdav_dir": "",
   "outplayer_targets": [
     { "name": "iPhone", "url": "http://192.168.0.34", "dir": "", "enabled": true }
-  ]
+  ],
+  "libraries": [
+    { "name": "Movies", "path": "/mnt/media/Movies", "type": "movie", "remote": "gdrive:Media/Movies", "enabled": true },
+    { "name": "TV", "path": "/mnt/media/TV", "type": "show", "enabled": true }
+  ],
+  "tmdb_api_key": "your-tmdb-key",
+  "library_listen": ":47822",
+  "library_url": "http://nas.local:47822",
+  "library_name": "nas",
+  "library_token": "",
+  "library_probe": false,
+  "library_scan_interval": "1h"
 }
 ```
 
 - **servers** — One or more Plex servers, individually enabled/disabled
+- **libraries** — Folders GoplexCLI indexes itself (see [Indexing Your Own Media](#indexing-your-own-media-no-plex)). Each has a `name`, an absolute `path`, a `type` of `movie` or `show`, an optional rclone `remote` mirroring the folder, and an `enabled` flag (managed via `goplexcli library add/list/enable/disable/remove`)
+- **tmdb_api_key** — TMDB API key (v3 key or v4 read token) for metadata and artwork when indexing local libraries. Without it, titles come from file names only.
+- **library_listen** — Address the built-in library server binds (default `:47822`)
+- **library_url** — Base URL other devices use to reach this machine's library server; stamped on every local item, so it must be reachable from wherever the cache is used. Defaults to the first LAN IPv4 address plus the library port.
+- **library_name** — Label for locally indexed items (their server name). Defaults to the hostname.
+- **library_token** — When set, required as `X-Plex-Token` on every library server request. Empty leaves the server open to the LAN.
+- **library_probe** — Run `ffprobe` on each new file during indexing for exact durations and audio languages. Off by default (slow on cloud mounts; TMDB runtimes are used instead).
+- **library_scan_interval** — How often `goplexcli daemon` rescans libraries, as a Go duration (`"1h"`, `"30m"`). Empty means 1h; `"0"` disables periodic rescans.
 - **mpv_path**, **rclone_path**, **fzf_path** — Override tool paths if not in PATH
 - **download_dir** — Default download destination (`~` is expanded). Override per-run with `--dest`.
 - **sync_peer** — Hostname/IP (optionally `host:port`) of another computer to pull the cache from with LAN Cache Sync. Blank falls back to mDNS auto-discovery.
@@ -488,7 +763,9 @@ GoplexCLI translates Plex on-disk file paths to rclone remote paths for download
 | "fzf not found" | Install fzf (see Prerequisites) |
 | "mpv not found" | Install mpv (see Prerequisites) |
 | "rclone not found" | Install rclone and run `rclone config` to set up remotes |
-| "Cache is empty" | Run `goplexcli cache reindex` |
+| "Cache is empty" | Run `goplexcli cache reindex` (or `goplexcli library scan` for local folders) |
+| Locally indexed items won't play or show posters | The library server must be running (`goplexcli daemon`, or the desktop GUI) and `library_url` must be reachable from the playing device. Check with `goplexcli library list`. |
+| Local titles have no summaries or artwork | Set `tmdb_api_key` in config and run `goplexcli library scan --full` |
 | Stream discovery not working | Ensure both devices are on the same network. Check firewall allows mDNS (port 5353 UDP) and HTTP (port 8765 TCP). |
 | Web UI not accessible | Verify the URL shown during stream publishing. Ensure port 8765 is not blocked. |
 | Deep links not opening on iOS | Ensure the target app (Infuse, VLC, etc.) is installed. Try copy/paste of the stream URL. |
@@ -507,6 +784,8 @@ goplexcli/
 │   ├── download/        # Rclone download with progress UI
 │   ├── errors/          # Shared error types
 │   ├── interfaces/      # Shared interfaces
+│   ├── library/         # Local folder indexer: name parsing, scanning, TMDB enrichment
+│   ├── libserver/       # Plex-compatible HTTP server for locally indexed media
 │   ├── logging/         # Logging utilities
 │   ├── outplayer/       # Outplayer Wi-Fi transfer uploads (streamed via rclone)
 │   ├── player/          # MPV player wrapper
@@ -516,6 +795,7 @@ goplexcli/
 │   ├── queue/           # Persistent download queue with file locking
 │   ├── stream/          # Stream server, mDNS, and web UI
 │   ├── termuxfix/       # Termux/Android compatibility
+│   ├── tmdb/            # TMDB API client with on-disk response cache
 │   ├── ui/              # fzf integration, TUI browser, resume prompts
 │   ├── update/          # Self-update from GitHub releases
 │   └── webdav/          # gowebdav server discovery via mDNS

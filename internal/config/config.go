@@ -120,6 +120,63 @@ type Config struct {
 	// token the daemon prints at startup. Individually enabled or disabled;
 	// disabled servers are hidden from the download-target picker but kept.
 	RemoteServers []RemoteServer `json:"remote_servers,omitempty"`
+
+	// Libraries are local media folders indexed by goplexcli itself, without a
+	// Plex server. Each folder is scanned for video files, which are matched
+	// against TMDB for metadata. The folder may be an rclone mount; set Remote
+	// so downloads/transfers can address the same files via rclone.
+	Libraries []LibraryFolder `json:"libraries,omitempty"`
+
+	// LibraryListen is the address the built-in library server (streaming,
+	// posters, playback progress for locally indexed items) binds. Defaults
+	// to ":47822".
+	LibraryListen string `json:"library_listen,omitempty"`
+	// LibraryURL is the base URL other devices use to reach this machine's
+	// library server; it is stamped on every locally indexed item as its
+	// ServerURL, so it must be reachable from wherever the cache is used
+	// (including peers that pull it over LAN sync). Defaults to the first
+	// LAN IPv4 address plus the library port.
+	LibraryURL string `json:"library_url,omitempty"`
+	// LibraryName labels locally indexed items (their ServerName). Defaults to
+	// the hostname.
+	LibraryName string `json:"library_name,omitempty"`
+	// LibraryToken, when set, is required as X-Plex-Token on every library
+	// server request. Empty means the server is open to the LAN (like the
+	// cache sync server).
+	LibraryToken string `json:"library_token,omitempty"`
+	// LibraryProbe runs ffprobe on each new file during indexing to record the
+	// exact duration and audio languages. Off by default because it opens every
+	// file, which is slow on cloud mounts; TMDB runtimes are used instead.
+	LibraryProbe bool `json:"library_probe,omitempty"`
+	// LibraryScanInterval is how often the daemon rescans libraries, as a
+	// Go duration string ("1h"). Empty means the daemon default (1h); "0"
+	// disables periodic rescans.
+	LibraryScanInterval string `json:"library_scan_interval,omitempty"`
+
+	// TMDBAPIKey is a The Movie Database API key (v3 key or v4 read token)
+	// used by the local indexer for metadata and artwork. Without it, items
+	// are indexed with titles parsed from file names only.
+	TMDBAPIKey string `json:"tmdb_api_key,omitempty"`
+}
+
+// LibraryFolder is one locally indexed media folder.
+type LibraryFolder struct {
+	// Name is a human-readable label (e.g. "Movies", "TV 4K"). It also keys
+	// item identity, so renaming a library changes its items' keys.
+	Name string `json:"name"`
+	// Path is the local folder to scan (absolute; may be an rclone mount).
+	Path string `json:"path"`
+	// Type is "movie" or "show" and decides how files are interpreted.
+	Type string `json:"type"`
+	// Remote is the optional rclone path that corresponds to Path
+	// (e.g. "gdrive:Media/Movies"), used to build each item's RclonePath so
+	// downloads and transfers can fetch the file via rclone. When set and
+	// rclone is available, the scan lists the remote directly (much faster
+	// than walking a FUSE mount for cloud storage). Empty means the folder is
+	// only reachable through this machine's library server.
+	Remote string `json:"remote,omitempty"`
+	// Enabled determines whether this folder is included when indexing.
+	Enabled bool `json:"enabled"`
 }
 
 // RemoteServer is a registered `goplexcli serve` download daemon on another
@@ -240,6 +297,12 @@ type PathMapping struct {
 
 // GetConfigDir returns the platform-specific config directory
 func GetConfigDir() (string, error) {
+	// An explicit override wins on every platform: it lets a second instance
+	// (tests, a daemon under another account) keep its own config and cache.
+	if dir := os.Getenv("GOPLEXCLI_CONFIG_DIR"); dir != "" {
+		return dir, nil
+	}
+
 	var baseDir string
 
 	switch runtime.GOOS {
@@ -414,6 +477,55 @@ func (c *Config) TokenForURL(serverURL string) string {
 	return c.PlexToken
 }
 
+// HasPlex reports whether any Plex server is configured for indexing
+// (multi-server or legacy single-URL).
+func (c *Config) HasPlex() bool {
+	return c.PlexToken != "" && (c.PlexURL != "" || len(c.GetEnabledServers()) > 0)
+}
+
+// GetEnabledLibraries returns the local library folders that should be indexed.
+func (c *Config) GetEnabledLibraries() []LibraryFolder {
+	var enabled []LibraryFolder
+	for _, lib := range c.Libraries {
+		if lib.Enabled {
+			enabled = append(enabled, lib)
+		}
+	}
+	return enabled
+}
+
+// FindLibrary returns the library folder with the given name (case-insensitive).
+func (c *Config) FindLibrary(name string) (LibraryFolder, int, bool) {
+	for i, lib := range c.Libraries {
+		if strings.EqualFold(lib.Name, name) {
+			return lib, i, true
+		}
+	}
+	return LibraryFolder{}, -1, false
+}
+
+// Validate checks a library folder definition.
+func (l LibraryFolder) Validate() error {
+	if strings.TrimSpace(l.Name) == "" {
+		return fmt.Errorf("name is required")
+	}
+	if strings.TrimSpace(l.Path) == "" {
+		return fmt.Errorf("path is required")
+	}
+	if !filepath.IsAbs(l.Path) {
+		return fmt.Errorf("path must be absolute: %q", l.Path)
+	}
+	switch l.Type {
+	case "movie", "show":
+	default:
+		return fmt.Errorf("type must be \"movie\" or \"show\", got %q", l.Type)
+	}
+	if l.Remote != "" && !strings.Contains(l.Remote, ":") {
+		return fmt.Errorf("remote must be an rclone path like \"remote:folder\", got %q", l.Remote)
+	}
+	return nil
+}
+
 // GetEnabledServers returns all servers that should be indexed
 func (c *Config) GetEnabledServers() []PlexServer {
 	var enabled []PlexServer
@@ -465,14 +577,27 @@ func (c *Config) GetEnabledWebDAVTargets() []WebDAVTarget {
 // It returns an error describing what's wrong if validation fails.
 // Call this after Load() to ensure the configuration is usable.
 func (c *Config) Validate() error {
+	// Local libraries need no Plex credentials at all; a config is usable
+	// with either source (or both).
+	if len(c.GetEnabledLibraries()) > 0 {
+		for i, lib := range c.Libraries {
+			if err := lib.Validate(); err != nil {
+				return fmt.Errorf("libraries[%d]: %w", i, err)
+			}
+		}
+		if !c.HasPlex() {
+			return nil
+		}
+	}
+
 	// Check for authentication token
 	if c.PlexToken == "" {
-		return fmt.Errorf("plex_token is required - run 'goplexcli login'")
+		return fmt.Errorf("plex_token is required - run 'goplexcli login' or add a local library with 'goplexcli library add'")
 	}
 
 	// Check for at least one server (legacy or new format)
 	if c.PlexURL == "" && len(c.Servers) == 0 {
-		return fmt.Errorf("at least one Plex server is required - run 'goplexcli login'")
+		return fmt.Errorf("at least one Plex server is required - run 'goplexcli login' or add a local library with 'goplexcli library add'")
 	}
 
 	// Validate legacy URL if present
