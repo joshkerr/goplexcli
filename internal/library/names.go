@@ -24,6 +24,13 @@ type EpisodeInfo struct {
 	Episode      int
 	LastEpisode  int    // == Episode unless a multi-episode file (S01E01E02 / S01E01-E02)
 	EpisodeTitle string // trailing " - Title" segment if present, else ""
+	// SeasonKnown is false when the name carried only an episode number
+	// ("E05", "Ep05"); callers should take the season from the folder.
+	SeasonKnown bool
+	// AirDate is set ("2023-06-09") for date-named daily episodes
+	// ("Show.2023.06.09…"); Season is then the year and Episode is 0 until
+	// the episode is resolved by air date.
+	AirDate string
 }
 
 // nameMaxYear is the newest 4-digit number that is accepted as a release year
@@ -58,6 +65,14 @@ var (
 	episodeAnimeRe = regexp.MustCompile(`^\s*(.+?)\s+-\s+(\d{1,3})(?:[vV]\d+)?(?:[^A-Za-z0-9]|$)`)
 	// " - Episode Title" after an episode tag.
 	episodeTitleRe = regexp.MustCompile(`^\s+-\s+(.+)$`)
+	// Daily shows are named by air date: "Jeopardy!.2023.06.09.720p…".
+	episodeDateRe = regexp.MustCompile(`(?:^|[^0-9])((?:19|20)\d\d)[ ._-](0[1-9]|1[0-2])[ ._-](0[1-9]|[12]\d|3[01])(?:[^0-9]|$)`)
+	// Episode-only tags, optionally preceded by a season: "E01", "Ep20",
+	// "Episode 20", "S08.Ep20".
+	episodeOnlyRe = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])(?:s(\d{1,4})[ ._-]?)?(?:episode|ep|e)[ ._-]?(\d{1,4})(?:[^0-9]|$)`)
+	// A lone three-digit token inside a show folder is season+episode
+	// ("mork.and.mindy.318" = S03E18).
+	episodeCombinedRe = regexp.MustCompile(`(?:^|[^0-9A-Za-z])(\d)(\d{2})(?:[^0-9A-Za-z]|$)`)
 
 	seasonFolderRe   = regexp.MustCompile(`(?i)^season[ ._-]*(\d{1,4})(?:[^0-9].*)?$`)
 	seasonShortRe    = regexp.MustCompile(`(?i)^s(\d{1,4})$`)
@@ -217,6 +232,7 @@ func ParseEpisodeFile(name string) (EpisodeInfo, bool) {
 		}
 		ep.Show = cleanShowName(name[:m[0]])
 		ep.EpisodeTitle = trailingEpisodeTitle(name[pos:])
+		ep.SeasonKnown = true
 		return ep, true
 	}
 
@@ -226,11 +242,33 @@ func ParseEpisodeFile(name string) (EpisodeInfo, bool) {
 		ep.LastEpisode = ep.Episode
 		ep.Show = cleanShowName(name[:m[0]])
 		ep.EpisodeTitle = trailingEpisodeTitle(name[m[5]:])
+		ep.SeasonKnown = true
 		return ep, true
 	}
 
 	if m := episodeWordsRe.FindStringSubmatchIndex(name); m != nil {
 		ep.Season, _ = strconv.Atoi(name[m[2]:m[3]])
+		ep.Episode, _ = strconv.Atoi(name[m[4]:m[5]])
+		ep.LastEpisode = ep.Episode
+		ep.Show = cleanShowName(name[:m[0]])
+		ep.EpisodeTitle = trailingEpisodeTitle(name[m[5]:])
+		ep.SeasonKnown = true
+		return ep, true
+	}
+
+	if m := episodeDateRe.FindStringSubmatchIndex(name); m != nil {
+		ep.Season, _ = strconv.Atoi(name[m[2]:m[3]])
+		ep.AirDate = name[m[2]:m[3]] + "-" + name[m[4]:m[5]] + "-" + name[m[6]:m[7]]
+		ep.Show = cleanShowName(name[:m[0]])
+		ep.SeasonKnown = true
+		return ep, true
+	}
+
+	if m := episodeOnlyRe.FindStringSubmatchIndex(name); m != nil {
+		if m[2] >= 0 {
+			ep.Season, _ = strconv.Atoi(name[m[2]:m[3]])
+			ep.SeasonKnown = true
+		}
 		ep.Episode, _ = strconv.Atoi(name[m[4]:m[5]])
 		ep.LastEpisode = ep.Episode
 		ep.Show = cleanShowName(name[:m[0]])
@@ -245,6 +283,15 @@ func ParseEpisodeFile(name string) (EpisodeInfo, bool) {
 		ep.LastEpisode = ep.Episode
 		ep.Show = cleanShowName(stripped[m[2]:m[3]])
 		ep.EpisodeTitle = trailingEpisodeTitle(stripped[m[5]:])
+		return ep, true
+	}
+
+	if m := episodeCombinedRe.FindStringSubmatchIndex(name); m != nil {
+		ep.Season, _ = strconv.Atoi(name[m[2]:m[3]])
+		ep.Episode, _ = strconv.Atoi(name[m[4]:m[5]])
+		ep.LastEpisode = ep.Episode
+		ep.Show = cleanShowName(name[:m[0]])
+		ep.SeasonKnown = true
 		return ep, true
 	}
 

@@ -44,7 +44,21 @@ func fakeTMDB(t *testing.T, hits *int32) *httptest.Server {
 				write(w, map[string]any{"results": []map[string]any{{"id": 2002, "name": "A Discovery of Witches", "first_air_date": "2018-09-14"}}})
 				return
 			}
+			if strings.Contains(strings.ToLower(q.Get("query")), "jeopardy") {
+				write(w, map[string]any{"results": []map[string]any{{"id": 2005, "name": "Jeopardy!", "first_air_date": "1984-09-10"}}})
+				return
+			}
 			write(w, map[string]any{"results": []any{}})
+		case r.URL.Path == "/tv/2005":
+			write(w, map[string]any{"id": 2005, "name": "Jeopardy!", "first_air_date": "1984-09-10", "poster_path": "/pj.jpg"})
+		case r.URL.Path == "/tv/2005/season/39":
+			write(w, map[string]any{"episodes": []map[string]any{
+				{"episode_number": 180, "season_number": 39, "name": "Show #8840", "air_date": "2023-06-09", "still_path": "/j180.jpg"},
+				{"episode_number": 181, "season_number": 39, "name": "Show #8841", "air_date": "2023-06-12"},
+			}})
+		case r.URL.Path == "/tv/2005/season/2023":
+			w.WriteHeader(http.StatusNotFound)
+			write(w, map[string]any{"status_code": 34})
 		case r.URL.Path == "/movie/1001":
 			write(w, map[string]any{
 				"id": 1001, "title": "A '90s Christmas", "original_title": "A '90s Christmas", "overview": "Back to 1999.",
@@ -113,6 +127,9 @@ func fixtureLibraries(t *testing.T) (movies, shows config.LibraryFolder) {
 	touch(t, s, "TV/Adolescence (2025) [imdb-tt31806037]/Season 01/Adolescence.S01E02.NF.1080p.mkv", mod)
 	touch(t, s, "TV/A Discovery of Witches/Season 03/A.Discovery.of.Witches.S03E01.mkv", mod)
 	touch(t, s, "Loose.Show.S02E05.mkv", mod)
+	touch(t, s, "TV/Jeopardy! (1984)/Season 39/Jeopardy!.2023.06.09.720p.HDTV.mkv", mod)
+	touch(t, s, "TV/Jeopardy! (1984)/Season 39/Jeopardy!.2023.07.04.720p.HDTV.mkv", mod)
+	touch(t, s, "TV/Jeopardy! (1984)/Season 40/jeopardy.e03.mkv", mod)
 	return config.LibraryFolder{Name: "Movies", Path: m, Type: "movie", Remote: "gdrive:Media/Movies", Enabled: true},
 		config.LibraryFolder{Name: "TV", Path: s, Type: "show", Enabled: true}
 }
@@ -147,11 +164,34 @@ func TestIndexFixtures(t *testing.T) {
 		t.Fatal(err)
 	}
 	items := res.Items
-	if len(items) != 7 {
+	if len(items) != 10 {
 		for _, it := range items {
 			t.Logf("%s %q %s", it.Type, it.Title, it.FilePath)
 		}
-		t.Fatalf("got %d items, want 7 (3 movies + 4 episodes)", len(items))
+		t.Fatalf("got %d items, want 10 (3 movies + 7 episodes)", len(items))
+	}
+	var dated, undated, eponly *plex.MediaItem
+	for i := range items {
+		if items[i].ParentTitle != "Jeopardy!" {
+			continue
+		}
+		switch {
+		case strings.Contains(items[i].FilePath, "06.09"):
+			dated = &items[i]
+		case strings.Contains(items[i].FilePath, "07.04"):
+			undated = &items[i]
+		case strings.Contains(items[i].FilePath, "e03"):
+			eponly = &items[i]
+		}
+	}
+	if dated == nil || dated.ParentIndex != 39 || dated.Index != 180 || dated.Title != "Show #8840" || dated.OriginallyAired != "2023-06-09" || dated.Thumb != "/local/tmdb/w500/j180.jpg" {
+		t.Errorf("air-date episode not resolved via TMDB: %+v", dated)
+	}
+	if undated == nil || undated.ParentIndex != 39 || undated.Index != 704 || undated.Title != "2023-07-04" || undated.OriginallyAired != "2023-07-04" {
+		t.Errorf("air-date fallback wrong: %+v", undated)
+	}
+	if eponly == nil || eponly.ParentIndex != 40 || eponly.Index != 3 || eponly.Title != "Episode 3" {
+		t.Errorf("episode-only tag should take the folder season: %+v", eponly)
 	}
 	if res.Unmatched != 2 { // Unknown Thing, Loose Show
 		t.Errorf("unmatched = %d, want 2", res.Unmatched)
@@ -230,8 +270,8 @@ func TestIndexFixtures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res2.Reused != 5 { // the two unmatched items get another lookup
-		t.Errorf("reused = %d, want 5", res2.Reused)
+	if res2.Reused != 8 { // the two unmatched items get another lookup
+		t.Errorf("reused = %d, want 8", res2.Reused)
 	}
 	if got := byTitle(res2.Items, "A '90s Christmas"); got == nil || got.ViewOffset != 1234 {
 		t.Errorf("reused item lost progress: %+v", got)

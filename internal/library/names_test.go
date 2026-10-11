@@ -100,6 +100,13 @@ func TestParseEpisodeFile(t *testing.T) {
 	}{
 		{"Adolescence.S01E04.NF.1080p.WEB-DL.x264.EAC3.Atmos.5.1-FLUX.mkv", EpisodeInfo{Show: "Adolescence", Season: 1, Episode: 4, LastEpisode: 4}, true},
 		{"Come.Dine.with.Me.S2023E38.ALL4.1080p.WEB-DL.x264.AAC.2.0-NioN.mkv", EpisodeInfo{Show: "Come Dine with Me", Season: 2023, Episode: 38, LastEpisode: 38}, true},
+		{"Jeopardy!.2023.06.09.720p.HDTV.x264.AC3.5.1-NGP.mkv", EpisodeInfo{Show: "Jeopardy!", Season: 2023, AirDate: "2023-06-09"}, true},
+		{"Love.Island.2020-02-16.1080p.WEBDL.h264-TEPES.mkv", EpisodeInfo{Show: "Love Island", Season: 2020, AirDate: "2020-02-16"}, true},
+		{"S.G.N.T.E01.1080p.HDTV.x264-CHI.mkv", EpisodeInfo{Show: "S G N T", Episode: 1, LastEpisode: 1}, true},
+		{"Family.Guy.S08.Ep20.Something.Something.2010.1080P.BluRay.mkv", EpisodeInfo{Show: "Family Guy", Season: 8, Episode: 20, LastEpisode: 20}, true},
+		{"Show.Name.Episode.7.mkv", EpisodeInfo{Show: "Show Name", Episode: 7, LastEpisode: 7}, true},
+		{"mork.and.mindy.318.dvdrip-dimension.avi", EpisodeInfo{Show: "mork and mindy", Season: 3, Episode: 18, LastEpisode: 18}, true},
+		{"james.mays.toy.stories.104-ifh.avi", EpisodeInfo{Show: "james mays toy stories", Season: 1, Episode: 4, LastEpisode: 4}, true},
 		{"The.Daily.Show.S2024E1234.mkv", EpisodeInfo{Show: "The Daily Show", Season: 2024, Episode: 1234, LastEpisode: 1234}, true},
 		{"Show.S01E01E02.mkv", EpisodeInfo{Show: "Show", Season: 1, Episode: 1, LastEpisode: 2}, true},
 		{"Show.S01E01-E02.mkv", EpisodeInfo{Show: "Show", Season: 1, Episode: 1, LastEpisode: 2}, true},
@@ -140,6 +147,7 @@ func TestParseEpisodeFile(t *testing.T) {
 	}
 	for _, tc := range tests {
 		got, ok := ParseEpisodeFile(tc.in)
+		got.SeasonKnown = false // covered by TestParseEpisodeFileSeasonKnown
 		if ok != tc.ok || got != tc.want {
 			t.Errorf("ParseEpisodeFile(%q) = %+v, %v; want %+v, %v", tc.in, got, ok, tc.want, tc.ok)
 		}
@@ -278,5 +286,24 @@ func TestTitleKey(t *testing.T) {
 	b := ParseReleaseName("A.'90s.Christmas.2024.PCOK.1080p.WEB-DL.EAC3.5.1.x264-Kitsune.mkv")
 	if TitleKey(a.Title) != TitleKey(b.Title) || a.Year != b.Year {
 		t.Errorf("folder/release mismatch: %+v vs %+v", a, b)
+	}
+}
+
+func TestParseEpisodeFileSeasonKnown(t *testing.T) {
+	cases := map[string]bool{
+		"Show.S01E02.mkv":                     true,
+		"Show - 1x02.mkv":                     true,
+		"Jeopardy!.2023.06.09.720p.mkv":       true,
+		"mork.and.mindy.318.avi":              true,
+		"Family.Guy.S08.Ep20.mkv":             true,
+		"S.G.N.T.E01.1080p.HDTV.x264-CHI.mkv": false,
+		"Show.Name.Episode.7.mkv":             false,
+		"[Group] Show - 01 [1080p].mkv":       false,
+	}
+	for in, want := range cases {
+		got, ok := ParseEpisodeFile(in)
+		if !ok || got.SeasonKnown != want {
+			t.Errorf("ParseEpisodeFile(%q).SeasonKnown = %v (ok=%v); want %v", in, got.SeasonKnown, ok, want)
+		}
 	}
 }

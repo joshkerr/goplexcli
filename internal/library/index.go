@@ -493,13 +493,17 @@ func groupEpisodes(files []ScannedFile) []*showGroup {
 			key = "dir:" + showDir
 		}
 
-		if hasTag {
+		switch {
+		case hasTag && info.SeasonKnown:
 			ef.season, ef.episode = info.Season, info.Episode
-		} else if ef.seasonF >= 0 {
+		case hasTag && ef.seasonF >= 0:
+			// "E05" alone: the season comes from the folder.
+			ef.season, ef.episode = ef.seasonF, info.Episode
+		case hasTag:
+			ef.season, ef.episode = 1, info.Episode
+		case ef.seasonF >= 0:
 			ef.season = ef.seasonF
 		}
-		// A season folder is authoritative only when the file name has no
-		// season of its own.
 
 		grp, ok := byKey[key]
 		if !ok {
@@ -595,6 +599,11 @@ func (ix *indexer) showItems(ctx context.Context, lib config.LibraryFolder, grp 
 			for i, ef := range grp.files {
 				if !reused[i] {
 					wanted[ef.season] = true
+					// Date-named episodes may live in a numbered season
+					// folder; look there too for the air date.
+					if ef.info.AirDate != "" && ef.seasonF >= 0 {
+						wanted[ef.seasonF] = true
+					}
 				}
 			}
 			for s := range wanted {
@@ -622,13 +631,21 @@ func (ix *indexer) showItems(ctx context.Context, lib config.LibraryFolder, grp 
 		item.GrandTitle = seasonTitle(ef.season)
 		item.Year = showYear
 		item.Title = ef.info.EpisodeTitle
-		if item.Title == "" {
-			item.Title = fmt.Sprintf("Episode %d", ef.episode)
-		}
 		if show != nil {
 			applyShow(item, show)
-			if ep, ok := seasons[ef.season][ef.episode]; ok {
-				applyEpisode(item, ep)
+		}
+		if ef.info.AirDate != "" {
+			ix.resolveByAirDate(item, ef, seasons)
+		} else if ep, ok := seasons[ef.season][ef.episode]; ok && show != nil {
+			applyEpisode(item, ep)
+		}
+		if item.Title == "" {
+			if ef.episode > 0 {
+				item.Title = fmt.Sprintf("Episode %d", ef.episode)
+			} else {
+				// Nothing recognizable in the name: show the file name so
+				// the episode is at least identifiable.
+				item.Title = CleanTitle(strings.TrimSuffix(path.Base(ef.file.Rel), path.Ext(ef.file.Rel)))
 			}
 		}
 		if ix.opts.Probe {
@@ -637,6 +654,41 @@ func (ix *indexer) showItems(ctx context.Context, lib config.LibraryFolder, grp 
 		ix.carryProgress(item)
 	}
 	return items, nil
+}
+
+// resolveByAirDate numbers a date-named episode from the TMDB season data
+// (the folder's season first, then the year as a season), falling back to a
+// chronological MMDD index when the date isn't listed.
+func (ix *indexer) resolveByAirDate(item *plex.MediaItem, ef episodeFile, seasons map[int]map[int]tmdb.Episode) {
+	candidates := []int{}
+	if ef.seasonF >= 0 {
+		candidates = append(candidates, ef.seasonF)
+	}
+	candidates = append(candidates, ef.season)
+	for _, s := range candidates {
+		for _, ep := range seasons[s] {
+			if ep.AirDate == ef.info.AirDate {
+				item.ParentIndex = int64(s)
+				item.GrandTitle = seasonTitle(s)
+				item.Index = int64(ep.EpisodeNumber)
+				applyEpisode(item, ep)
+				return
+			}
+		}
+	}
+	// Unknown to TMDB: keep the folder's season (or the year) and order by
+	// month and day so the episodes still line up chronologically.
+	if ef.seasonF >= 0 {
+		item.ParentIndex = int64(ef.seasonF)
+		item.GrandTitle = seasonTitle(ef.seasonF)
+	}
+	if d, err := time.Parse("2006-01-02", ef.info.AirDate); err == nil {
+		item.Index = int64(int(d.Month())*100 + d.Day())
+	}
+	item.OriginallyAired = ef.info.AirDate
+	if item.Title == "" {
+		item.Title = ef.info.AirDate
+	}
 }
 
 func seasonTitle(season int) string {
