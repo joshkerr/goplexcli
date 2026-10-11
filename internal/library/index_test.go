@@ -316,7 +316,8 @@ func TestParseLsjson(t *testing.T) {
 	in := `[{"Path":"Movies/A (2001)/a.mkv","Name":"a.mkv","Size":10,"ModTime":"2026-01-02T03:04:05Z","IsDir":false},
 {"Path":"Movies/A (2001)","Name":"A (2001)","Size":-1,"ModTime":"2026-01-02T03:04:05Z","IsDir":true},
 {"Path":"Movies/A (2001)/poster.jpg","Name":"poster.jpg","Size":1,"ModTime":"2026-01-02T03:04:05Z","IsDir":false},
-{"Path":"Samples/b.mkv","Name":"b.mkv","Size":10,"ModTime":"2026-01-02T03:04:05Z","IsDir":false}]`
+{"Path":"Samples/b.mkv","Name":"b.mkv","Size":10,"ModTime":"2026-01-02T03:04:05Z","IsDir":false},
+{"Path":"Movies/A (2001)/a.mkv","Name":"a.mkv","Size":11,"ModTime":"2026-01-02T03:04:05Z","IsDir":false}]`
 	files, err := parseLsjson(strings.NewReader(in), config.LibraryFolder{Path: "/mnt/g"}, ScanOptions{})
 	if err != nil {
 		t.Fatal(err)

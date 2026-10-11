@@ -316,7 +316,8 @@ right result, and the card updates in place.
 - accepts download requests from remote GUIs on port **47821** (like `serve`);
 - rescans the library folders on an interval (default 1h, or
   `library_scan_interval` in config; send `SIGHUP` to rescan right away,
-  e.g. `systemctl --user kill -s HUP goplexcli-daemon`), so new files show up on every device
+  e.g. `systemctl --user kill -s HUP goplexcli-daemon`, or `SIGUSR1` for a
+  full re-enrichment like `library scan --full`), so new files show up on every device
   that syncs from this machine.
 
 ```bash

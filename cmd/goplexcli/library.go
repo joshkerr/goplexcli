@@ -910,7 +910,7 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 		state.replace(fresh)
 		fmt.Println(infoStyle.Render(fmt.Sprintf("[%s] %s: now serving %d item(s), %d local", time.Now().Format("15:04"), reason, len(fresh.Media), state.service.Count())))
 	}
-	scan := func(reason string) {
+	scanMode := func(reason string, full bool) {
 		if !state.scanning.TryLock() {
 			fmt.Println(infoStyle.Render("A scan is already running; request ignored."))
 			return
@@ -926,12 +926,13 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 		}
 		fmt.Println(infoStyle.Render(fmt.Sprintf("\n[%s] %s", time.Now().Format("15:04"), reason)))
 		state.flush(true)
-		if err := updateCache(false); err != nil {
+		if err := updateCache(full); err != nil {
 			fmt.Println(warningStyle.Render("Scan failed: " + err.Error()))
 			return
 		}
 		reload("Scan finished")
 	}
+	scan := func(reason string) { scanMode(reason, false) }
 	if !daemonNoLibrary && (len(libs) > 0 || cfg.HasPlex()) {
 		if daemonScanOnStart {
 			go scan("Scanning libraries…")
@@ -972,11 +973,12 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 		}
 	}()
 
-	fmt.Println(infoStyle.Render("\nPress Ctrl+C to stop. Send SIGHUP to rescan now (systemctl --user kill -s HUP goplexcli-daemon).\n"))
+	fmt.Println(infoStyle.Render("\nPress Ctrl+C to stop. SIGHUP rescans now, SIGUSR1 re-enriches everything (systemctl --user kill -s HUP goplexcli-daemon).\n"))
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
+	full := fullRescanSignal()
 	for {
 		select {
 		case <-hup:
@@ -984,6 +986,11 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 				continue
 			}
 			go scan("Rescan requested (SIGHUP)…")
+		case <-full:
+			if daemonNoLibrary {
+				continue
+			}
+			go scanMode("Full re-enrichment requested (SIGUSR1)…", true)
 		case <-sigChan:
 			fmt.Println(infoStyle.Render("\nStopping daemon..."))
 			cancel()

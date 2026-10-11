@@ -99,6 +99,8 @@ func TestParseEpisodeFile(t *testing.T) {
 		ok   bool
 	}{
 		{"Adolescence.S01E04.NF.1080p.WEB-DL.x264.EAC3.Atmos.5.1-FLUX.mkv", EpisodeInfo{Show: "Adolescence", Season: 1, Episode: 4, LastEpisode: 4}, true},
+		{"Come.Dine.with.Me.S2023E38.ALL4.1080p.WEB-DL.x264.AAC.2.0-NioN.mkv", EpisodeInfo{Show: "Come Dine with Me", Season: 2023, Episode: 38, LastEpisode: 38}, true},
+		{"The.Daily.Show.S2024E1234.mkv", EpisodeInfo{Show: "The Daily Show", Season: 2024, Episode: 1234, LastEpisode: 1234}, true},
 		{"Show.S01E01E02.mkv", EpisodeInfo{Show: "Show", Season: 1, Episode: 1, LastEpisode: 2}, true},
 		{"Show.S01E01-E02.mkv", EpisodeInfo{Show: "Show", Season: 1, Episode: 1, LastEpisode: 2}, true},
 		{"Show.S01E01-02.mkv", EpisodeInfo{Show: "Show", Season: 1, Episode: 1, LastEpisode: 2}, true},
@@ -151,6 +153,8 @@ func TestParseSeasonFolder(t *testing.T) {
 		ok     bool
 	}{
 		{"Season 01", 1, true},
+		{"Season 2023", 2023, true},
+		{"S2024", 2024, true},
 		{"Season 1", 1, true},
 		{"season 10", 10, true},
 		{"SEASON 2", 2, true},

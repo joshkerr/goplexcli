@@ -46,9 +46,9 @@ var (
 	nameTokenSepRe = regexp.MustCompile(`[.\s_]+`)
 
 	// S01E04, s1e2, S01.E04, S01 E04, S01-E04. Group 1 = season, group 2 = episode.
-	episodeSERe = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])s(\d{1,2})[ ._-]?e(\d{1,3})`)
+	episodeSERe = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])s(\d{1,4})[ ._-]?e(\d{1,4})`)
 	// Continuations of a multi-episode tag: "E02", ".E02", "-E02", "-02".
-	episodeSETailRe = regexp.MustCompile(`^(?:[ ._-]?[eE](\d{1,3})|-(\d{1,3}))`)
+	episodeSETailRe = regexp.MustCompile(`^(?:[ ._-]?[eE](\d{1,4})|-(\d{1,4}))`)
 	// 1x02 with boundaries on both sides. Group 1 = season, group 2 = episode.
 	episodeXRe = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])(\d{1,2})x(\d{1,3})(?:[^A-Za-z0-9]|$)`)
 	// Season 1 Episode 2 / Season.01.Episode.02.
@@ -59,8 +59,8 @@ var (
 	// " - Episode Title" after an episode tag.
 	episodeTitleRe = regexp.MustCompile(`^\s+-\s+(.+)$`)
 
-	seasonFolderRe   = regexp.MustCompile(`(?i)^season[ ._-]*(\d{1,3})(?:[^0-9].*)?$`)
-	seasonShortRe    = regexp.MustCompile(`(?i)^s(\d{1,3})$`)
+	seasonFolderRe   = regexp.MustCompile(`(?i)^season[ ._-]*(\d{1,4})(?:[^0-9].*)?$`)
+	seasonShortRe    = regexp.MustCompile(`(?i)^s(\d{1,4})$`)
 	seasonSpecialsRe = regexp.MustCompile(`(?i)^specials?$`)
 	trailingParenYr  = regexp.MustCompile(`^\(\d{4}\)$`)
 )

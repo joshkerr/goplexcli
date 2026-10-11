@@ -169,6 +169,9 @@ func parseLsjson(r io.Reader, lib config.LibraryFolder, opts ScanOptions) ([]Sca
 	}
 	root := filepath.Clean(lib.Path)
 	var files []ScannedFile
+	// Cloud drives can hold two objects with the same name in one folder;
+	// only the first listing of a path is kept so keys stay unique.
+	seen := map[string]bool{}
 	for dec.More() {
 		var e rcloneEntry
 		if err := dec.Decode(&e); err != nil {
@@ -177,6 +180,10 @@ func parseLsjson(r io.Reader, lib config.LibraryFolder, opts ScanOptions) ([]Sca
 		if e.IsDir || !IsVideoFile(e.Name) || pathIgnored(e.Path) {
 			continue
 		}
+		if seen[e.Path] {
+			continue
+		}
+		seen[e.Path] = true
 		mod, _ := time.Parse(time.RFC3339Nano, e.ModTime)
 		files = append(files, ScannedFile{
 			Path:    filepath.Join(root, filepath.FromSlash(e.Path)),
