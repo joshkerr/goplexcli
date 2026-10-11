@@ -290,6 +290,17 @@ function ItemDetail(props: Props) {
               <TagLinks field="director" value={media.director} onSearch={onSearch} />
             </div>
           )}
+          {media.serverName && (
+            <div className="mt-1 text-xs text-white/40">
+              <span className="font-semibold text-white/55">Source: </span>
+              {media.serverName}
+              <span className="text-white/25">
+                {media.key.startsWith("/local/metadata/")
+                  ? " · local library"
+                  : " · Plex"}
+              </span>
+            </div>
+          )}
 
           <div className="mt-auto flex flex-wrap gap-3 pt-6">
             {canResume && (
