@@ -52,6 +52,8 @@ export function Settings({
     libraryUrl: "",
     libraryName: "",
     libraryProbe: false,
+    artworkEmbed: true,
+    artworkOrientation: "horizontal",
   });
   const [saving, setSaving] = useState(false);
   const [showTmdbKey, setShowTmdbKey] = useState(false);
@@ -162,7 +164,12 @@ export function Settings({
     label: string,
     key: Exclude<
       keyof AppConfig,
-      "autoSendRclonecp" | "slowDeviceMode" | "sortDownloads" | "libraryProbe"
+      | "autoSendRclonecp"
+      | "slowDeviceMode"
+      | "sortDownloads"
+      | "libraryProbe"
+      | "artworkEmbed"
+      | "artworkOrientation"
     >,
     placeholder: string,
     hint?: string
@@ -392,6 +399,47 @@ export function Settings({
           Probe files with ffprobe for exact durations and audio languages
           (slow on cloud mounts)
         </label>
+        <label className="flex cursor-pointer items-center gap-2.5 text-sm text-white/70">
+          <input
+            type="checkbox"
+            checked={cfg.artworkEmbed}
+            onChange={(e) =>
+              setCfg({ ...cfg, artworkEmbed: e.target.checked })
+            }
+            className="h-4 w-4 accent-accent"
+          />
+          Embed cover art into downloads (Apple TV art first, then TMDB, then
+          Netflix; needs ffmpeg)
+        </label>
+        {cfg.artworkEmbed && (
+          <div className="flex items-center gap-3 pl-6 text-sm text-white/70">
+            <span className="text-xs font-medium text-white/50">Art style</span>
+            <label className="flex cursor-pointer items-center gap-1.5">
+              <input
+                type="radio"
+                name="artworkOrientation"
+                checked={cfg.artworkOrientation !== "vertical"}
+                onChange={() =>
+                  setCfg({ ...cfg, artworkOrientation: "horizontal" })
+                }
+                className="accent-accent"
+              />
+              Widescreen with title
+            </label>
+            <label className="flex cursor-pointer items-center gap-1.5">
+              <input
+                type="radio"
+                name="artworkOrientation"
+                checked={cfg.artworkOrientation === "vertical"}
+                onChange={() =>
+                  setCfg({ ...cfg, artworkOrientation: "vertical" })
+                }
+                className="accent-accent"
+              />
+              Poster
+            </label>
+          </div>
+        )}
         <div className="flex items-center gap-3 pt-1 text-xs">
           <Availability label="mpv" ok={status.mpvAvailable} />
           <Availability label="rclone" ok={status.rcloneAvailable} />

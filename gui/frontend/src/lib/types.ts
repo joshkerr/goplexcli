@@ -44,6 +44,8 @@ export interface AppConfig {
   libraryUrl: string;
   libraryName: string; // label for locally indexed items (blank = hostname)
   libraryProbe: boolean; // run ffprobe for exact durations (slow on cloud mounts)
+  artworkEmbed: boolean; // embed cover art into completed downloads
+  artworkOrientation: "horizontal" | "vertical";
 }
 
 // A folder of media that goplexcli indexes itself (no Plex) and serves from

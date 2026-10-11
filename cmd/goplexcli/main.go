@@ -24,8 +24,10 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/joshkerr/goplexcli/internal/artwork"
 	"github.com/joshkerr/goplexcli/internal/cache"
 	"github.com/joshkerr/goplexcli/internal/config"
+	"github.com/joshkerr/goplexcli/internal/dlengine"
 	"github.com/joshkerr/goplexcli/internal/dlserver"
 	"github.com/joshkerr/goplexcli/internal/download"
 	apperrors "github.com/joshkerr/goplexcli/internal/errors"
@@ -484,7 +486,7 @@ it does not need Plex credentials or a media cache.`,
 	serveCmd.Flags().StringVar(&serveListen, "listen", "", "Address to listen on (default \""+dlserver.DefaultListen+"\", or serve_listen from config)")
 	serveCmd.Flags().StringVar(&serveName, "name", "", "Name shown in remote GUIs (default: hostname, or serve_name from config)")
 
-	rootCmd.AddCommand(loginCmd, browseCmd, cacheCmd, configCmd, streamCmd, serverCmd, serveCmd, webdavCmd, outplayerCmd, sortCmd, versionCmd, updateCmd, syncCmd, previewCmd, newLibraryCmd(), newDaemonCmd())
+	rootCmd.AddCommand(loginCmd, browseCmd, cacheCmd, configCmd, streamCmd, serverCmd, serveCmd, webdavCmd, outplayerCmd, sortCmd, versionCmd, updateCmd, syncCmd, previewCmd, newLibraryCmd(), newDaemonCmd(), newArtworkCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(errorStyle.Render("Error: " + err.Error()))
@@ -1807,6 +1809,33 @@ func handleDownloadMultiple(cfg *config.Config, mediaItems []*plex.MediaItem) er
 	}
 
 	fmt.Println(successStyle.Render("✓ All downloads complete"))
+
+	// Embed cover art into what just landed (Apple TV art first, then TMDB,
+	// then Netflix). The download package writes each file as
+	// destDir/<basename of the rclone path>.
+	if proc := artwork.NewProcessor(cfg, nil); proc != nil {
+		if missing := proc.Options().Tools.Missing(); len(missing) > 0 {
+			fmt.Println(warningStyle.Render("Skipping artwork: needs " + strings.Join(missing, ", ")))
+			return nil
+		}
+		downloaded := make(map[string]bool, len(rclonePaths))
+		for _, p := range rclonePaths {
+			downloaded[p] = true
+		}
+		fmt.Println(infoStyle.Render("Adding cover art…"))
+		for _, media := range mediaItems {
+			if !downloaded[media.RclonePath] {
+				continue
+			}
+			file := filepath.Join(destDir, filepath.Base(media.RclonePath))
+			out := proc.Process(ctx, file, artwork.ItemFor(media))
+			if out.Err != nil {
+				fmt.Println(warningStyle.Render("  " + out.String()))
+			} else {
+				fmt.Println(infoStyle.Render("  " + out.String()))
+			}
+		}
+	}
 	return nil
 }
 
@@ -4078,12 +4107,28 @@ func startDownloadServer(cfg *config.Config) (func(), error) {
 	hostname, _ := os.Hostname()
 	name := firstNonEmpty(serveName, cfg.ServeName, hostname, "goplexcli")
 
-	mgr := dlserver.NewManager(dlserver.Options{
+	mgrOpts := dlserver.Options{
 		RcloneBin:   rcloneBin,
 		DownloadDir: destDir,
 		Sort:        cfg.SortDownloads,
 		SlowDevice:  cfg.SlowDeviceMode,
-	})
+	}
+	if proc := artwork.NewProcessor(cfg, func(format string, args ...any) {
+		fmt.Println(warningStyle.Render(fmt.Sprintf(format, args...)))
+	}); proc != nil {
+		if missing := proc.Options().Tools.Missing(); len(missing) > 0 {
+			fmt.Println(warningStyle.Render("Artwork embedding needs " + strings.Join(missing, ", ") + " (set artwork to \"off\" to silence this)."))
+		}
+		mgrOpts.PostProcess = func(rec dlengine.Progress) {
+			out := proc.ProcessDownload(context.Background(), rec)
+			if out.Err != nil {
+				fmt.Println(warningStyle.Render(out.String()))
+			} else {
+				fmt.Println(infoStyle.Render(out.String()))
+			}
+		}
+	}
+	mgr := dlserver.NewManager(mgrOpts)
 	srv := dlserver.New(name, version, cfg.ServeToken, mgr)
 
 	listener, err := net.Listen("tcp", listen)

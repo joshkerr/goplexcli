@@ -157,6 +157,27 @@ type Config struct {
 	// used by the local indexer for metadata and artwork. Without it, items
 	// are indexed with titles parsed from file names only.
 	TMDBAPIKey string `json:"tmdb_api_key,omitempty"`
+
+	// Artwork controls cover-art embedding for downloads: "" or "auto"
+	// embeds art (Apple TV first, then TMDB, then Netflix) into every
+	// completed download; "off" disables it.
+	Artwork string `json:"artwork,omitempty"`
+	// ArtworkOrientation picks "horizontal" (16:9 art with the title
+	// treatment, the default) or "vertical" (2:3 poster).
+	ArtworkOrientation string `json:"artwork_orientation,omitempty"`
+	// AppleStorefront is the Apple TV catalog storefront id (default US,
+	// 143441).
+	AppleStorefront string `json:"apple_storefront,omitempty"`
+	// FFmpegPath, FFprobePath and MkvPropEditPath override tool locations
+	// for artwork embedding; empty searches PATH.
+	FFmpegPath      string `json:"ffmpeg_path,omitempty"`
+	FFprobePath     string `json:"ffprobe_path,omitempty"`
+	MkvPropEditPath string `json:"mkvpropedit_path,omitempty"`
+}
+
+// ArtworkEnabled reports whether downloads get cover art embedded.
+func (c *Config) ArtworkEnabled() bool {
+	return !strings.EqualFold(strings.TrimSpace(c.Artwork), "off")
 }
 
 // LibraryFolder is one locally indexed media folder.

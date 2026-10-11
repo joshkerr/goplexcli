@@ -302,6 +302,33 @@ In the GUI, open a movie or show and click **Fix match…** next to its
 source line: search by title (Movie / TV Show, optional year), pick the
 right result, and the card updates in place.
 
+### Cover art for downloads
+
+Every download goplexcli makes — in the GUI, with the CLI, or on a remote
+`goplexcli daemon` — gets cover art embedded once the transfer finishes.
+Art is looked up on Apple TV's catalog first (the 16:9 art with the title
+treatment), then TMDB (backdrop, or poster), then Netflix (with its title
+logo composited on). MKV files are updated in place with `mkvpropedit`;
+MP4/M4V files are remuxed with ffmpeg. Episodes get their show's art, and a
+`poster.jpg` is dropped into a `TV Shows/<show>/` folder the first time.
+Files that already carry art are left alone.
+
+Needs `ffmpeg` and `ffprobe` (and `mkvpropedit` for in-place MKV updates).
+Apple art needs no key; TMDB and Netflix need `tmdb_api_key`.
+
+```bash
+goplexcli artwork ~/Downloads/Media            # add art to files already on disk (walks folders)
+goplexcli artwork "Some.Movie.2019.mkv" --title "Some Movie" --year 2019
+goplexcli artwork "TV Shows/Severance" --tv --force   # replace existing art
+goplexcli artwork ~/Downloads/Media --dry-run  # show the lookups only
+```
+
+Config: `artwork` (`""`/`"auto"` on, `"off"` to disable), `artwork_orientation`
+(`horizontal` default, or `vertical` for 2:3 posters), `apple_storefront`
+(default `143441`, US), and `ffmpeg_path`/`ffprobe_path`/`mkvpropedit_path`
+overrides. In the GUI: Settings → Preferences → "Embed cover art into
+downloads".
+
 ### Running the daemon
 
 `goplexcli daemon` turns a machine into an always-on server. In one process it:

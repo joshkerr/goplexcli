@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/joshkerr/goplexcli/internal/artwork"
 	"github.com/joshkerr/goplexcli/internal/cache"
 	"github.com/joshkerr/goplexcli/internal/config"
 	"github.com/joshkerr/goplexcli/internal/download"
@@ -97,6 +98,11 @@ type App struct {
 	// saveMu/saveTimer coalesce cache writes triggered by playback reports.
 	saveMu    sync.Mutex
 	saveTimer *time.Timer
+
+	// art embeds cover art into completed downloads; built lazily from
+	// config and dropped when settings change.
+	artMu sync.Mutex
+	art   *artwork.Processor
 }
 
 // NewApp creates a new App. Config is loaded lazily in startup.
@@ -268,6 +274,9 @@ type ConfigDTO struct {
 	LibraryURL   string `json:"libraryUrl"`
 	LibraryName  string `json:"libraryName"`
 	LibraryProbe bool   `json:"libraryProbe"`
+	// Artwork embedding for downloads.
+	ArtworkEmbed       bool   `json:"artworkEmbed"`
+	ArtworkOrientation string `json:"artworkOrientation"` // "horizontal" | "vertical"
 }
 
 // ---- Bound methods: status & config ----
@@ -397,6 +406,13 @@ func (a *App) GetConfig() ConfigDTO {
 		LibraryURL:       cfg.LibraryURL,
 		LibraryName:      cfg.LibraryName,
 		LibraryProbe:     cfg.LibraryProbe,
+		ArtworkEmbed:     cfg.ArtworkEnabled(),
+		ArtworkOrientation: func() string {
+			if cfg.ArtworkOrientation == "vertical" {
+				return "vertical"
+			}
+			return "horizontal"
+		}(),
 	}
 }
 
@@ -415,9 +431,20 @@ func (a *App) SaveConfig(dto ConfigDTO) error {
 	cfg.LibraryURL = strings.TrimSpace(dto.LibraryURL)
 	cfg.LibraryName = strings.TrimSpace(dto.LibraryName)
 	cfg.LibraryProbe = dto.LibraryProbe
+	if dto.ArtworkEmbed {
+		cfg.Artwork = ""
+	} else {
+		cfg.Artwork = "off"
+	}
+	if dto.ArtworkOrientation == "vertical" {
+		cfg.ArtworkOrientation = "vertical"
+	} else {
+		cfg.ArtworkOrientation = ""
+	}
 	if err := cfg.Save(); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
 	a.reloadConfig()
+	a.invalidateArtworkProcessor()
 	return nil
 }

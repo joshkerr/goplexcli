@@ -299,6 +299,7 @@ func (a *App) runRclone(bin string, j downloadJob) error {
 		ID: j.id, Seq: j.seq, Name: j.name, Status: "completed",
 		Percent: 100, Bytes: last.Total, Total: last.Total,
 	})
+	a.embedArtwork(j)
 	a.maybeAutoSendToRclonecp(j.id)
 	return nil
 }

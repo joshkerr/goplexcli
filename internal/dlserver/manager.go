@@ -62,6 +62,10 @@ type Options struct {
 	DownloadDir string // absolute destination root
 	Sort        bool   // file into Movies/ and TV Shows/<show>/ subfolders
 	SlowDevice  bool   // large sequential write buffers for SD/USB targets
+	// PostProcess, if set, runs after each completed transfer with its
+	// final record (Dest, Title, Year, MediaType filled in). It runs on its
+	// own goroutine so the next transfer isn't held up.
+	PostProcess func(dlengine.Progress)
 }
 
 // job is a queued transfer.
@@ -221,6 +225,12 @@ func (m *Manager) run(j job) {
 		ID: j.id, Seq: j.seq, Name: j.name, Status: "completed",
 		Percent: 100, Bytes: last.Total, Total: last.Total,
 	})
+	if m.opts.PostProcess != nil {
+		m.mu.Lock()
+		rec := *m.jobs[j.id]
+		m.mu.Unlock()
+		go m.opts.PostProcess(rec)
+	}
 }
 
 // record stores the latest state for the REST API, carrying forward the
