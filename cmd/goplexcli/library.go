@@ -33,6 +33,10 @@ var (
 	daemonNoSync      bool
 	daemonNoLibrary   bool
 	daemonScanOnStart bool
+	libraryMatchTMDB  int
+	libraryMatchTV    bool
+	libraryMatchYear  int
+	libraryMatchAuto  bool
 )
 
 // newLibraryCmd builds the `library` command group: manage the local folders
@@ -104,8 +108,250 @@ This is also what 'cache update' and 'cache reindex' do for local libraries.`,
 	}
 	scanCmd.Flags().BoolVar(&libraryScanFull, "full", false, "Re-enrich every title from TMDB instead of only new or changed files")
 
-	libraryCmd.AddCommand(addCmd, listCmd, removeCmd, enableCmd, disableCmd, scanCmd)
+	searchCmd := &cobra.Command{
+		Use:   "search <query>",
+		Short: "Search TMDB for the right title before fixing a match",
+		Long: `Search TMDB for a movie (default) or TV show and print candidate ids
+to use with 'library match'. Uses this machine's tmdb_api_key, or asks the
+library server that holds your local items when no key is configured here.`,
+		Args: cobra.MinimumNArgs(1),
+		RunE: runLibrarySearch,
+	}
+	searchCmd.Flags().BoolVar(&libraryMatchTV, "tv", false, "Search TV shows instead of movies")
+	searchCmd.Flags().IntVar(&libraryMatchYear, "year", 0, "Restrict to a release / first-air year")
+
+	matchCmd := &cobra.Command{
+		Use:   "match <title or key> --tmdb <id>",
+		Short: "Pin a movie or show to a specific TMDB title (fix a wrong match)",
+		Long: `Fix a wrong match: pin a locally indexed movie, or a whole show, to the
+TMDB id you choose (find it with 'library search'). The items are rebuilt
+right away on the library server that owns them, and later scans keep the
+choice. Use --auto to drop the pin and go back to automatic matching.
+
+  goplexcli library search "Accused" --tv
+  goplexcli library match "Accused" --tv --tmdb 193744
+  goplexcli library match "/local/metadata/1a2b3c…" --tmdb 603
+  goplexcli library match "Accused" --tv --auto`,
+		Args: cobra.MinimumNArgs(1),
+		RunE: runLibraryMatch,
+	}
+	matchCmd.Flags().IntVar(&libraryMatchTMDB, "tmdb", 0, "TMDB id to pin the title to")
+	matchCmd.Flags().BoolVar(&libraryMatchTV, "tv", false, "The title is a TV show (match by show name)")
+	matchCmd.Flags().BoolVar(&libraryMatchAuto, "auto", false, "Remove the manual match and re-run automatic matching")
+
+	matchesCmd := &cobra.Command{
+		Use:   "matches",
+		Short: "List manual match fixes on this machine",
+		RunE:  runLibraryMatches,
+	}
+
+	libraryCmd.AddCommand(addCmd, listCmd, removeCmd, enableCmd, disableCmd, scanCmd, searchCmd, matchCmd, matchesCmd)
 	return libraryCmd
+}
+
+func runLibrarySearch(cmd *cobra.Command, args []string) error {
+	query := strings.Join(args, " ")
+	kind := "movie"
+	if libraryMatchTV {
+		kind = "tv"
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	ctx := context.Background()
+	var results []libserver.Candidate
+	if strings.TrimSpace(cfg.TMDBAPIKey) != "" {
+		cacheDir, err := config.GetCacheDir()
+		if err != nil {
+			return err
+		}
+		client, err := library.NewTMDBClient(cfg, cacheDir)
+		if err != nil {
+			return err
+		}
+		results, err = library.SearchTitles(ctx, client, kind, query, libraryMatchYear)
+		if err != nil {
+			return err
+		}
+	} else {
+		serverURL, token, ok := anyLibraryServer(cfg)
+		if !ok {
+			return fmt.Errorf("no tmdb_api_key configured and no local library items in the cache to ask a library server")
+		}
+		results, err = libserver.SearchRemote(ctx, serverURL, token, kind, query, libraryMatchYear)
+		if err != nil {
+			return err
+		}
+	}
+	if len(results) == 0 {
+		fmt.Println(warningStyle.Render("No results."))
+		return nil
+	}
+	fmt.Println(titleStyle.Render(fmt.Sprintf("TMDB %s results for %q", kind, query)))
+	for _, c := range results {
+		year := ""
+		if c.Year > 0 {
+			year = fmt.Sprintf(" (%d)", c.Year)
+		}
+		fmt.Printf("%s  %s%s\n", successStyle.Render(fmt.Sprintf("%8d", c.ID)), c.Title, year)
+		if ov := strings.TrimSpace(c.Overview); ov != "" {
+			if len(ov) > 140 {
+				ov = ov[:137] + "…"
+			}
+			fmt.Println(infoStyle.Render("          " + ov))
+		}
+	}
+	fmt.Println(infoStyle.Render("\nApply one with:  goplexcli library match \"<title>\" --tmdb <id>" + map[bool]string{true: " --tv", false: ""}[libraryMatchTV]))
+	return nil
+}
+
+func runLibraryMatch(cmd *cobra.Command, args []string) error {
+	target := strings.Join(args, " ")
+	if !libraryMatchAuto && libraryMatchTMDB <= 0 {
+		return fmt.Errorf("pass --tmdb <id> (see 'goplexcli library search') or --auto")
+	}
+	tmdbID := libraryMatchTMDB
+	if libraryMatchAuto {
+		tmdbID = 0
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	c, err := cache.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load cache: %w", err)
+	}
+	item, err := findLocalItem(c.Media, target, libraryMatchTV)
+	if err != nil {
+		return err
+	}
+	// MergeByKey below rewrites the slice in place, so remember the old
+	// names before the item pointer starts showing the rebuilt entry.
+	oldTitle, oldShow := item.Title, item.ParentTitle
+	ctx := context.Background()
+	// The library server that owns the item (usually a daemon, possibly on
+	// this very machine) rebuilds it so its served cache stays in step. If
+	// it's our own library and nothing is serving it, rebuild in place.
+	rebuilt, err := libserver.MatchRemote(ctx, item.ServerURL, cfg.TokenForURL(item.ServerURL), item.Key, tmdbID)
+	if err != nil {
+		if item.ServerName != library.ServerName(cfg) || len(cfg.GetEnabledLibraries()) == 0 {
+			return fmt.Errorf("library server %s: %w", item.ServerURL, err)
+		}
+		fmt.Println(infoStyle.Render("No library server reachable; rebuilding locally."))
+		cacheDir, err := config.GetCacheDir()
+		if err != nil {
+			return err
+		}
+		rebuilt, err = library.Rematch(ctx, cfg, cacheDir, c.Media, item.Key, tmdbID, func(format string, args ...any) {
+			fmt.Println(warningStyle.Render(fmt.Sprintf(format, args...)))
+		})
+		if err != nil {
+			return err
+		}
+	}
+	c.Media = library.MergeByKey(c.Media, rebuilt)
+	if err := c.Save(); err != nil {
+		return fmt.Errorf("failed to save cache: %w", err)
+	}
+	if len(rebuilt) == 0 {
+		fmt.Println(warningStyle.Render("Nothing was rebuilt."))
+		return nil
+	}
+	first := rebuilt[0]
+	if first.Type == "episode" {
+		if first.ParentTitle != oldShow {
+			// Shows are favorited by name; follow the rename.
+			_, _ = favorites.NewStore().Remap(map[string]string{"show:" + oldShow: "show:" + first.ParentTitle})
+		}
+		fmt.Println(successStyle.Render(fmt.Sprintf("✓ %q now matches %q (%d episodes rebuilt)", oldShow, first.ParentTitle, len(rebuilt))))
+	} else {
+		fmt.Println(successStyle.Render(fmt.Sprintf("✓ %q now matches %q (%d)", oldTitle, first.Title, first.Year)))
+	}
+	return nil
+}
+
+func runLibraryMatches(cmd *cobra.Command, args []string) error {
+	cacheDir, err := config.GetCacheDir()
+	if err != nil {
+		return err
+	}
+	ov, err := library.LoadOverrides(cacheDir)
+	if err != nil {
+		return err
+	}
+	list := ov.List()
+	fmt.Println(titleStyle.Render("Manual Matches"))
+	if len(list) == 0 {
+		fmt.Println(infoStyle.Render("None. Fix one with 'goplexcli library match'."))
+		return nil
+	}
+	for _, m := range list {
+		fmt.Printf("%s %s → TMDB %d   %s\n", successStyle.Render(m.Kind), m.Title, m.TMDB, infoStyle.Render(m.Key))
+	}
+	return nil
+}
+
+// findLocalItem resolves a title or key to a locally indexed item: an exact
+// key, else a case-insensitive title match (show name when tv is set).
+func findLocalItem(items []plex.MediaItem, target string, tv bool) (*plex.MediaItem, error) {
+	if libserver.IsLocalKey(target) {
+		for i := range items {
+			if items[i].Key == target {
+				return &items[i], nil
+			}
+		}
+		return nil, fmt.Errorf("no item with key %s in the cache", target)
+	}
+	want := strings.ToLower(strings.TrimSpace(target))
+	var matches []*plex.MediaItem
+	seen := map[string]bool{}
+	for i := range items {
+		it := &items[i]
+		if !libserver.IsLocalKey(it.Key) {
+			continue
+		}
+		if tv {
+			if it.Type == "episode" && strings.ToLower(it.ParentTitle) == want && !seen[it.ServerName+"|"+it.ParentTitle] {
+				seen[it.ServerName+"|"+it.ParentTitle] = true
+				matches = append(matches, it)
+			}
+		} else if it.Type == "movie" && strings.ToLower(it.Title) == want {
+			matches = append(matches, it)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		kind := "movie"
+		if tv {
+			kind = "show"
+		}
+		return nil, fmt.Errorf("no locally indexed %s titled %q (titles are matched exactly on the current name; pass the item key instead — 'goplexcli library matches' lists keys of pinned titles)", kind, target)
+	case 1:
+		return matches[0], nil
+	}
+	fmt.Println(warningStyle.Render(fmt.Sprintf("%d items share that title; pass a key to pick one:", len(matches))))
+	for _, m := range matches {
+		fmt.Printf("  %s  %s (%d)  %s\n", m.Key, m.Title, m.Year, infoStyle.Render(m.FilePath))
+	}
+	return nil, fmt.Errorf("ambiguous title")
+}
+
+// anyLibraryServer returns the server URL of the first locally indexed item
+// in the cache, so machines without a TMDB key can search through it.
+func anyLibraryServer(cfg *config.Config) (string, string, bool) {
+	c, err := cache.Load()
+	if err != nil {
+		return "", "", false
+	}
+	for i := range c.Media {
+		if libserver.IsLocalKey(c.Media[i].Key) && c.Media[i].ServerURL != "" {
+			u := c.Media[i].ServerURL
+			return u, cfg.TokenForURL(u), true
+		}
+	}
+	return "", "", false
 }
 
 // newDaemonCmd builds the `daemon` command: one long-running process that
@@ -498,6 +744,51 @@ func (d *daemonState) replace(c *cache.Cache) {
 	}
 }
 
+// rematch pins one movie or show to a TMDB id (0 = automatic), rebuilds its
+// items, and installs them in the served cache.
+func (d *daemonState) rematch(ctx context.Context, cacheDir, key string, tmdbID int) ([]plex.MediaItem, error) {
+	if !d.scanning.TryLock() {
+		return nil, fmt.Errorf("a library scan is running; try again when it finishes")
+	}
+	defer d.scanning.Unlock()
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.cache == nil {
+		return nil, fmt.Errorf("no cache loaded")
+	}
+	rebuilt, err := library.Rematch(ctx, cfg, cacheDir, d.cache.Media, key, tmdbID, func(format string, args ...any) {
+		fmt.Println(warningStyle.Render(fmt.Sprintf(format, args...)))
+	})
+	if err != nil {
+		return nil, err
+	}
+	d.cache.Media = library.MergeByKey(d.cache.Media, rebuilt)
+	if err := d.cache.Save(); err != nil {
+		return nil, fmt.Errorf("save cache: %w", err)
+	}
+	d.dirty = false
+	d.noteDisk()
+	if d.service != nil {
+		d.service.SetItems(d.cache.Media, d.server)
+	}
+	what := "automatic match"
+	if tmdbID > 0 {
+		what = fmt.Sprintf("TMDB %d", tmdbID)
+	}
+	if len(rebuilt) > 0 {
+		title := rebuilt[0].Title
+		if rebuilt[0].Type == "episode" {
+			title = rebuilt[0].ParentTitle
+		}
+		fmt.Println(successStyle.Render(fmt.Sprintf("[%s] Rematched %q to %s (%d item(s) rebuilt)", time.Now().Format("15:04"), title, what, len(rebuilt))))
+	}
+	return rebuilt, nil
+}
+
 func (d *daemonState) snapshot() []plex.MediaItem {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -542,6 +833,20 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 			Version:       version,
 			RcloneBin:     cfg.RclonePath,
 			Timeline:      state.timeline,
+			Search: func(ctx context.Context, kind, query string, year int) ([]libserver.Candidate, error) {
+				cfg, err := config.Load()
+				if err != nil {
+					return nil, err
+				}
+				client, err := library.NewTMDBClient(cfg, cacheDir)
+				if err != nil {
+					return nil, err
+				}
+				return library.SearchTitles(ctx, client, kind, query, year)
+			},
+			Match: func(ctx context.Context, key string, tmdbID int) ([]plex.MediaItem, error) {
+				return state.rematch(ctx, cacheDir, key, tmdbID)
+			},
 		})
 		if err := svc.Start(); err != nil {
 			return err

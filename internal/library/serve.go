@@ -2,6 +2,7 @@ package library
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -31,6 +32,10 @@ type ServiceOptions struct {
 	// Timeline receives playback progress reports for local items (by cache
 	// key). It is called on the request goroutine, so it should be quick.
 	Timeline func(key, state string, timeMs, durationMs int)
+	// Search and Match back the manual match-fix endpoints; leave nil when
+	// this server can't rebuild items (the endpoints then answer 503).
+	Search func(ctx context.Context, kind, query string, year int) ([]libserver.Candidate, error)
+	Match  func(ctx context.Context, key string, tmdbID int) ([]plex.MediaItem, error)
 }
 
 // Service is the running library server. It resolves item ids to files from
@@ -111,6 +116,22 @@ func (s *Service) Timeline(id, state string, timeMs, durationMs int) {
 	if s.opts.Timeline != nil {
 		s.opts.Timeline(libserver.ItemKey(id), state, timeMs, durationMs)
 	}
+}
+
+// SearchTitles implements libserver.Matcher.
+func (s *Service) SearchTitles(ctx context.Context, kind, query string, year int) ([]libserver.Candidate, error) {
+	if s.opts.Search == nil {
+		return nil, errors.New("match fixing is not available on this server")
+	}
+	return s.opts.Search(ctx, kind, query, year)
+}
+
+// ApplyMatch implements libserver.Matcher.
+func (s *Service) ApplyMatch(ctx context.Context, key string, tmdbID int) ([]plex.MediaItem, error) {
+	if s.opts.Match == nil {
+		return nil, errors.New("match fixing is not available on this server")
+	}
+	return s.opts.Match(ctx, key, tmdbID)
 }
 
 // Start binds the listener and serves in the background.

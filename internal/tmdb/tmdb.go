@@ -264,9 +264,14 @@ type findPayload struct {
 
 type searchPayload struct {
 	Results []struct {
-		ID           int    `json:"id"`
-		ReleaseDate  string `json:"release_date"`
-		FirstAirDate string `json:"first_air_date"`
+		ID           int     `json:"id"`
+		Title        string  `json:"title"`
+		Name         string  `json:"name"`
+		ReleaseDate  string  `json:"release_date"`
+		FirstAirDate string  `json:"first_air_date"`
+		Overview     string  `json:"overview"`
+		PosterPath   string  `json:"poster_path"`
+		VoteAverage  float64 `json:"vote_average"`
 	} `json:"results"`
 }
 
@@ -805,4 +810,59 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// SearchResult is one candidate from SearchMovies/SearchShows.
+type SearchResult struct {
+	ID          int
+	Title       string
+	Year        int
+	Overview    string
+	PosterPath  string
+	VoteAverage float64
+}
+
+// SearchMovies returns up to 20 movie candidates for a query (GET /search/movie),
+// optionally restricted to a release year.
+func (c *Client) SearchMovies(ctx context.Context, title string, year int) ([]SearchResult, error) {
+	return c.searchAll(ctx, "/search/movie", "year", title, year, false)
+}
+
+// SearchShows returns up to 20 TV candidates for a query (GET /search/tv),
+// optionally restricted to a first-air year.
+func (c *Client) SearchShows(ctx context.Context, name string, year int) ([]SearchResult, error) {
+	return c.searchAll(ctx, "/search/tv", "first_air_date_year", name, year, true)
+}
+
+func (c *Client) searchAll(ctx context.Context, path, yearParam, query string, year int, tv bool) ([]SearchResult, error) {
+	if strings.TrimSpace(query) == "" {
+		return nil, nil
+	}
+	q := url.Values{"query": {query}, "include_adult": {"false"}}
+	if year > 0 {
+		q.Set(yearParam, strconv.Itoa(year))
+	}
+	var p searchPayload
+	if err := c.getJSON(ctx, path, q, &p); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	out := make([]SearchResult, 0, len(p.Results))
+	for _, r := range p.Results {
+		title, date := r.Title, r.ReleaseDate
+		if tv {
+			title, date = r.Name, r.FirstAirDate
+		}
+		out = append(out, SearchResult{
+			ID:          r.ID,
+			Title:       title,
+			Year:        yearOf(date),
+			Overview:    r.Overview,
+			PosterPath:  r.PosterPath,
+			VoteAverage: r.VoteAverage,
+		})
+	}
+	return out, nil
 }

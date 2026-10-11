@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import type {
   DownloadConflict,
+  MatchCandidate,
+  MatchResult,
   Media,
   MediaCard,
   OnExisting,
@@ -38,6 +40,281 @@ interface Props {
   // Open another item's detail view (a "More like this" card was clicked);
   // the caller swaps this modal's content to the new item.
   onSelectSimilar: (card: MediaCard) => void;
+  // Reload this modal with the item at `key` after its metadata changed (a
+  // TMDB match was fixed). The key differs from media.key when a show was
+  // renamed by the new match.
+  onReopen: (key: string) => void;
+}
+
+// canFixMatch reports whether the "Fix match…" control applies: TMDB matches
+// can only be corrected for locally indexed movies and shows. A show's key
+// ("show:<title>") doesn't say which library it came from, so the control is
+// offered for every show and the backend rejects Plex ones.
+function canFixMatch(media: Media): boolean {
+  if (media.type === "movie") return media.key.startsWith("/local/metadata/");
+  if (media.type === "show") return media.key.startsWith("show:");
+  return false;
+}
+
+// FixMatchButton is the small text trigger that opens the FixMatchPanel.
+function FixMatchButton({
+  open,
+  onClick,
+}: {
+  open: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded text-xs font-medium transition-colors hover:underline focus:outline-none ${
+        open ? "text-accent-soft" : "text-accent/80 hover:text-accent"
+      }`}
+    >
+      Fix match…
+    </button>
+  );
+}
+
+const PANEL_INPUT =
+  "rounded-lg border border-white/10 bg-ink-800 px-3 py-2 text-sm text-white placeholder-white/30 outline-none focus:border-accent/60 disabled:opacity-50";
+
+const KIND_OPTIONS = [
+  { value: "movie" as const, label: "Movie" },
+  { value: "tv" as const, label: "TV Show" },
+];
+
+// stripYear drops a trailing " (YYYY)" from a title so the TMDB query starts
+// from the bare name ("Heat (1995)" → "Heat").
+function stripYear(title: string): string {
+  return title.replace(/\s*\((?:19|20)\d{2}\)\s*$/, "").trim();
+}
+
+// FixMatchPanel lets the user correct a wrong TMDB match for a locally
+// indexed movie or show: search TMDB by kind/title/year, pick a candidate
+// (or fall back to automatic matching), then reopen the rebuilt item.
+function FixMatchPanel({
+  media,
+  onToast,
+  onReopen,
+  onClose,
+}: {
+  media: Media;
+  onToast: (msg: string, kind?: "info" | "error") => void;
+  onReopen: (key: string) => void;
+  onClose: () => void;
+}) {
+  const [kind, setKind] = useState<MatchCandidate["kind"]>(
+    media.type === "show" ? "tv" : "movie"
+  );
+  const [query, setQuery] = useState(() => stripYear(media.title));
+  const [year, setYear] = useState(media.year > 0 ? String(media.year) : "");
+  const [searching, setSearching] = useState(false);
+  const [searched, setSearched] = useState(false);
+  const [results, setResults] = useState<MatchCandidate[]>([]);
+  const [applying, setApplying] = useState(false);
+  const busy = searching || applying;
+
+  const search = async () => {
+    const q = query.trim();
+    if (!q || busy) return;
+    setSearching(true);
+    try {
+      const y = parseInt(year, 10);
+      const found = await api.searchMatches(media.key, kind, q, isNaN(y) ? 0 : y);
+      setResults(found);
+      setSearched(true);
+    } catch (e: any) {
+      onToast(String(e?.message ?? e), "error");
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  // apply sends the chosen TMDB id (0 = automatic) and reopens the item at
+  // whatever key the backend reports, since a show can be renamed.
+  const apply = async (tmdbID: number) => {
+    if (busy) return;
+    setApplying(true);
+    try {
+      const res: MatchResult = await api.applyMatch(media.key, tmdbID);
+      onToast(`Matched to "${res.title}"`);
+      onClose();
+      onReopen(res.key || media.key);
+    } catch (e: any) {
+      onToast(String(e?.message ?? e), "error");
+      setApplying(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-white/10 bg-ink-800/60 p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-xs font-semibold uppercase tracking-widest text-white/40">
+          Fix match
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          disabled={applying}
+          className="rounded text-xs font-medium text-white/50 transition-colors hover:text-white disabled:opacity-50"
+        >
+          Cancel
+        </button>
+      </div>
+
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Select<MatchCandidate["kind"]>
+          value={kind}
+          onChange={setKind}
+          options={KIND_OPTIONS}
+          disabled={busy}
+          className="bg-ink-800 px-3 py-2 text-sm text-white"
+          aria-label="Match kind"
+        />
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              void search();
+            }
+          }}
+          disabled={busy}
+          placeholder="Title"
+          aria-label="Title to search for"
+          className={`min-w-0 flex-1 ${PANEL_INPUT}`}
+        />
+        <input
+          value={year}
+          onChange={(e) => setYear(e.target.value.replace(/\D/g, "").slice(0, 4))}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              void search();
+            }
+          }}
+          disabled={busy}
+          inputMode="numeric"
+          placeholder="Year"
+          aria-label="Release year (optional)"
+          className={`w-20 ${PANEL_INPUT}`}
+        />
+        <button
+          type="button"
+          onClick={search}
+          disabled={busy || !query.trim()}
+          className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-ink-900 transition-colors hover:bg-accent-soft disabled:opacity-50"
+        >
+          {searching ? "Searching…" : "Search"}
+        </button>
+      </div>
+
+      {applying && (
+        <div className="mt-3 flex items-center gap-2 text-sm text-white/60">
+          <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/20 border-t-accent" />
+          Updating…
+        </div>
+      )}
+
+      {searching && (
+        <div className="mt-3 flex items-center gap-2 text-sm text-white/60">
+          <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/20 border-t-accent" />
+          Searching TMDB…
+        </div>
+      )}
+
+      {!searching && searched && results.length === 0 && (
+        <div className="mt-3 text-sm text-white/40">
+          No matches found — try a different title or clear the year.
+        </div>
+      )}
+
+      {!searching && results.length > 0 && (
+        <div
+          className={`mt-3 max-h-72 space-y-1 overflow-y-auto pr-1 ${
+            applying ? "pointer-events-none opacity-50" : ""
+          }`}
+        >
+          {results.map((c) => (
+            <MatchRow key={`${c.kind}:${c.id}`} candidate={c} onPick={() => apply(c.id)} />
+          ))}
+        </div>
+      )}
+
+      <div className="mt-3 text-xs text-white/40">
+        Wrong title picked automatically?{" "}
+        <button
+          type="button"
+          onClick={() => apply(0)}
+          disabled={busy}
+          className="rounded font-medium text-accent/80 transition-colors hover:text-accent hover:underline disabled:opacity-50"
+        >
+          Use automatic match
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// MatchRow is one clickable TMDB candidate: poster thumbnail, title, year,
+// rating and a two-line overview; the whole row applies the match.
+function MatchRow({
+  candidate,
+  onPick,
+}: {
+  candidate: MatchCandidate;
+  onPick: () => void;
+}) {
+  const Placeholder = candidate.kind === "tv" ? TvIcon : FilmIcon;
+  return (
+    <button
+      type="button"
+      onClick={onPick}
+      className="group flex w-full items-start gap-3 rounded-lg px-2 py-2 text-left transition-colors hover:bg-white/5 focus:bg-white/5 focus:outline-none"
+    >
+      <div className="aspect-[2/3] w-12 shrink-0 overflow-hidden rounded bg-ink-600 ring-1 ring-white/10">
+        {candidate.posterURL ? (
+          <img
+            src={candidate.posterURL}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            className="h-full w-full object-cover"
+          />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center text-white/20">
+            <Placeholder width={18} height={18} />
+          </div>
+        )}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-2">
+          <span className="truncate text-sm font-medium text-white/90 group-hover:text-white">
+            {candidate.title}
+          </span>
+          {candidate.year > 0 && (
+            <span className="shrink-0 text-xs text-white/40">{candidate.year}</span>
+          )}
+          {candidate.rating > 0 && (
+            <span className="flex shrink-0 items-center gap-1 text-xs text-accent-soft">
+              <StarIcon width={11} height={11} /> {candidate.rating.toFixed(1)}
+            </span>
+          )}
+        </div>
+        {candidate.overview && (
+          <p className="mt-0.5 line-clamp-2 text-xs leading-relaxed text-white/50">
+            {candidate.overview}
+          </p>
+        )}
+      </div>
+      <span className="shrink-0 self-center rounded-md bg-white/10 px-2.5 py-1 text-xs font-semibold text-white/0 transition-colors group-hover:text-white group-focus:text-white">
+        Use this
+      </span>
+    </button>
+  );
 }
 
 // FavoriteButton is the star toggle shared by the movie and show detail views.
@@ -177,9 +454,12 @@ function ItemDetail(props: Props) {
   const [target, setTarget] = useState("");
   // Destination files that already exist; non-null shows the conflict prompt.
   const [conflicts, setConflicts] = useState<DownloadConflict[] | null>(null);
+  // Whether the inline "Fix match" TMDB search panel is open.
+  const [fixing, setFixing] = useState(false);
   useEffect(() => {
     setDlState("idle");
     setConflicts(null);
+    setFixing(false);
   }, [media.key]);
   const canResume = media.viewOffset > 0 && media.progressPct < 95;
 
@@ -301,6 +581,11 @@ function ItemDetail(props: Props) {
               </span>
             </div>
           )}
+          {canFixMatch(media) && (
+            <div className="mt-1 text-xs">
+              <FixMatchButton open={fixing} onClick={() => setFixing((f) => !f)} />
+            </div>
+          )}
 
           <div className="mt-auto flex flex-wrap gap-3 pt-6">
             {canResume && (
@@ -359,6 +644,16 @@ function ItemDetail(props: Props) {
           </div>
         </div>
       </div>
+      {fixing && (
+        <div className="px-6 pb-6">
+          <FixMatchPanel
+            media={media}
+            onToast={onToast}
+            onReopen={props.onReopen}
+            onClose={() => setFixing(false)}
+          />
+        </div>
+      )}
       <MoreLikeThis media={media} onSelect={props.onSelectSimilar} />
       {conflicts && (
         <ConflictModal
@@ -490,8 +785,11 @@ function ShowDetail(props: Props) {
     keys: string[];
     files: DownloadConflict[];
   } | null>(null);
+  // Whether the inline "Fix match" TMDB search panel is open.
+  const [fixing, setFixing] = useState(false);
 
   useEffect(() => {
+    setFixing(false);
     api.getSeasons(media.title).then((s) => {
       setSeasons(s);
       setLoading(false);
@@ -610,8 +908,32 @@ function ShowDetail(props: Props) {
               {media.summary}
             </p>
           )}
+          {(media.serverName || canFixMatch(media)) && (
+            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-white/40">
+              {media.serverName && (
+                <span>
+                  <span className="font-semibold text-white/55">Source: </span>
+                  {media.serverName}
+                </span>
+              )}
+              {canFixMatch(media) && (
+                <FixMatchButton open={fixing} onClick={() => setFixing((f) => !f)} />
+              )}
+            </div>
+          )}
         </div>
       </div>
+
+      {fixing && (
+        <div className="max-h-[55vh] shrink-0 overflow-y-auto border-b border-white/5 px-6 py-4">
+          <FixMatchPanel
+            media={media}
+            onToast={onToast}
+            onReopen={props.onReopen}
+            onClose={() => setFixing(false)}
+          />
+        </div>
+      )}
 
       {/* Season tabs */}
       <div className="flex shrink-0 gap-2 overflow-x-auto border-b border-white/5 px-6 py-3">

@@ -2,7 +2,6 @@ package library
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -10,7 +9,6 @@ import (
 
 	"github.com/joshkerr/goplexcli/internal/config"
 	"github.com/joshkerr/goplexcli/internal/plex"
-	"github.com/joshkerr/goplexcli/internal/tmdb"
 )
 
 // tmdbCacheTTL bounds how long cached TMDB responses are trusted; artwork
@@ -45,19 +43,21 @@ func Run(ctx context.Context, cfg *config.Config, existing []plex.MediaItem, ful
 		return nil, nil, err
 	}
 
-	var client *tmdb.Client
-	if key := strings.TrimSpace(cfg.TMDBAPIKey); key != "" {
-		store, err := tmdb.NewDiskStore(TMDBCacheDir(cacheDir), tmdbCacheTTL)
-		if err != nil {
-			return nil, nil, fmt.Errorf("tmdb cache: %w", err)
-		}
-		client = tmdb.New(key, store)
-	} else if logf != nil {
+	client, err := NewTMDBClient(cfg, cacheDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	if client == nil && logf != nil {
 		logf("no tmdb_api_key configured: indexing titles from file names only")
 	}
 
+	overrides, err := LoadOverrides(cacheDir)
+	if err != nil {
+		return nil, nil, err
+	}
 	serverName := ServerName(cfg)
 	opts := Options{
+		Overrides:    overrides,
 		TMDB:         client,
 		ServerName:   serverName,
 		ServerURL:    ServerURL(cfg.LibraryURL, cfg.LibraryListen),

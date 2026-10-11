@@ -178,6 +178,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.handleTimeline(w, r)
+	case p == SearchPath:
+		if !allowMethods(w, r, http.MethodGet) {
+			return
+		}
+		s.handleSearch(w, r)
+	case p == MatchPath:
+		if !allowMethods(w, r, http.MethodPost) {
+			return
+		}
+		s.handleMatch(w, r)
 	case p == "/library/sections":
 		if !allowMethods(w, r, http.MethodGet, http.MethodHead) {
 			return

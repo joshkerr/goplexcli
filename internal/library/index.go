@@ -43,6 +43,8 @@ type Options struct {
 	// Force re-enriches every file instead of reusing unchanged items
 	// (playback progress is still carried over).
 	Force bool
+	// Overrides pins titles to chosen TMDB ids (manual match fixes).
+	Overrides *Overrides
 	// Workers bounds concurrent TMDB lookups (default 8).
 	Workers int
 	// Logf receives per-item warnings (unmatched titles, probe failures).
@@ -96,25 +98,7 @@ func Index(ctx context.Context, libs []config.LibraryFolder, existing []plex.Med
 		progress = func(Progress) {}
 	}
 
-	prev := make(map[string]*plex.MediaItem, len(existing))
-	prevByPath := make(map[string]*plex.MediaItem)
-	for i := range existing {
-		it := &existing[i]
-		if it.ServerName == opts.ServerName && libserver.IsLocalKey(it.Key) {
-			prev[it.Key] = it
-			continue
-		}
-		// Items from other sources (a Plex server indexing the same files)
-		// lend their playback progress to the local item for the same file.
-		if it.RclonePath != "" {
-			prevByPath["r:"+it.RclonePath] = it
-		}
-		if it.FilePath != "" {
-			prevByPath["f:"+it.FilePath] = it
-		}
-	}
-
-	ix := &indexer{opts: opts, prev: prev, prevByPath: prevByPath}
+	ix := newIndexer(opts, existing)
 	res := &Result{}
 	for n, lib := range libs {
 		if !lib.Enabled {
@@ -151,6 +135,11 @@ func Index(ctx context.Context, libs []config.LibraryFolder, existing []plex.Med
 	}
 	res.Unmatched = ix.unmatched
 	res.Reused = ix.reused
+	if opts.Overrides.MarkApplied() {
+		if err := opts.Overrides.Save(); err != nil {
+			opts.Logf("save match overrides: %v", err)
+		}
+	}
 	return res, nil
 }
 
@@ -171,6 +160,38 @@ type indexer struct {
 	reused     int
 }
 
+// newIndexer prepares an indexer that can reuse and carry progress from the
+// existing items.
+func newIndexer(opts Options, existing []plex.MediaItem) *indexer {
+	if opts.Workers <= 0 {
+		opts.Workers = 8
+	}
+	if opts.Logf == nil {
+		opts.Logf = func(string, ...any) {}
+	}
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
+	prev := make(map[string]*plex.MediaItem, len(existing))
+	prevByPath := make(map[string]*plex.MediaItem)
+	for i := range existing {
+		it := &existing[i]
+		if it.ServerName == opts.ServerName && libserver.IsLocalKey(it.Key) {
+			prev[it.Key] = it
+			continue
+		}
+		// Items from other sources (a Plex server indexing the same files)
+		// lend their playback progress to the local item for the same file.
+		if it.RclonePath != "" {
+			prevByPath["r:"+it.RclonePath] = it
+		}
+		if it.FilePath != "" {
+			prevByPath["f:"+it.FilePath] = it
+		}
+	}
+	return &indexer{opts: opts, prev: prev, prevByPath: prevByPath}
+}
+
 // base returns an item with the fields every local item shares.
 func (ix *indexer) base(lib config.LibraryFolder, f ScannedFile) plex.MediaItem {
 	id := ItemID(lib.Name, f.Rel)
@@ -186,8 +207,8 @@ func (ix *indexer) base(lib config.LibraryFolder, f ScannedFile) plex.MediaItem 
 
 // reuse returns the previous item for a file when nothing about it changed,
 // refreshed with the current server labels.
-func (ix *indexer) reuse(item plex.MediaItem) (plex.MediaItem, bool) {
-	if ix.opts.Force {
+func (ix *indexer) reuse(item plex.MediaItem, pending bool) (plex.MediaItem, bool) {
+	if ix.opts.Force || pending {
 		return item, false
 	}
 	old, ok := ix.prev[item.Key]
@@ -272,7 +293,8 @@ func (ix *indexer) indexMovies(ctx context.Context, lib config.LibraryFolder, fi
 func (ix *indexer) movieItem(ctx context.Context, lib config.LibraryFolder, f ScannedFile, siblings int) (plex.MediaItem, error) {
 	item := ix.base(lib, f)
 	item.Type = "movie"
-	if old, ok := ix.reuse(item); ok {
+	ov, hasOv := ix.opts.Overrides.Get(item.Key)
+	if old, ok := ix.reuse(item, hasOv && !ov.Applied); ok {
 		ix.mu.Lock()
 		ix.reused++
 		ix.mu.Unlock()
@@ -280,6 +302,9 @@ func (ix *indexer) movieItem(ctx context.Context, lib config.LibraryFolder, f Sc
 	}
 
 	name := movieName(f.Rel, siblings)
+	if hasOv && ov.TMDB > 0 {
+		name.TMDB, name.IMDB = ov.TMDB, ""
+	}
 	item.Title = name.Title
 	item.Year = name.Year
 
@@ -386,6 +411,7 @@ func applyMovie(item *plex.MediaItem, m *tmdb.Movie) {
 
 // showGroup is one show folder (or one loose show name) with its episode files.
 type showGroup struct {
+	key   string // "dir:<show folder>" or "loose:<title key>"; see ShowOverrideKey
 	dir   string // show folder relative path, "" for loose episodes
 	name  NameInfo
 	files []episodeFile
@@ -477,7 +503,7 @@ func groupEpisodes(files []ScannedFile) []*showGroup {
 
 		grp, ok := byKey[key]
 		if !ok {
-			grp = &showGroup{dir: showDir, name: name}
+			grp = &showGroup{key: key, dir: showDir, name: name}
 			byKey[key] = grp
 			order = append(order, key)
 		}
@@ -519,10 +545,11 @@ func (ix *indexer) showItems(ctx context.Context, lib config.LibraryFolder, grp 
 	items := make([]plex.MediaItem, len(grp.files))
 	reused := make([]bool, len(grp.files))
 	needLookup := false
+	ov, hasOv := ix.opts.Overrides.Get(ShowOverrideKey(lib.Name, grp.key))
 	for i, ef := range grp.files {
 		item := ix.base(lib, ef.file)
 		item.Type = "episode"
-		if old, ok := ix.reuse(item); ok {
+		if old, ok := ix.reuse(item, hasOv && !ov.Applied); ok {
 			items[i] = old
 			reused[i] = true
 			ix.mu.Lock()
@@ -542,8 +569,12 @@ func (ix *indexer) showItems(ctx context.Context, lib config.LibraryFolder, grp 
 	var show *tmdb.Show
 	seasons := map[int]map[int]tmdb.Episode{}
 	if ix.opts.TMDB != nil {
+		name := grp.name
+		if hasOv && ov.TMDB > 0 {
+			name.TMDB, name.IMDB = ov.TMDB, ""
+		}
 		var err error
-		show, err = ix.lookupShow(ctx, grp.name)
+		show, err = ix.lookupShow(ctx, name)
 		if err != nil {
 			return nil, err
 		}

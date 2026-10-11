@@ -214,6 +214,26 @@ export interface BrowseOptions {
   hideForeign: boolean;
 }
 
+// MatchCandidate is one TMDB search hit offered when fixing a wrong match
+// for a locally indexed movie or show (see SearchMatches).
+export interface MatchCandidate {
+  id: number;
+  kind: "movie" | "tv";
+  title: string;
+  year: number;
+  overview: string;
+  rating: number;
+  posterURL: string; // may be ""
+}
+
+// MatchResult is what ApplyMatch returns: the matched title and the card key
+// to reopen (a show's key changes when the match renames it).
+export interface MatchResult {
+  title: string;
+  key: string;
+  rebuilt: number;
+}
+
 // UpdateInfo reports whether a newer GUI release is available (see CheckUpdate).
 export interface UpdateInfo {
   current: string;

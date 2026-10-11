@@ -278,6 +278,30 @@ goplexcli library scan --full   # re-enrich every title from TMDB (progress is k
 command refreshes Plex servers and local folders together. Titles TMDB
 couldn't identify are listed as warnings and retried on the next scan.
 
+### Fixing a wrong match
+
+When TMDB picked the wrong title (a remake, a same-named show from another
+country), pin the movie or the whole show to the right one. Fixes are stored
+in `matches.json` under the cache's `library` folder and survive every later
+scan; the show fix applies to episodes added later too.
+
+```bash
+goplexcli library search "Accused" --tv            # list TMDB candidates with ids
+goplexcli library match "Accused" --tv --tmdb 193744   # pin the show by name…
+goplexcli library match /local/metadata/1a2b… --tmdb 603   # …or a movie by key
+goplexcli library match "Accused" --tv --auto      # back to automatic matching
+goplexcli library matches                          # list manual fixes on this machine
+```
+
+The rebuild happens on the library server that owns the item (the daemon
+on your NAS, say), so the command works from any computer that synced the
+cache, and the fix shows up on every device at the next sync. Without a
+local `tmdb_api_key`, `library search` asks that server too.
+
+In the GUI, open a movie or show and click **Fix match…** next to its
+source line: search by title (Movie / TV Show, optional year), pick the
+right result, and the card updates in place.
+
 ### Running the daemon
 
 `goplexcli daemon` turns a machine into an always-on server. In one process it:

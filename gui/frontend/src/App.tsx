@@ -567,6 +567,22 @@ export default function App() {
     [toast]
   );
 
+  // Reload the open detail modal with the item at `key` after its metadata
+  // changed (a TMDB match was fixed). The key may differ from the one that
+  // was open when the fix renamed a show.
+  const reopenItem = useCallback(
+    async (key: string) => {
+      try {
+        const full = await api.getItem(key);
+        setSelected(full);
+      } catch (e: any) {
+        setSelected(null);
+        toast(String(e?.message ?? e), "error");
+      }
+    },
+    [toast]
+  );
+
   // Run a field-scoped search (director/cast/genre click in the detail modal).
   // Setting the query drives the existing debounced search effect; closing the
   // modal reveals the results grid underneath. The query string doubles as the
@@ -590,6 +606,18 @@ export default function App() {
     loadCategory(browseCategory);
     return s;
   }, [refreshStatus, loadCategory, browseCategory]);
+
+  // A single item's metadata changed (its TMDB match was fixed), possibly
+  // under a new card key when a show was renamed. Refresh the grid and counts
+  // the same way a reindex does so the card updates in place; the detail
+  // modal reopens itself via onReopen.
+  useEffect(() => {
+    const off = onEvent<{ key: string; previous: string }>("media:changed", () => {
+      if (needsSetup) return;
+      void onLibraryChanged();
+    });
+    return off;
+  }, [needsSetup, onLibraryChanged]);
 
   // Library sync/update/reindex state, shared by the header sync button and the
   // Settings panel so either entry point disables both and feeds the same
@@ -913,6 +941,7 @@ export default function App() {
           onToast={toast}
           onSearch={runFieldSearch}
           onSelectSimilar={handleSelect}
+          onReopen={reopenItem}
         />
       )}
 

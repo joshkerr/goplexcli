@@ -199,6 +199,8 @@ func (a *App) startLibraryServer() {
 		Version:       version,
 		RcloneBin:     cfg.RclonePath,
 		Timeline:      a.localTimeline,
+		Search:        a.searchLocalTitles,
+		Match:         a.rematchLocal,
 	})
 	if err := a.lib.Start(); err != nil {
 		fmt.Printf("library server unavailable: %v\n", err)

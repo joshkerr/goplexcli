@@ -10,6 +10,8 @@ import type {
   DownloadConflict,
   DownloadProgress,
   LibraryInfo,
+  MatchCandidate,
+  MatchResult,
   Media,
   MediaCard,
   OnExisting,
@@ -83,6 +85,13 @@ type WailsApp = {
   ): Promise<void>;
   RemoveLibrary(name: string): Promise<void>;
   SetLibraryEnabled(name: string, enabled: boolean): Promise<void>;
+  SearchMatches(
+    key: string,
+    kind: string,
+    query: string,
+    year: number
+  ): Promise<MatchCandidate[] | null>;
+  ApplyMatch(key: string, tmdbID: number): Promise<MatchResult>;
 };
 
 type WailsRuntime = {
@@ -188,6 +197,15 @@ export const api = {
   removeLibrary: (name: string) => app().RemoveLibrary(name),
   setLibraryEnabled: (name: string, enabled: boolean) =>
     app().SetLibraryEnabled(name, enabled),
+  // TMDB candidates for re-matching a locally indexed title; year 0 = any.
+  searchMatches: async (
+    key: string,
+    kind: "movie" | "tv",
+    query: string,
+    year: number
+  ) => (await app().SearchMatches(key, kind, query, year)) ?? [],
+  // tmdbID 0 restores automatic matching.
+  applyMatch: (key: string, tmdbID: number) => app().ApplyMatch(key, tmdbID),
 };
 
 /** Subscribe to a backend event. Returns an unsubscribe function. */
