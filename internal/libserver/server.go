@@ -94,6 +94,9 @@ type Options struct {
 	MachineID     string       // reported by /identity; default "goplexcli-library"
 	Version       string       // reported by /identity
 	RcloneBin     string       // rclone executable for streaming unmounted files; default "rclone"
+	// API, if set, serves everything under /api/ (the browse API) after
+	// the token check.
+	API http.Handler
 }
 
 // Server serves the Plex-compatible endpoints for a Resolver.
@@ -142,8 +145,23 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// CORS preflights carry no token; let the API answer them.
+	if strings.HasPrefix(p, "/api/") && s.opts.API != nil && r.Method == http.MethodOptions {
+		s.opts.API.ServeHTTP(w, r)
+		return
+	}
+
 	if !s.authorized(r) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+
+	if strings.HasPrefix(p, "/api/") {
+		if s.opts.API == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			return
+		}
+		s.opts.API.ServeHTTP(w, r)
 		return
 	}
 

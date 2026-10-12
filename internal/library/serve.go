@@ -36,6 +36,9 @@ type ServiceOptions struct {
 	// this server can't rebuild items (the endpoints then answer 503).
 	Search func(ctx context.Context, kind, query string, year int) ([]libserver.Candidate, error)
 	Match  func(ctx context.Context, key string, tmdbID int) ([]plex.MediaItem, error)
+	// Browse, if set, is served under /api/v1/ (the paged library API used
+	// by thin clients such as the Android app).
+	Browse http.Handler
 }
 
 // Service is the running library server. It resolves item ids to files from
@@ -58,6 +61,7 @@ func NewService(opts ServiceOptions) *Service {
 		ImageCacheDir: opts.ImageCacheDir,
 		Version:       opts.Version,
 		RcloneBin:     opts.RcloneBin,
+		API:           opts.Browse,
 	})
 	return s
 }

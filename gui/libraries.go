@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joshkerr/goplexcli/internal/browse"
 	"github.com/joshkerr/goplexcli/internal/cache"
 	"github.com/joshkerr/goplexcli/internal/config"
 	"github.com/joshkerr/goplexcli/internal/library"
@@ -201,6 +202,19 @@ func (a *App) startLibraryServer() {
 		Timeline:      a.localTimeline,
 		Search:        a.searchLocalTitles,
 		Match:         a.rematchLocal,
+		Browse: browse.NewHandler(browse.Source{
+			View:       a.viewMedia,
+			Favorites:  a.fav,
+			SetWatched: a.setWatchedLocal,
+			Name:       library.ServerName(cfg),
+			Version:    version,
+			Updated: func() time.Time {
+				if c := a.media(); c != nil {
+					return c.LastUpdated
+				}
+				return time.Time{}
+			},
+		}),
 	})
 	if err := a.lib.Start(); err != nil {
 		fmt.Printf("library server unavailable: %v\n", err)
@@ -319,4 +333,51 @@ func (a *App) migrateFavorites(res *library.Result) {
 	if moved > 0 {
 		a.emitFavoritesChanged()
 	}
+}
+
+// viewMedia runs fn over the in-memory cache under the read lock (browse API).
+func (a *App) viewMedia(fn func(items []plex.MediaItem)) {
+	c := a.media()
+	a.mediaMu.RLock()
+	defer a.mediaMu.RUnlock()
+	if c == nil {
+		fn(nil)
+		return
+	}
+	fn(c.Media)
+}
+
+// setWatchedLocal marks one of this machine's items watched or unwatched
+// from the browse API.
+func (a *App) setWatchedLocal(key string, watched bool) error {
+	c := a.media()
+	if c == nil {
+		return browse.ErrNotFound
+	}
+	server := library.ServerName(a.config())
+	a.mediaMu.Lock()
+	found := false
+	for i := range c.Media {
+		it := &c.Media[i]
+		if it.Key != key || it.ServerName != server {
+			continue
+		}
+		it.ViewOffset = 0
+		if watched {
+			if it.ViewCount == 0 {
+				it.ViewCount = 1
+			}
+			it.LastViewedAt = time.Now().Unix()
+		} else {
+			it.ViewCount = 0
+		}
+		found = true
+		break
+	}
+	a.mediaMu.Unlock()
+	if !found {
+		return browse.ErrNotFound
+	}
+	a.scheduleCacheSave(true)
+	return nil
 }

@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joshkerr/goplexcli/internal/browse"
 	"github.com/joshkerr/goplexcli/internal/cache"
 	"github.com/joshkerr/goplexcli/internal/config"
 	"github.com/joshkerr/goplexcli/internal/favorites"
@@ -789,6 +790,56 @@ func (d *daemonState) rematch(ctx context.Context, cacheDir, key string, tmdbID 
 	return rebuilt, nil
 }
 
+// view runs fn with the served items under the state lock (browse API).
+func (d *daemonState) view(fn func(items []plex.MediaItem)) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.cache == nil {
+		fn(nil)
+		return
+	}
+	fn(d.cache.Media)
+}
+
+// updated reports when the served cache was last indexed.
+func (d *daemonState) updated() time.Time {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.cache == nil {
+		return time.Time{}
+	}
+	return d.cache.LastUpdated
+}
+
+// setWatched marks a local item watched (counted, resume cleared) or
+// unwatched, and saves soon after.
+func (d *daemonState) setWatched(key string, watched bool) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.cache == nil {
+		return browse.ErrNotFound
+	}
+	for i := range d.cache.Media {
+		it := &d.cache.Media[i]
+		if it.Key != key || it.ServerName != d.server {
+			continue
+		}
+		it.ViewOffset = 0
+		if watched {
+			if it.ViewCount == 0 {
+				it.ViewCount = 1
+			}
+			it.LastViewedAt = time.Now().Unix()
+		} else {
+			it.ViewCount = 0
+		}
+		d.dirty = true
+		d.saveAt = time.Now()
+		return nil
+	}
+	return browse.ErrNotFound
+}
+
 func (d *daemonState) snapshot() []plex.MediaItem {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -817,6 +868,10 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 			defer stop()
 		}
 	}
+
+	// One favorites store, shared by the LAN sync server and the browse API,
+	// so a star set from the Android app reaches peers and vice versa.
+	favStore := favorites.NewStore()
 
 	// Library server: streams local files and proxies artwork.
 	state := &daemonState{server: library.ServerName(cfg)}
@@ -847,6 +902,14 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 			Match: func(ctx context.Context, key string, tmdbID int) ([]plex.MediaItem, error) {
 				return state.rematch(ctx, cacheDir, key, tmdbID)
 			},
+			Browse: browse.NewHandler(browse.Source{
+				View:       state.view,
+				Favorites:  favStore,
+				SetWatched: state.setWatched,
+				Name:       state.server,
+				Version:    version,
+				Updated:    state.updated,
+			}),
 		})
 		if err := svc.Start(); err != nil {
 			return err
@@ -877,7 +940,7 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	// LAN cache sync (peers pull the cache; favorites rendezvous).
 	if !daemonNoSync {
 		srv := lansync.NewServer(lansync.CacheMetaFunc())
-		srv.ServeFavorites(favorites.NewStore(), nil)
+		srv.ServeFavorites(favStore, nil)
 		if err := srv.StartOn(lansync.DefaultPort); err != nil {
 			fmt.Println(warningStyle.Render("LAN sync not started: " + err.Error()))
 		} else {

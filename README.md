@@ -329,6 +329,28 @@ Config: `artwork` (`""`/`"auto"` on, `"off"` to disable), `artwork_orientation`
 overrides. In the GUI: Settings → Preferences → "Embed cover art into
 downloads".
 
+### Browse API (for thin clients)
+
+The library server also answers a small JSON API under `/api/v1/` so
+clients like the Android app can browse a large library page by page
+instead of downloading the whole cache. It uses the same `library_token`
+(as `X-Plex-Token`) as the rest of the library server.
+
+| Route | Returns |
+|---|---|
+| `GET /api/v1/status` | server name, version, counts, last indexed |
+| `GET /api/v1/browse?category=…&sort=…&desc=1&genre=…&offset=…&limit=…` | a page of cards; categories `movies`, `shows`, `recent-movies`, `recent-shows`, `continue`, `favorite-movies`, `favorite-shows` |
+| `GET /api/v1/search?q=…` | movies and shows by title (fuzzy), or `director:` / `cast:` / `genre:` queries |
+| `GET /api/v1/item?key=…` | a movie or episode (with `streamPath` and `rclonePath`), or a show for `show:<title>` |
+| `GET /api/v1/episodes?show=…&season=N` | one season in order |
+| `GET /api/v1/genres` | the most common movie genres |
+| `POST /api/v1/favorite` `{key, favorite}` | sets a favorite (shared with LAN sync peers) |
+| `POST /api/v1/watched` `{key, watched}` | marks watched or unwatched |
+
+Playback progress uses the Plex-style `/:/timeline` endpoint, posters
+`/photo/:/transcode?url=<thumb>&width=…`, and streams `<streamPath>` with
+Range support.
+
 ### Running the daemon
 
 `goplexcli daemon` turns a machine into an always-on server. In one process it:
