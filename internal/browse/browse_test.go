@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/joshkerr/goplexcli/internal/favorites"
 	"github.com/joshkerr/goplexcli/internal/libserver"
@@ -187,7 +188,14 @@ func (f *fakeSource) setWatched(key string, watched bool) error {
 func TestHandler(t *testing.T) {
 	src := &fakeSource{items: fixture()}
 	store := favorites.NewStoreAt(filepath.Join(t.TempDir(), "fav.json"))
-	h := NewHandler(Source{View: src.view, Favorites: store, SetWatched: src.setWatched, Name: "vault", Version: "test"})
+	// Updated takes the same non-reentrant lock as View, like the daemon:
+	// the handler must never call it from inside View.
+	updated := func() time.Time {
+		src.mu.Lock()
+		defer src.mu.Unlock()
+		return time.Unix(1700000000, 0)
+	}
+	h := NewHandler(Source{View: src.view, Favorites: store, SetWatched: src.setWatched, Name: "vault", Version: "test", Updated: updated})
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 

@@ -108,6 +108,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch route {
 	case "status":
+		// Read Updated before withIndex: View holds the source's lock, and
+		// Updated may take the same (non-reentrant) lock.
+		var updated time.Time
+		if h.src.Updated != nil {
+			updated = h.src.Updated()
+		}
 		h.withIndex(func(ix *Index) {
 			resp := map[string]any{
 				"name": h.src.Name, "version": h.src.Version, "api": APIVersion,
@@ -115,10 +121,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				"categories": Categories,
 				"features":   h.features(),
 			}
-			if h.src.Updated != nil {
-				if t := h.src.Updated(); !t.IsZero() {
-					resp["lastUpdated"] = t.UTC().Format(time.RFC3339)
-				}
+			if !updated.IsZero() {
+				resp["lastUpdated"] = updated.UTC().Format(time.RFC3339)
 			}
 			writeJSON(w, http.StatusOK, resp)
 		})
