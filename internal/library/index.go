@@ -115,6 +115,7 @@ func Index(ctx context.Context, libs []config.LibraryFolder, existing []plex.Med
 		}
 		report(Progress{Phase: "scan"})
 		scanOpts := opts.Scan
+		scanOpts.Now = opts.Now
 		scanOpts.Progress = func(found int) { report(Progress{Phase: "scan", Done: found}) }
 		files, err := ScanFolder(ctx, lib, scanOpts)
 		if err != nil {
@@ -194,15 +195,30 @@ func newIndexer(opts Options, existing []plex.MediaItem) *indexer {
 
 // base returns an item with the fields every local item shares.
 func (ix *indexer) base(lib config.LibraryFolder, f ScannedFile) plex.MediaItem {
-	id := ItemID(lib.Name, f.Rel)
+	key := libserver.ItemKey(ItemID(lib.Name, f.Rel))
 	return plex.MediaItem{
-		Key:        libserver.ItemKey(id),
+		Key:        key,
 		FilePath:   f.Path,
 		RclonePath: rclonePath(lib, f, ix.opts.PathMappings),
 		ServerName: ix.opts.ServerName,
 		ServerURL:  ix.opts.ServerURL,
-		AddedAt:    f.ModTime.Unix(),
+		AddedAt:    ix.addedAt(key, f.ModTime),
 	}
+}
+
+// addedAt dates a file for "recently added": its scanned time when that is
+// plausible, else the date an earlier index gave it, else now (first seen).
+// A file and folder both dated in the future would otherwise sort ahead of
+// everything else for decades.
+func (ix *indexer) addedAt(key string, mod time.Time) int64 {
+	now := ix.opts.Now()
+	if plausibleTime(mod, now) {
+		return mod.Unix()
+	}
+	if old, ok := ix.prev[key]; ok && plausibleTime(time.Unix(old.AddedAt, 0), now) {
+		return old.AddedAt
+	}
+	return now.Unix()
 }
 
 // reuse returns the previous item for a file when nothing about it changed,

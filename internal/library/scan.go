@@ -22,9 +22,22 @@ type ScannedFile struct {
 	// Path is the absolute local path (library Path joined with Rel).
 	Path string
 	// Rel is the slash-separated path relative to the library root.
-	Rel     string
-	Size    int64
+	Rel  string
+	Size int64
+	// ModTime is the file's modification time, which the index reports as
+	// the date the file was added. A time in the future or missing (a bad
+	// clock, a mangled upload) is replaced by the containing folder's.
 	ModTime time.Time
+}
+
+// futureSlack tolerates clock skew between the scanner and the storage
+// before a modification time counts as being in the future.
+const futureSlack = 24 * time.Hour
+
+// plausibleTime reports whether t can be the time a file was added: set,
+// after the Unix epoch and not in the future.
+func plausibleTime(t, now time.Time) bool {
+	return !t.IsZero() && t.Unix() > 0 && !t.After(now.Add(futureSlack))
 }
 
 // ScanOptions tunes how a library folder is listed.
@@ -36,6 +49,15 @@ type ScanOptions struct {
 	NoRclone bool
 	// Progress, if set, is called with the running count of files found.
 	Progress func(found int)
+	// Now overrides the clock in tests.
+	Now func() time.Time
+}
+
+func (o ScanOptions) now() time.Time {
+	if o.Now != nil {
+		return o.Now()
+	}
+	return time.Now()
 }
 
 // ScanFolder lists every video file under a library folder, skipping extras,
@@ -70,6 +92,7 @@ func scanLocal(ctx context.Context, lib config.LibraryFolder, opts ScanOptions) 
 		return nil, fmt.Errorf("%s is not a directory", root)
 	}
 
+	now := opts.now()
 	var files []ScannedFile
 	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
@@ -101,11 +124,17 @@ func scanLocal(ctx context.Context, lib config.LibraryFolder, opts ScanOptions) 
 		if err != nil {
 			return nil
 		}
+		mod := info.ModTime()
+		if !plausibleTime(mod, now) {
+			if dir, err := os.Stat(filepath.Dir(p)); err == nil && plausibleTime(dir.ModTime(), now) {
+				mod = dir.ModTime()
+			}
+		}
 		files = append(files, ScannedFile{
 			Path:    p,
 			Rel:     filepath.ToSlash(rel),
 			Size:    info.Size(),
-			ModTime: info.ModTime(),
+			ModTime: mod,
 		})
 		if opts.Progress != nil {
 			opts.Progress(len(files))
@@ -135,7 +164,9 @@ func scanRemote(ctx context.Context, lib config.LibraryFolder, opts ScanOptions)
 	if _, err := exec.LookPath(bin); err != nil {
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, bin, "lsjson", "-R", "--files-only", "--fast-list", "--no-mimetype", lib.Remote)
+	// Folders are listed too: their times stand in for files whose own are
+	// implausible.
+	cmd := exec.CommandContext(ctx, bin, "lsjson", "-R", "--fast-list", "--no-mimetype", lib.Remote)
 	cmd.Stderr = io.Discard
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -172,12 +203,18 @@ func parseLsjson(r io.Reader, lib config.LibraryFolder, opts ScanOptions) ([]Sca
 	// Cloud drives can hold two objects with the same name in one folder;
 	// only the first listing of a path is kept so keys stay unique.
 	seen := map[string]bool{}
+	dirs := map[string]time.Time{}
 	for dec.More() {
 		var e rcloneEntry
 		if err := dec.Decode(&e); err != nil {
 			return nil, fmt.Errorf("rclone output: %w", err)
 		}
-		if e.IsDir || !IsVideoFile(e.Name) || pathIgnored(e.Path) {
+		if e.IsDir {
+			mod, _ := time.Parse(time.RFC3339Nano, e.ModTime)
+			dirs[path.Clean(e.Path)] = mod
+			continue
+		}
+		if !IsVideoFile(e.Name) || pathIgnored(e.Path) {
 			continue
 		}
 		if seen[e.Path] {
@@ -193,6 +230,17 @@ func parseLsjson(r io.Reader, lib config.LibraryFolder, opts ScanOptions) ([]Sca
 		})
 		if opts.Progress != nil {
 			opts.Progress(len(files))
+		}
+	}
+	// Folders and files arrive in any order, so implausible file times are
+	// resolved once the whole listing is in.
+	now := opts.now()
+	for i := range files {
+		if plausibleTime(files[i].ModTime, now) {
+			continue
+		}
+		if mod, ok := dirs[path.Dir(files[i].Rel)]; ok && plausibleTime(mod, now) {
+			files[i].ModTime = mod
 		}
 	}
 	return files, nil

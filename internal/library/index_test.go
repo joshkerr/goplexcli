@@ -366,3 +366,94 @@ func TestParseLsjson(t *testing.T) {
 		t.Errorf("parseLsjson = %+v", files)
 	}
 }
+
+func TestScanFutureModTimes(t *testing.T) {
+	now := time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC)
+	future := time.Date(2097, 12, 31, 23, 0, 0, 0, time.UTC)
+	folder := time.Date(2020, 7, 14, 16, 39, 1, 0, time.UTC)
+	fine := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	opts := ScanOptions{NoRclone: true, Now: func() time.Time { return now }}
+
+	// rclone lists folders after their files as often as before.
+	in := `[{"Path":"Harry (1987)/harry.mkv","Name":"harry.mkv","Size":10,"ModTime":"2097-12-31T23:00:00Z","IsDir":false},
+{"Path":"Harry (1987)","Name":"Harry (1987)","Size":-1,"ModTime":"2020-07-14T16:39:01Z","IsDir":true},
+{"Path":"Fine (2001)","Name":"Fine (2001)","Size":-1,"ModTime":"2020-07-14T16:39:01Z","IsDir":true},
+{"Path":"Fine (2001)/fine.mkv","Name":"fine.mkv","Size":10,"ModTime":"2026-01-02T03:04:05Z","IsDir":false},
+{"Path":"Undated (2002)/undated.mkv","Name":"undated.mkv","Size":10,"ModTime":"","IsDir":false},
+{"Path":"Undated (2002)","Name":"Undated (2002)","Size":-1,"ModTime":"2020-07-14T16:39:01Z","IsDir":true},
+{"Path":"loose.mkv","Name":"loose.mkv","Size":10,"ModTime":"2097-12-31T23:00:00Z","IsDir":false}]`
+	files, err := parseLsjson(strings.NewReader(in), config.LibraryFolder{Path: "/mnt/g"}, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]time.Time{}
+	for _, f := range files {
+		got[f.Rel] = f.ModTime
+	}
+	if len(got) != 4 || !got["Harry (1987)/harry.mkv"].Equal(folder) || !got["Undated (2002)/undated.mkv"].Equal(folder) ||
+		!got["Fine (2001)/fine.mkv"].Equal(fine) || !got["loose.mkv"].Equal(future) {
+		t.Errorf("lsjson times = %v", got)
+	}
+
+	root := t.TempDir()
+	touch(t, root, "Harry (1987)/harry.mkv", future)
+	if err := os.Chtimes(filepath.Join(root, "Harry (1987)"), folder, folder); err != nil {
+		t.Fatal(err)
+	}
+	touch(t, root, "Fine (2001)/fine.mkv", fine)
+	files, err = scanLocal(context.Background(), config.LibraryFolder{Path: root}, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = map[string]time.Time{}
+	for _, f := range files {
+		got[f.Rel] = f.ModTime
+	}
+	if len(got) != 2 || !got["Harry (1987)/harry.mkv"].Equal(folder) || !got["Fine (2001)/fine.mkv"].Equal(fine) {
+		t.Errorf("local times = %v", got)
+	}
+}
+
+func TestIndexFutureAddedAt(t *testing.T) {
+	now := time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC)
+	future := time.Date(2097, 12, 31, 23, 0, 0, 0, time.UTC)
+	root := t.TempDir()
+	touch(t, root, "Harry (1987)/harry.mkv", future)
+	if err := os.Chtimes(filepath.Join(root, "Harry (1987)"), future, future); err != nil {
+		t.Fatal(err)
+	}
+	lib := config.LibraryFolder{Name: "Movies", Path: root, Type: "movie", Enabled: true}
+	opts := Options{ServerName: "vault", Scan: ScanOptions{NoRclone: true}, Now: func() time.Time { return now }}
+
+	// File and folder both in the future: dated when first seen.
+	res, err := Index(context.Background(), []config.LibraryFolder{lib}, nil, opts, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Items) != 1 || res.Items[0].AddedAt != now.Unix() {
+		t.Fatalf("first scan = %+v", res.Items)
+	}
+
+	// Later scans keep that date rather than moving it to their own clock.
+	later := opts
+	later.Now = func() time.Time { return now.Add(48 * time.Hour) }
+	res2, err := Index(context.Background(), []config.LibraryFolder{lib}, res.Items, later, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res2.Reused != 1 || res2.Items[0].AddedAt != now.Unix() {
+		t.Errorf("rescan reused %d, AddedAt %d", res2.Reused, res2.Items[0].AddedAt)
+	}
+
+	// An index written before this check, carrying the future date, is
+	// corrected rather than reused.
+	bad := append([]plex.MediaItem(nil), res.Items...)
+	bad[0].AddedAt = future.Unix()
+	res3, err := Index(context.Background(), []config.LibraryFolder{lib}, bad, later, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res3.Reused != 0 || res3.Items[0].AddedAt != later.Now().Unix() {
+		t.Errorf("bad index reused %d, AddedAt %d", res3.Reused, res3.Items[0].AddedAt)
+	}
+}
