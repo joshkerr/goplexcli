@@ -19,9 +19,10 @@ import (
 // updateRepo is the GitHub "owner/name" the GUI self-updater pulls releases from.
 const updateRepo = "joshkerr/goplexcli"
 
-// AppVersion returns the running GUI build's version ("dev" for an unstamped
-// local build, which disables self-update).
-func (a *App) AppVersion() string { return version }
+// AppVersion returns the running GUI build's version for display, with its
+// build number ("0.4.0 (build 412)"; "dev" for an unstamped local build,
+// which disables self-update).
+func (a *App) AppVersion() string { return versionLabel() }
 
 // UpdateInfoDTO reports whether a newer GUI release is available for install.
 type UpdateInfoDTO struct {

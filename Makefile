@@ -8,7 +8,12 @@ VERSION ?= $(or $(strip $(file <VERSION)),0.1.0)
 else
 VERSION ?= $(shell cat VERSION 2>/dev/null || echo 0.1.0)
 endif
-LDFLAGS = -ldflags "-s -w -X main.version=$(VERSION)"
+# Build number: the git commit count, so every new commit builds with a
+# higher number while VERSION only moves when bumped by hand. Shown next to
+# the version ("0.4.0 (build 412)"); the bare VERSION is what the updater
+# compares and the library and download servers report.
+BUILD ?= $(or $(strip $(shell git rev-list --count HEAD)),0)
+LDFLAGS = -ldflags "-s -w -X main.version=$(VERSION) -X main.build=$(BUILD)"
 
 # Newer Linux distros ship only webkit2gtk-4.1, which Wails v2 selects with a
 # build tag; older ones still have 4.0, which is the default. Pick whichever
@@ -59,7 +64,7 @@ endif
 
 # Build the application
 build:
-	@echo "Building goplexcli v$(VERSION)..."
+	@echo "Building goplexcli v$(VERSION) (build $(BUILD))..."
 ifeq ($(OS),Windows_NT)
 	@$(GO) build $(LDFLAGS) -o goplexcli.exe ./cmd/goplexcli
 	@echo "Build complete: ./goplexcli.exe"
@@ -82,7 +87,7 @@ build-all:
 
 # Install to GOPATH/bin (cross-platform)
 install:
-	@echo "Installing goplexcli v$(VERSION) to GOPATH/bin..."
+	@echo "Installing goplexcli v$(VERSION) (build $(BUILD)) to GOPATH/bin..."
 	@$(GO) install $(LDFLAGS) ./cmd/goplexcli/
 	@echo "Installation complete"
 
@@ -146,8 +151,8 @@ gui-dev:
 
 # Build the native GUI binary for the current platform.
 gui-build:
-	@echo "Building GoplexCLI desktop app v$(VERSION)..."
-	@cd gui && wails build -m -nosyncgomod $(GUI_TAGS) -ldflags "-X main.version=$(VERSION)"
+	@echo "Building GoplexCLI desktop app v$(VERSION) (build $(BUILD))..."
+	@cd gui && wails build -m -nosyncgomod $(GUI_TAGS) -ldflags "-X main.version=$(VERSION) -X main.build=$(BUILD)"
 	@echo "Build complete: ./gui/build/bin/"
 
 # Install the icon-enabled desktop GUI. On Windows this installs per-user under

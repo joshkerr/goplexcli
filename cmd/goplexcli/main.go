@@ -53,6 +53,20 @@ import (
 // For development without ldflags, falls back to "dev"
 var version = "dev"
 
+// build is the build number, set via ldflags: -X main.build=$(BUILD) (the
+// git commit count). Empty for a plain `go build` / `go run`.
+var build = ""
+
+// versionLabel is the version as people see it: "0.4.0 (build 412)". The
+// bare version stays wherever it is compared or reported to other machines
+// (the updater, the library server, the download server's /ping).
+func versionLabel() string {
+	if build == "" {
+		return version
+	}
+	return version + " (build " + build + ")"
+}
+
 // dryRun when true shows what would be downloaded without actually downloading
 var dryRun bool
 
@@ -396,7 +410,7 @@ Examples:
 		Use:   "version",
 		Short: "Show version information",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("goplexcli v%s\n", version)
+			fmt.Printf("goplexcli v%s\n", versionLabel())
 		},
 	}
 
@@ -1122,7 +1136,7 @@ func runSearch(cmd *cobra.Command, args []string) error {
 
 func runBrowse(cmd *cobra.Command, args []string) error {
 	// Show logo for interactive browse command
-	ui.Logo(version)
+	ui.Logo(versionLabel())
 
 	// Load config
 	cfg, err := config.Load()
