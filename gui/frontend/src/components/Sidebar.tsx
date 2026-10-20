@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from "react";
-import type { Category, Person } from "../lib/types";
+import type { Category, DownloadProgress, Person } from "../lib/types";
+import { TransferCard } from "./TransferCard";
 import { isMac } from "../lib/api";
 import {
   BrandMark,
@@ -43,6 +44,9 @@ interface Props {
   active: NavKey;
   onSelect: (key: NavKey) => void;
   downloadCount: number;
+  // The active downloads, local and remote, newest first; while any run a
+  // card above the view controls shows the one in flight.
+  activeDownloads: DownloadProgress[];
 
   query: string;
   onQueryChange: (q: string) => void;
@@ -68,6 +72,7 @@ export function Sidebar({
   active,
   onSelect,
   downloadCount,
+  activeDownloads,
   query,
   onQueryChange,
   searchHotkey,
@@ -215,6 +220,10 @@ export function Sidebar({
           );
         })}
       </nav>
+
+      {activeDownloads.length > 0 && (
+        <TransferCard jobs={activeDownloads} onOpen={() => onSelect("downloads")} />
+      )}
 
       {controls && (
         <div className="shrink-0 border-t border-white/5 px-3 pb-4">

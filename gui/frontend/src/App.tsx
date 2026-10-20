@@ -15,7 +15,7 @@ import type {
 import { Sidebar, type NavKey } from "./components/Sidebar";
 import { PosterGrid } from "./components/PosterGrid";
 import { DetailModal } from "./components/DetailModal";
-import { DownloadsPanel } from "./components/DownloadsPanel";
+import { DownloadsPanel, isActive } from "./components/DownloadsPanel";
 import { Splash } from "./components/Splash";
 import { Toasts, type Toast } from "./components/Toasts";
 import { Setup } from "./views/Setup";
@@ -780,8 +780,9 @@ export default function App() {
   const downloadList = Object.values(downloads).sort(
     (a, b) => (b.queuedAt ?? 0) - (a.queuedAt ?? 0) || b.seq - a.seq
   );
-  const activeDownloads = downloadList.filter(
-    (d) => d.status === "in_progress" || d.status === "pending"
+  const activeDownloadList = downloadList.filter(isActive);
+  const activeDownloads = activeDownloadList.filter(
+    (d) => d.status !== "paused"
   ).length;
 
   const showSearch = searchResults !== null;
@@ -798,6 +799,7 @@ export default function App() {
       <Sidebar
         active={active}
         downloadCount={activeDownloads}
+        activeDownloads={activeDownloadList}
         onSelect={(key) => {
           setActive(key);
           setQuery("");
