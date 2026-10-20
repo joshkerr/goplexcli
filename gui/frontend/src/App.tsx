@@ -14,7 +14,7 @@ import type {
 } from "./lib/types";
 import { Sidebar, type NavKey } from "./components/Sidebar";
 import { PosterGrid } from "./components/PosterGrid";
-import { DetailModal } from "./components/DetailModal";
+import { DetailDrawer } from "./components/DetailDrawer";
 import { DownloadsPanel, isActive } from "./components/DownloadsPanel";
 import { Splash } from "./components/Splash";
 import { Toasts, type Toast } from "./components/Toasts";
@@ -600,7 +600,21 @@ export default function App() {
     [toast]
   );
 
-  // Run a field-scoped search (director/cast/genre click in the detail modal).
+  // Escape closes the detail drawer (a Select's own list, the conflict
+  // prompt and the fix-match panel handle their keys before this).
+  useEffect(() => {
+    if (!selected) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      const el = e.target as HTMLElement | null;
+      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return;
+      setSelected(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selected]);
+
+  // Run a field-scoped search (director/cast/genre click in the detail panel).
   // Setting the query drives the existing debounced search effect; closing the
   // modal reveals the results grid underneath. The query string doubles as the
   // search-box contents, so it's visible and clearable like any other search.
@@ -894,7 +908,10 @@ export default function App() {
         {/* Content. The poster grid owns its own scroll (it's virtualized) and
             stays mounted underneath the Downloads/Settings panels, which overlay
             it — so returning to the library preserves the scroll position. */}
-        <div className="relative min-h-0 flex-1 bg-ink-750">
+        {/* The grid keeps clear of the detail drawer (and reflows) while
+            one is open; it stays live, so another poster swaps the drawer's
+            title. */}
+        <div className={`relative min-h-0 flex-1 bg-ink-750 ${selected ? "pr-[32rem]" : ""}`}>
           <PosterGrid
             key={showSearch ? "search" : browseCategory}
             items={gridItems}
@@ -947,23 +964,23 @@ export default function App() {
             </div>
           )}
         </div>
+        {selected && (
+          <DetailDrawer
+            key={selected.key}
+            media={selected}
+            mpvAvailable={status.mpvAvailable}
+            rcloneAvailable={status.rcloneAvailable}
+            remoteServers={enabledRemotes.map((r) => r.name)}
+            isFavorite={favorites.has(selected.key)}
+            onToggleFavorite={toggleFavorite}
+            onClose={() => setSelected(null)}
+            onToast={toast}
+            onSearch={runFieldSearch}
+            onSelectSimilar={handleSelect}
+            onReopen={reopenItem}
+          />
+        )}
       </main>
-
-      {selected && (
-        <DetailModal
-          media={selected}
-          mpvAvailable={status.mpvAvailable}
-          rcloneAvailable={status.rcloneAvailable}
-          remoteServers={enabledRemotes.map((r) => r.name)}
-          isFavorite={favorites.has(selected.key)}
-          onToggleFavorite={toggleFavorite}
-          onClose={() => setSelected(null)}
-          onToast={toast}
-          onSearch={runFieldSearch}
-          onSelectSimilar={handleSelect}
-          onReopen={reopenItem}
-        />
-      )}
 
       <Toasts
         toasts={toasts}

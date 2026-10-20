@@ -421,6 +421,9 @@ func applyMovie(item *plex.MediaItem, m *tmdb.Movie) {
 	if m.PosterPath != "" {
 		item.Thumb = libserver.ThumbPath(m.PosterPath)
 	}
+	if m.BackdropPath != "" {
+		item.Art = libserver.ThumbPath(m.BackdropPath)
+	}
 }
 
 // ---- shows ----
@@ -755,6 +758,9 @@ func applyShow(item *plex.MediaItem, s *tmdb.Show) {
 	if s.PosterPath != "" {
 		item.GrandparentThumb = libserver.ThumbPath(s.PosterPath)
 		item.Thumb = item.GrandparentThumb
+	}
+	if s.BackdropPath != "" {
+		item.Art = libserver.ThumbPath(s.BackdropPath)
 	}
 }
 

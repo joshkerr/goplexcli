@@ -39,6 +39,10 @@ export default {
           "0%": { opacity: "0", transform: "translateY(6px)" },
           "100%": { opacity: "1", transform: "translateY(0)" },
         },
+        "slide-in": {
+          "0%": { opacity: "0", transform: "translateX(24px)" },
+          "100%": { opacity: "1", transform: "translateX(0)" },
+        },
         breathe: {
           "0%, 100%": { transform: "scale(1)" },
           "50%": { transform: "scale(1.05)" },
@@ -50,6 +54,7 @@ export default {
       },
       animation: {
         "fade-in": "fade-in 0.18s ease-out",
+        "slide-in": "slide-in 0.2s ease-out",
         breathe: "breathe 3s ease-in-out infinite",
         glow: "glow 3s ease-in-out infinite",
       },

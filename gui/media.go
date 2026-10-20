@@ -35,6 +35,8 @@ type MediaDTO struct {
 	ViewCount     int     `json:"viewCount"`
 	ProgressPct   int     `json:"progressPct"`
 	ThumbURL      string  `json:"thumbURL"`
+	ArtURL        string  `json:"artURL"` // widescreen background art for the detail panel; "" when none
+	Aired         string  `json:"aired"`  // release / original air date ("2021-07-23"); "" when unknown
 	ServerName    string  `json:"serverName"`
 	EpisodeCount  int     `json:"episodeCount"` // for show rows
 }
@@ -125,6 +127,24 @@ func (a *App) thumbURL(item *plex.MediaItem, width, height int) string {
 	})
 }
 
+// artURL registers the item's widescreen background art (Plex "art", or
+// the TMDB backdrop of a locally indexed title) at a size for the detail
+// panel's hero band; "" when the item has none (a library indexed before
+// art was captured).
+func (a *App) artURL(item *plex.MediaItem) string {
+	if item.Art == "" || item.ServerURL == "" {
+		return ""
+	}
+	base := strings.TrimRight(item.ServerURL, "/")
+	return a.posters.register(posterSource{
+		ServerURL: base,
+		ThumbPath: item.Art,
+		Token:     a.config().TokenForURL(base),
+		Width:     1280,
+		Height:    720,
+	})
+}
+
 // showThumbURL builds a poster URL for a show card derived from one of its
 // episodes. It prefers the show poster (the episode's grandparentThumb) over the
 // episode still (Thumb), which is only a screenshot from that episode. Older
@@ -170,6 +190,8 @@ func (a *App) toDTO(item *plex.MediaItem) MediaDTO {
 		ViewCount:     item.ViewCount,
 		ProgressPct:   progressPct(item),
 		ThumbURL:      a.thumbURL(item, 500, 750),
+		ArtURL:        a.artURL(item),
+		Aired:         item.OriginallyAired,
 		ServerName:    item.ServerName,
 	}
 }
@@ -353,7 +375,14 @@ func (a *App) showDTO(c *cache.Cache, title string) (MediaDTO, error) {
 			dto.Year = item.Year
 			dto.Summary = item.Summary
 			dto.Genre = item.Genre
+			// Show-level facts ride on every episode (Plex and the local
+			// index both stamp them there).
+			dto.ContentRating = item.ContentRating
+			dto.Studio = item.Studio
+			dto.Director = item.Director
+			dto.Cast = item.Cast
 			dto.ThumbURL = a.showThumbURL(item, 500, 750)
+			dto.ArtURL = a.artURL(item)
 			dto.ServerName = item.ServerName
 			found = true
 		}

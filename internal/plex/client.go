@@ -89,6 +89,7 @@ type MediaItem struct {
 	ParentIndex      int64  // Season number for episodes
 	Thumb            string // Poster/thumbnail URL path (episode still for episodes)
 	GrandparentThumb string // For episodes: the show poster path (grandparentThumb)
+	Art              string // Widescreen background art path ("art"); the show's for episodes
 	ServerName       string // Name of the Plex server this item belongs to
 	ServerURL        string // URL of the Plex server this item belongs to
 	ViewOffset       int    // Playback position in milliseconds (0 if not started)
@@ -103,6 +104,16 @@ type MediaItem struct {
 	OriginallyAired  string // Original air date for episodes
 	OriginalTitle    string // Native-language title when it differs from Title (movies)
 	AudioLanguages   string // Distinct audio-track language tags, comma-separated (movies; "" if unknown)
+}
+
+// firstNonEmpty returns the first of its arguments that isn't "".
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // New creates a new Plex client
@@ -471,6 +482,8 @@ type sectionMetadata struct {
 	Duration              *int         `json:"duration"`
 	Thumb                 *string      `json:"thumb"`
 	GrandparentThumb      *string      `json:"grandparentThumb"`
+	Art                   *string      `json:"art"`
+	GrandparentArt        *string      `json:"grandparentArt"`
 	GrandparentTitle      *string      `json:"grandparentTitle"`
 	ParentTitle           *string      `json:"parentTitle"`
 	Index                 *int         `json:"index"`
@@ -579,6 +592,7 @@ func (c *Client) getMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 				Rating:          float64(valueOrZeroFloat32(metadata.Rating)),
 				Duration:        valueOrZeroInt(metadata.Duration),
 				Thumb:           valueOrEmpty(metadata.Thumb),
+				Art:             valueOrEmpty(metadata.Art),
 				ServerName:      c.serverName,
 				ServerURL:       c.serverURL,
 				ViewOffset:      valueOrZeroInt(metadata.ViewOffset),
@@ -627,6 +641,7 @@ func (c *Client) getMediaFromSection(ctx context.Context, sectionKey, sectionTyp
 				Duration:         valueOrZeroInt(metadata.Duration),
 				Thumb:            valueOrEmpty(metadata.Thumb),
 				GrandparentThumb: valueOrEmpty(metadata.GrandparentThumb),
+				Art:              firstNonEmpty(valueOrEmpty(metadata.GrandparentArt), valueOrEmpty(metadata.Art)),
 				ParentTitle:      valueOrEmpty(metadata.GrandparentTitle),
 				GrandTitle:       valueOrEmpty(metadata.ParentTitle),
 				Index:            int64(valueOrZeroInt(metadata.Index)),

@@ -111,6 +111,8 @@ export interface Media {
   viewCount: number;
   progressPct: number;
   thumbURL: string;
+  artURL: string; // widescreen background art for the detail panel; "" when none
+  aired: string; // release / original air date ("2021-07-23"); "" when unknown
   serverName: string;
   episodeCount: number;
 }

@@ -12,7 +12,16 @@ import type {
 import { formatDuration, formatRating } from "../lib/format";
 import { ConflictModal } from "./ConflictModal";
 import {
-  CloseIcon,
+  Action,
+  ActionGroup,
+  DetailPanel,
+  Facts,
+  Overview,
+  PrimaryAction,
+  Section,
+  dateLabel,
+} from "./DetailPanel";
+import {
   DownloadIcon,
   FilmIcon,
   PlayIcon,
@@ -35,12 +44,12 @@ interface Props {
   onClose: () => void;
   onToast: (msg: string, kind?: "info" | "error") => void;
   // Run a field-scoped search (e.g. all movies by a director). Called when a
-  // director/cast/genre tag is clicked; the caller closes this modal.
+  // director/cast/genre tag is clicked; the caller closes this panel.
   onSearch: (query: string) => void;
-  // Open another item's detail view (a "More like this" card was clicked);
-  // the caller swaps this modal's content to the new item.
+  // Open another item in the panel (a "More like this" card, an episode's
+  // show); the caller swaps the panel's content to the new item.
   onSelectSimilar: (card: MediaCard) => void;
-  // Reload this modal with the item at `key` after its metadata changed (a
+  // Reload the panel with the item at `key` after its metadata changed (a
   // TMDB match was fixed). The key differs from media.key when a show was
   // renamed by the new match.
   onReopen: (key: string) => void;
@@ -317,34 +326,6 @@ function MatchRow({
   );
 }
 
-// FavoriteButton is the star toggle shared by the movie and show detail views.
-function FavoriteButton({
-  isFavorite,
-  onClick,
-  compact = false,
-}: {
-  isFavorite: boolean;
-  onClick: () => void;
-  compact?: boolean;
-}) {
-  const Icon = isFavorite ? StarIcon : StarOutlineIcon;
-  return (
-    <button
-      onClick={onClick}
-      className={`flex items-center gap-2 rounded-lg font-semibold transition-colors ${
-        compact ? "px-3 py-1.5 text-xs" : "px-4 py-2.5 text-sm"
-      } ${
-        isFavorite
-          ? "bg-accent/15 text-accent-soft hover:bg-accent/25"
-          : "bg-white/10 text-white hover:bg-white/20"
-      }`}
-    >
-      <Icon width={compact ? 15 : 18} height={compact ? 15 : 18} />
-      {isFavorite ? "Favorited" : "Favorite"}
-    </button>
-  );
-}
-
 // TagLinks splits a comma-separated tag field ("Tom Hardy, Cillian Murphy")
 // into individually clickable names. Clicking one runs a field-scoped search
 // (`field:"Name"`) so the grid shows every movie with that director/actor/genre.
@@ -378,77 +359,40 @@ function TagLinks({
   );
 }
 
-export function DetailModal(props: Props) {
-  const { media } = props;
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-6 animate-fade-in"
-      onClick={props.onClose}
-    >
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
-      <div
-        className="relative z-10 flex max-h-[86vh] w-full max-w-3xl overflow-hidden rounded-2xl border border-white/10 bg-ink-700 shadow-card"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <button
-          onClick={props.onClose}
-          className="absolute right-3 top-3 z-20 flex h-8 w-8 items-center justify-center rounded-full bg-black/40 text-white/70 transition-colors hover:bg-black/70 hover:text-white"
-        >
-          <CloseIcon width={18} height={18} />
-        </button>
-        {media.type === "show" ? (
-          <ShowDetail {...props} />
-        ) : (
-          <ItemDetail {...props} />
-        )}
-      </div>
-    </div>
-  );
+
+/** The drawer behind a poster click: the title's art, facts and synopsis,
+ * its actions grouped by what they do, and for a show its seasons and
+ * episodes. */
+export function DetailDrawer(props: Props) {
+  return props.media.type === "show" ? <ShowDrawer {...props} /> : <ItemDrawer {...props} />;
 }
 
-function Poster({ media }: { media: Media }) {
-  const Placeholder = media.type === "show" ? TvIcon : FilmIcon;
-  return (
-    <div className="aspect-[2/3] w-48 shrink-0 overflow-hidden rounded-xl bg-ink-600 ring-1 ring-white/10">
-      {media.thumbURL ? (
-        <img src={media.thumbURL} alt={media.title} className="h-full w-full object-cover" />
-      ) : (
-        <div className="flex h-full w-full items-center justify-center text-white/20">
-          <Placeholder width={48} height={48} />
-        </div>
-      )}
-    </div>
-  );
-}
-
-function MetaRow({ media }: { media: Media }) {
+/** The facts line under the title: year · runtime · rating · ★ score. */
+function metaParts(media: Media): string[] {
   const bits: string[] = [];
-  if (media.year > 0) bits.push(String(media.year));
-  if (media.contentRating) bits.push(media.contentRating);
+  if (media.type === "episode") bits.push(`S${pad(media.parentIndex)}E${pad(media.index)}`);
+  if (media.year > 0 && media.type !== "episode") bits.push(String(media.year));
+  if (media.type === "episode" && media.aired) bits.push(dateLabel(media.aired));
   const dur = formatDuration(media.duration);
   if (dur) bits.push(dur);
+  if (media.contentRating) bits.push(media.contentRating);
   const rating = formatRating(media.rating);
-  return (
-    <div className="flex flex-wrap items-center gap-3 text-sm text-white/50">
-      {bits.map((b, i) => (
-        <span key={i}>{b}</span>
-      ))}
-      {rating && (
-        <span className="flex items-center gap-1 text-accent-soft">
-          <StarIcon width={14} height={14} /> {rating}
-        </span>
-      )}
-    </div>
-  );
+  if (rating) bits.push(`★ ${rating}`);
+  return bits;
 }
 
-function ItemDetail(props: Props) {
-  const { media, mpvAvailable, rcloneAvailable, remoteServers, onToast, onSearch } =
-    props;
+/** Where the item comes from, for the facts: "Thevault · Plex". */
+function sourceLabel(media: Media): string {
+  if (!media.serverName) return "";
+  return `${media.serverName} · ${media.key.startsWith("/local/metadata/") ? "local library" : "Plex"}`;
+}
+
+function ItemDrawer(props: Props) {
+  const { media, mpvAvailable, rcloneAvailable, remoteServers, onToast, onSearch } = props;
   const [busy, setBusy] = useState(false);
   // Download button feedback: "queued" flips instantly on click (highlight +
   // disable, so the press visibly registered), "done" when the transfer
-  // finishes. Reset when the modal swaps to another item ("More like this").
+  // finishes. Reset when the panel swaps to another item.
   const [dlState, setDlState] = useState<"idle" | "queued" | "done">("idle");
   // Where the download runs: "" = this computer, else a remote server name.
   const [target, setTarget] = useState("");
@@ -462,6 +406,7 @@ function ItemDetail(props: Props) {
     setFixing(false);
   }, [media.key]);
   const canResume = media.viewOffset > 0 && media.progressPct < 95;
+  const isEpisode = media.type === "episode";
 
   const play = async (resume: boolean) => {
     if (!mpvAvailable) {
@@ -527,134 +472,155 @@ function ItemDetail(props: Props) {
     }
   };
 
+  const downloadLabel =
+    dlState === "idle"
+      ? "Download"
+      : dlState === "queued"
+        ? target
+          ? "Sending…"
+          : "Queued"
+        : target
+          ? "Sent"
+          : "Downloaded";
+
   return (
-    <div className="flex w-full flex-col overflow-y-auto">
-      <div className="flex gap-6 p-6">
-        <Poster media={media} />
-        <div className="flex min-w-0 flex-1 flex-col">
-          {media.type === "episode" && media.parentTitle && (
-            <div className="text-xs font-semibold uppercase tracking-widest text-accent/80">
-              {media.parentTitle}
-            </div>
-          )}
-          <h2 className="mt-1 text-2xl font-semibold leading-tight text-white">
-            {media.type === "episode"
-              ? `S${pad(media.parentIndex)}E${pad(media.index)} · ${media.title}`
-              : media.title}
-          </h2>
-          <div className="mt-2">
-            <MetaRow media={media} />
-          </div>
+    <DetailPanel
+      label={media.title}
+      onClose={props.onClose}
+      art={media.artURL}
+      poster={media.thumbURL}
+      posterPlaceholder={<FilmIcon width={28} height={28} />}
+      wideThumb={isEpisode}
+      progress={media.progressPct}
+      kicker={
+        isEpisode && media.parentTitle ? (
+          <button
+            type="button"
+            onClick={() =>
+              props.onSelectSimilar({
+                key: `show:${media.parentTitle}`,
+                type: "show",
+                title: media.parentTitle,
+                year: 0,
+                displayTitle: media.parentTitle,
+                thumbURL: "",
+                progressPct: 0,
+                viewCount: 0,
+                episodeCount: 0,
+                newCount: 0,
+              })
+            }
+            className="rounded text-accent/90 transition-colors hover:text-accent hover:underline focus:outline-none"
+            title="Open the show"
+          >
+            {media.parentTitle} ›
+          </button>
+        ) : undefined
+      }
+      title={media.title}
+      meta={metaParts(media)}
+      actions={
+        <>
+          <PrimaryAction
+            disabled={busy}
+            onClick={() => play(canResume)}
+            icon={canResume ? <ResumeIcon width={18} height={18} /> : <PlayIcon width={18} height={18} />}
+            title={mpvAvailable ? "Play in mpv" : "mpv is not installed"}
+          >
+            {canResume ? `Resume · ${media.progressPct}%` : "Play"}
+          </PrimaryAction>
 
-          {media.genre && (
-            <div className="mt-3 text-xs text-white/40">
-              <TagLinks field="genre" value={media.genre} onSearch={onSearch} />
-            </div>
+          {(canResume || media.type === "movie") && (
+            <ActionGroup label="Watch">
+              {canResume && (
+                <Action disabled={busy} onClick={() => play(false)} icon={<PlayIcon width={16} height={16} />}>
+                  Play from start
+                </Action>
+              )}
+              {media.type === "movie" && (
+                <Action
+                  onClick={() => props.onToggleFavorite(media.key)}
+                  active={props.isFavorite}
+                  icon={
+                    props.isFavorite ? (
+                      <StarIcon width={16} height={16} />
+                    ) : (
+                      <StarOutlineIcon width={16} height={16} />
+                    )
+                  }
+                >
+                  {props.isFavorite ? "Favorited" : "Favorite"}
+                </Action>
+              )}
+            </ActionGroup>
           )}
 
-          {media.summary && (
-            <p className="mt-4 max-h-40 overflow-y-auto text-sm leading-relaxed text-white/70">
-              {media.summary}
-            </p>
-          )}
-
-          {media.cast && (
-            <div className="mt-4 text-xs text-white/40">
-              <span className="font-semibold text-white/55">Cast: </span>
-              <TagLinks field="cast" value={media.cast} onSearch={onSearch} />
-            </div>
-          )}
-          {media.director && (
-            <div className="mt-1 text-xs text-white/40">
-              <span className="font-semibold text-white/55">Director: </span>
-              <TagLinks field="director" value={media.director} onSearch={onSearch} />
-            </div>
-          )}
-          {media.serverName && (
-            <div className="mt-1 text-xs text-white/40">
-              <span className="font-semibold text-white/55">Source: </span>
-              {media.serverName}
-              <span className="text-white/25">
-                {media.key.startsWith("/local/metadata/")
-                  ? " · local library"
-                  : " · Plex"}
-              </span>
-            </div>
-          )}
-          {canFixMatch(media) && (
-            <div className="mt-1 text-xs">
-              <FixMatchButton open={fixing} onClick={() => setFixing((f) => !f)} />
-            </div>
-          )}
-
-          <div className="mt-auto flex flex-wrap gap-3 pt-6">
-            {canResume && (
-              <button
-                disabled={busy}
-                onClick={() => play(true)}
-                className="flex items-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-ink-900 transition-colors hover:bg-accent-soft disabled:opacity-50"
-              >
-                <ResumeIcon width={18} height={18} /> Resume {media.progressPct}%
-              </button>
-            )}
-            <button
-              disabled={busy}
-              onClick={() => play(false)}
-              className={`flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors disabled:opacity-50 ${
-                canResume
-                  ? "bg-white/10 text-white hover:bg-white/20"
-                  : "bg-accent text-ink-900 hover:bg-accent-soft"
-              }`}
-            >
-              <PlayIcon width={18} height={18} /> {canResume ? "Play from start" : "Play"}
-            </button>
-            <button
+          <ActionGroup label="Download">
+            <Action
               onClick={download}
               disabled={dlState !== "idle"}
-              className={`flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-all ${
-                dlState === "idle"
-                  ? "bg-white/10 text-white hover:bg-white/20"
-                  : "cursor-default bg-accent/20 text-accent-soft"
-              }`}
+              active={dlState !== "idle"}
+              icon={<DownloadIcon width={16} height={16} />}
+              title={target ? `Download on ${target}` : "Download with rclone to this computer"}
             >
-              <DownloadIcon width={18} height={18} />{" "}
-              {dlState === "idle"
-                ? "Download"
-                : dlState === "queued"
-                ? target
-                  ? "Sending…"
-                  : "Queued"
-                : target
-                ? "Sent"
-                : "Downloaded"}
-            </button>
+              {downloadLabel}
+            </Action>
             {remoteServers.length > 0 && (
-              <TargetPicker
-                target={target}
-                servers={remoteServers}
-                onChange={setTarget}
-              />
+              <TargetPicker target={target} servers={remoteServers} onChange={setTarget} />
             )}
-            {media.type === "movie" && (
-              <FavoriteButton
-                isFavorite={props.isFavorite}
-                onClick={() => props.onToggleFavorite(media.key)}
-              />
-            )}
-          </div>
-        </div>
-      </div>
+          </ActionGroup>
+
+          {canFixMatch(media) && (
+            <ActionGroup label="Library">
+              <Action onClick={() => setFixing((f) => !f)} active={fixing}>
+                {fixing ? "Cancel fix match" : "Fix match…"}
+              </Action>
+            </ActionGroup>
+          )}
+        </>
+      }
+    >
       {fixing && (
-        <div className="px-6 pb-6">
-          <FixMatchPanel
-            media={media}
-            onToast={onToast}
-            onReopen={props.onReopen}
-            onClose={() => setFixing(false)}
-          />
-        </div>
+        <FixMatchPanel
+          media={media}
+          onToast={onToast}
+          onReopen={props.onReopen}
+          onClose={() => setFixing(false)}
+        />
       )}
+
+      {media.summary && (
+        <Section title={isEpisode ? "This episode" : "Synopsis"}>
+          <div className="flex gap-4">
+            {/* The episode's own still, when the band shows the show's art. */}
+            {isEpisode && media.artURL && media.thumbURL && (
+              <img
+                src={media.thumbURL}
+                alt=""
+                draggable={false}
+                className="w-36 shrink-0 self-start rounded-md shadow-card ring-1 ring-white/10"
+              />
+            )}
+            <Overview text={media.summary} />
+          </div>
+        </Section>
+      )}
+
+      <Section title="Details">
+        <Facts
+          items={[
+            [isEpisode ? "Show" : "Directed by", isEpisode ? media.parentTitle : media.director && <TagLinks field="director" value={media.director} onSearch={onSearch} />],
+            ["Cast", media.cast && <TagLinks field="cast" value={media.cast} onSearch={onSearch} />],
+            ["Genres", media.genre && <TagLinks field="genre" value={media.genre} onSearch={onSearch} />],
+            ["Studio", media.studio],
+            [isEpisode ? "Aired" : "Released", media.aired && dateLabel(media.aired)],
+            ["Source", sourceLabel(media)],
+          ]}
+        />
+      </Section>
+
       <MoreLikeThis media={media} onSelect={props.onSelectSimilar} />
+
       {conflicts && (
         <ConflictModal
           conflicts={conflicts}
@@ -665,7 +631,7 @@ function ItemDetail(props: Props) {
           }}
         />
       )}
-    </div>
+    </DetailPanel>
   );
 }
 
@@ -692,7 +658,7 @@ function TargetPicker({
         ...servers.map((s) => ({ value: s, label: `To: ⇄ ${s}` })),
       ]}
       title="Where the download runs"
-      className={`bg-ink-800 text-white ${compact ? "px-2 py-2 text-sm" : "px-2.5 py-2.5 text-sm"}`}
+      className={`bg-ink-700 text-white ${compact ? "px-2 py-2 text-sm" : "h-9 w-full px-3 text-sm"}`}
     />
   );
 }
@@ -726,11 +692,8 @@ function MoreLikeThis({
 
   if (cards.length === 0) return null;
   return (
-    <div className="border-t border-white/5 px-6 pb-6 pt-4">
-      <div className="text-xs font-semibold uppercase tracking-widest text-white/40">
-        More like this
-      </div>
-      <div className="mt-3 flex gap-3 overflow-x-auto pb-1">
+    <Section title="More like this">
+      <div className="flex gap-3 overflow-x-auto pb-1">
         {cards.map((card) => {
           const Placeholder = card.type === "show" ? TvIcon : FilmIcon;
           return (
@@ -762,34 +725,33 @@ function MoreLikeThis({
           );
         })}
       </div>
-    </div>
+    </Section>
   );
 }
 
-function ShowDetail(props: Props) {
-  const { media, mpvAvailable, rcloneAvailable, remoteServers, onToast } = props;
+
+function ShowDrawer(props: Props) {
+  const { media, mpvAvailable, rcloneAvailable, remoteServers, onToast, onSearch } = props;
   const [seasons, setSeasons] = useState<Season[]>([]);
   const [season, setSeason] = useState<number | null>(null);
   const [episodes, setEpisodes] = useState<Media[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
-  // Brief "Queued" confirmation on the episode Download button, mirroring the
+  // Brief "Queued" confirmation on the Download buttons, mirroring the
   // movie download button's press feedback.
-  const [epQueued, setEpQueued] = useState(false);
+  const [queued, setQueued] = useState(false);
   // Where the download runs: "" = this computer, else a remote server name.
   const [target, setTarget] = useState("");
-  // Destination files that already exist for the pending selection; non-null
-  // shows the conflict prompt. keys captures the selection at check time so
-  // the choice applies to exactly the files the user was warned about.
-  const [conflicts, setConflicts] = useState<{
-    keys: string[];
-    files: DownloadConflict[];
-  } | null>(null);
+  // Destination files that already exist for the pending keys; non-null
+  // shows the conflict prompt. keys captures the set at check time so the
+  // choice applies to exactly the files the user was warned about.
+  const [conflicts, setConflicts] = useState<{ keys: string[]; files: DownloadConflict[] } | null>(null);
   // Whether the inline "Fix match" TMDB search panel is open.
   const [fixing, setFixing] = useState(false);
 
   useEffect(() => {
     setFixing(false);
+    setLoading(true);
     api.getSeasons(media.title).then((s) => {
       setSeasons(s);
       setLoading(false);
@@ -812,20 +774,9 @@ function ShowDetail(props: Props) {
     });
   };
 
-  const orderedSelection = () =>
-    episodes.filter((e) => selected.has(e.key)).map((e) => e.key);
+  const orderedSelection = () => episodes.filter((e) => selected.has(e.key)).map((e) => e.key);
 
-  const playEpisode = async (key: string) => {
-    if (!mpvAvailable) return onToast("mpv is not installed", "error");
-    try {
-      await api.play([key], false);
-    } catch (e: any) {
-      onToast(String(e?.message ?? e), "error");
-    }
-  };
-
-  const playSelected = async () => {
-    const keys = orderedSelection();
+  const playKeys = async (keys: string[]) => {
     if (keys.length === 0) return;
     if (!mpvAvailable) return onToast("mpv is not installed", "error");
     try {
@@ -835,8 +786,7 @@ function ShowDetail(props: Props) {
     }
   };
 
-  const downloadSelected = async () => {
-    const keys = orderedSelection();
+  const downloadKeys = async (keys: string[]) => {
     if (keys.length === 0) return;
     if (target) {
       // The files land on the remote machine, so existing-file conflicts
@@ -844,8 +794,7 @@ function ShowDetail(props: Props) {
       try {
         await api.downloadRemote(keys, target, "");
         onToast(`Sent ${keys.length} episode(s) to ${target}`);
-        setEpQueued(true);
-        setTimeout(() => setEpQueued(false), 2000);
+        flashQueued();
       } catch (e: any) {
         onToast(String(e?.message ?? e), "error");
       }
@@ -865,179 +814,257 @@ function ShowDetail(props: Props) {
     await startDownload(keys, "");
   };
 
+  const flashQueued = () => {
+    setQueued(true);
+    setTimeout(() => setQueued(false), 2000);
+  };
+
   // startDownload runs the transfer with the chosen existing-file policy
   // (picked in ConflictModal when some destination files already exist).
   const startDownload = async (keys: string[], onExisting: OnExisting) => {
     try {
       onToast(`Downloading ${keys.length} episode(s)…`);
       await api.download(keys, "", onExisting);
-      setEpQueued(true);
-      setTimeout(() => setEpQueued(false), 2000);
+      flashQueued();
     } catch (e: any) {
       onToast(String(e?.message ?? e), "error");
     }
   };
 
+  const seasonName = (n: number) => (n === 0 ? "Specials" : `Season ${n}`);
+  const meta: string[] = [];
+  if (media.year > 0) meta.push(String(media.year));
+  if (media.contentRating) meta.push(media.contentRating);
+  if (seasons.length > 0) meta.push(`${seasons.length} season${seasons.length === 1 ? "" : "s"}`);
+  if (media.episodeCount > 0) meta.push(`${media.episodeCount} episode${media.episodeCount === 1 ? "" : "s"}`);
+
   return (
-    <div className="flex max-h-[86vh] w-full flex-col">
-      <div className="flex gap-5 border-b border-white/5 p-6">
-        <div className="aspect-[2/3] w-32 shrink-0 overflow-hidden rounded-lg bg-ink-600 ring-1 ring-white/10">
-          {media.thumbURL ? (
-            <img src={media.thumbURL} alt={media.title} className="h-full w-full object-cover" />
-          ) : (
-            <div className="flex h-full w-full items-center justify-center text-white/20">
-              <TvIcon width={40} height={40} />
-            </div>
-          )}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="text-xs font-semibold uppercase tracking-widest text-accent/80">
-            TV Show
-          </div>
-          <div className="mt-1 flex items-center gap-3">
-            <h2 className="min-w-0 truncate text-2xl font-semibold text-white">{media.title}</h2>
-            <FavoriteButton
-              compact
-              isFavorite={props.isFavorite}
-              onClick={() => props.onToggleFavorite(media.key)}
-            />
-          </div>
-          {media.genre && <div className="mt-1 text-xs text-white/40">{media.genre}</div>}
-          {media.summary && (
-            <p className="mt-3 max-h-20 overflow-y-auto text-sm leading-relaxed text-white/60">
-              {media.summary}
-            </p>
-          )}
-          {(media.serverName || canFixMatch(media)) && (
-            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-white/40">
-              {media.serverName && (
-                <span>
-                  <span className="font-semibold text-white/55">Source: </span>
-                  {media.serverName}
-                </span>
-              )}
-              {canFixMatch(media) && (
-                <FixMatchButton open={fixing} onClick={() => setFixing((f) => !f)} />
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {fixing && (
-        <div className="max-h-[55vh] shrink-0 overflow-y-auto border-b border-white/5 px-6 py-4">
-          <FixMatchPanel
-            media={media}
-            onToast={onToast}
-            onReopen={props.onReopen}
-            onClose={() => setFixing(false)}
-          />
-        </div>
-      )}
-
-      {/* Season tabs */}
-      <div className="flex shrink-0 gap-2 overflow-x-auto border-b border-white/5 px-6 py-3">
-        {loading && <span className="text-sm text-white/40">Loading seasons…</span>}
-        {seasons.map((s) => (
-          <button
-            key={s.season}
-            onClick={() => loadSeason(s.season)}
-            className={`whitespace-nowrap rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors ${
-              season === s.season
-                ? "bg-accent text-ink-900"
-                : "bg-white/5 text-white/60 hover:bg-white/10 hover:text-white"
-            }`}
+    <DetailPanel
+      label={media.title}
+      onClose={props.onClose}
+      art={media.artURL}
+      poster={media.thumbURL}
+      posterPlaceholder={<TvIcon width={28} height={28} />}
+      title={media.title}
+      meta={meta}
+      actions={
+        <>
+          <PrimaryAction
+            disabled={episodes.length === 0}
+            onClick={() => playKeys(episodes.map((e) => e.key))}
+            icon={<PlayIcon width={18} height={18} />}
+            title={
+              season === null
+                ? undefined
+                : `Play every episode of ${seasonName(season)} in order${mpvAvailable ? "" : " — mpv is not installed"}`
+            }
           >
-            {s.season === 0 ? "Specials" : `Season ${s.season}`}
-          </button>
-        ))}
-      </div>
+            {season === null ? "Play" : `Play ${seasonName(season)}`}
+          </PrimaryAction>
 
-      {/* Episodes */}
-      <div className="flex-1 overflow-y-auto px-3 py-2">
-        {episodes.map((ep) => {
-          const isSel = selected.has(ep.key);
-          return (
-            <div
-              key={ep.key}
-              className={`group flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors ${
-                isSel ? "bg-accent/10" : "hover:bg-white/5"
-              }`}
+          <ActionGroup label="Watch">
+            <Action
+              onClick={() => props.onToggleFavorite(media.key)}
+              active={props.isFavorite}
+              icon={
+                props.isFavorite ? <StarIcon width={16} height={16} /> : <StarOutlineIcon width={16} height={16} />
+              }
             >
-              <input
-                type="checkbox"
-                checked={isSel}
-                onChange={() => toggle(ep.key)}
-                className="h-4 w-4 shrink-0 accent-accent"
-              />
+              {props.isFavorite ? "Favorited" : "Favorite"}
+            </Action>
+          </ActionGroup>
+
+          <ActionGroup label="Download">
+            <Action
+              onClick={() => downloadKeys(episodes.map((e) => e.key))}
+              disabled={queued || episodes.length === 0}
+              active={queued}
+              icon={<DownloadIcon width={16} height={16} />}
+              title={season === null ? undefined : `Download every episode of ${seasonName(season)}`}
+            >
+              {queued ? "Queued" : season === null ? "Download" : `Download ${seasonName(season)}`}
+            </Action>
+            {remoteServers.length > 0 && (
+              <TargetPicker target={target} servers={remoteServers} onChange={setTarget} />
+            )}
+          </ActionGroup>
+
+          {canFixMatch(media) && (
+            <ActionGroup label="Library">
+              <Action onClick={() => setFixing((f) => !f)} active={fixing}>
+                {fixing ? "Cancel fix match" : "Fix match…"}
+              </Action>
+            </ActionGroup>
+          )}
+        </>
+      }
+      footer={
+        selected.size > 0 ? (
+          <div className="flex shrink-0 items-center justify-between gap-3 border-t border-white/10 bg-ink-800/95 px-5 py-3">
+            <span className="text-sm text-white/60">{selected.size} selected</span>
+            <div className="flex gap-2">
               <button
-                onClick={() => playEpisode(ep.key)}
-                className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                type="button"
+                onClick={() => playKeys(orderedSelection())}
+                className="flex items-center gap-2 rounded-lg bg-accent px-3.5 py-2 text-sm font-semibold text-ink-900 hover:bg-accent-soft"
               >
-                <span className="w-8 shrink-0 text-center text-sm font-semibold text-white/40">
-                  {ep.index}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium text-white/90">
-                    {ep.title}
-                  </span>
-                  {ep.progressPct > 0 && ep.progressPct < 95 && (
-                    <span className="text-xs text-accent/80">Watched {ep.progressPct}%</span>
-                  )}
-                </span>
-                {formatDuration(ep.duration) && (
-                  <span className="shrink-0 text-xs text-white/30">
-                    {formatDuration(ep.duration)}
-                  </span>
-                )}
-                <PlayIcon
-                  width={16}
-                  height={16}
-                  className="shrink-0 text-white/0 transition-colors group-hover:text-white/70"
-                />
+                <PlayIcon width={16} height={16} /> Play
+              </button>
+              <button
+                type="button"
+                onClick={() => downloadKeys(orderedSelection())}
+                disabled={queued}
+                className={`flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-semibold transition-all ${
+                  queued ? "cursor-default bg-accent/20 text-accent-soft" : "bg-white/10 text-white hover:bg-white/20"
+                }`}
+              >
+                <DownloadIcon width={16} height={16} /> {queued ? "Queued" : "Download"}
               </button>
             </div>
-          );
-        })}
+          </div>
+        ) : undefined
+      }
+    >
+      {fixing && (
+        <FixMatchPanel
+          media={media}
+          onToast={onToast}
+          onReopen={props.onReopen}
+          onClose={() => setFixing(false)}
+        />
+      )}
+
+      {media.summary && (
+        <Section title="Synopsis">
+          <Overview text={media.summary} />
+        </Section>
+      )}
+
+      <Section title="Details">
+        <Facts
+          items={[
+            ["Created by", media.director && <TagLinks field="director" value={media.director} onSearch={onSearch} />],
+            ["Cast", media.cast && <TagLinks field="cast" value={media.cast} onSearch={onSearch} />],
+            ["Genres", media.genre && <TagLinks field="genre" value={media.genre} onSearch={onSearch} />],
+            ["Network", media.studio],
+            ["Source", sourceLabel(media)],
+          ]}
+        />
+      </Section>
+
+      <section>
+        {seasons.length > 1 && (
+          <div className="mb-3 flex flex-wrap gap-1.5" role="tablist" aria-label="Seasons">
+            {seasons.map((s) => (
+              <button
+                key={s.season}
+                type="button"
+                role="tab"
+                aria-selected={season === s.season}
+                onClick={() => loadSeason(s.season)}
+                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                  season === s.season
+                    ? "bg-accent text-ink-900"
+                    : "bg-white/5 text-white/60 hover:bg-white/10 hover:text-white"
+                }`}
+              >
+                {seasonName(s.season)}
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="mb-2 flex items-baseline gap-3">
+          <h2 className="text-base font-semibold text-white">
+            {loading ? "Seasons" : season === null ? "Episodes" : seasonName(season)}
+          </h2>
+          {loading ? (
+            <span className="text-xs text-white/45">Loading…</span>
+          ) : (
+            <span className="text-xs text-white/45">
+              {episodes.length} episode{episodes.length === 1 ? "" : "s"} · tick episodes to play or download a set
+            </span>
+          )}
+        </div>
+        <ul className="divide-y divide-white/5 overflow-hidden rounded-xl border border-white/10 bg-ink-750/60">
+          {episodes.map((ep) => {
+            const isSel = selected.has(ep.key);
+            const watched = ep.viewCount > 0 && (ep.progressPct >= 95 || ep.progressPct === 0);
+            const line: string[] = [];
+            if (ep.aired) line.push(dateLabel(ep.aired));
+            if (formatDuration(ep.duration)) line.push(formatDuration(ep.duration));
+            if (formatRating(ep.rating)) line.push(`★ ${formatRating(ep.rating)}`);
+            return (
+              <li
+                key={ep.key}
+                className={`group flex items-start gap-3 p-2 transition-colors ${isSel ? "bg-accent/10" : "hover:bg-white/[0.03]"}`}
+              >
+                <input
+                  type="checkbox"
+                  checked={isSel}
+                  onChange={() => toggle(ep.key)}
+                  aria-label={`Select episode ${ep.index}`}
+                  className="mt-7 h-4 w-4 shrink-0 accent-accent"
+                />
+                <button
+                  type="button"
+                  onClick={() => playKeys([ep.key])}
+                  className="flex min-w-0 flex-1 items-start gap-3 text-left focus:outline-none"
+                  title={mpvAvailable ? "Play" : "mpv is not installed"}
+                >
+                  <span className="relative block aspect-video w-28 shrink-0 overflow-hidden rounded-md bg-ink-600 ring-1 ring-white/10">
+                    {ep.thumbURL ? (
+                      <img
+                        src={ep.thumbURL}
+                        alt=""
+                        loading="lazy"
+                        decoding="async"
+                        draggable={false}
+                        className={`h-full w-full object-cover ${watched ? "opacity-70" : ""}`}
+                      />
+                    ) : (
+                      <span className="flex h-full w-full items-center justify-center text-white/20">
+                        <TvIcon width={18} height={18} />
+                      </span>
+                    )}
+                    {ep.progressPct > 0 && ep.progressPct < 95 && (
+                      <span className="absolute inset-x-0 bottom-0 h-1 bg-white/25">
+                        <span className="block h-full bg-accent" style={{ width: `${ep.progressPct}%` }} />
+                      </span>
+                    )}
+                    <PlayIcon
+                      width={22}
+                      height={22}
+                      className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-white/0 drop-shadow transition-colors group-hover:text-white"
+                    />
+                  </span>
+                  <span className="min-w-0 flex-1 py-0.5">
+                    <span className="flex items-baseline gap-2">
+                      <span className="shrink-0 font-mono text-[11px] text-white/45">E{pad(ep.index)}</span>
+                      <span className={`truncate text-sm font-medium ${watched ? "text-white/60" : "text-white/90"}`}>
+                        {ep.title}
+                      </span>
+                      {watched ? (
+                        <span className="ml-auto shrink-0 text-[11px] text-accent-soft">Watched</span>
+                      ) : ep.progressPct > 0 ? (
+                        <span className="ml-auto shrink-0 text-[11px] text-accent-soft">{ep.progressPct}%</span>
+                      ) : null}
+                    </span>
+                    {line.length > 0 && (
+                      <span className="mt-0.5 block truncate text-[11px] text-white/45">{line.join(" · ")}</span>
+                    )}
+                    {ep.summary && (
+                      <span className="mt-1 line-clamp-2 block text-xs leading-relaxed text-white/60">{ep.summary}</span>
+                    )}
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
         {!loading && episodes.length === 0 && (
           <div className="py-8 text-center text-sm text-white/40">No episodes</div>
         )}
-      </div>
-
-      {/* Selection action bar */}
-      {selected.size > 0 && (
-        <div className="flex shrink-0 items-center justify-between border-t border-white/5 bg-ink-800/60 px-6 py-3">
-          <span className="text-sm text-white/60">{selected.size} selected</span>
-          <div className="flex gap-2">
-            {remoteServers.length > 0 && (
-              <TargetPicker
-                compact
-                target={target}
-                servers={remoteServers}
-                onChange={setTarget}
-              />
-            )}
-            <button
-              onClick={playSelected}
-              className="flex items-center gap-2 rounded-lg bg-accent px-3.5 py-2 text-sm font-semibold text-ink-900 hover:bg-accent-soft"
-            >
-              <PlayIcon width={16} height={16} /> Play
-            </button>
-            <button
-              onClick={downloadSelected}
-              disabled={epQueued}
-              className={`flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-semibold transition-all ${
-                epQueued
-                  ? "cursor-default bg-accent/20 text-accent-soft"
-                  : "bg-white/10 text-white hover:bg-white/20"
-              }`}
-            >
-              <DownloadIcon width={16} height={16} />{" "}
-              {epQueued ? "Queued" : "Download"}
-            </button>
-          </div>
-        </div>
-      )}
+      </section>
 
       {conflicts && (
         <ConflictModal
@@ -1050,7 +1077,7 @@ function ShowDetail(props: Props) {
           }}
         />
       )}
-    </div>
+    </DetailPanel>
   );
 }
 
