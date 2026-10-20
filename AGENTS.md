@@ -828,6 +828,11 @@ Add feature for sorting media by rating
   full-size Plex artwork to poster cards.
 - `PosterGrid.tsx` prioritizes the visible viewport and performs bounded idle
   prefetching for upcoming rows.
+- When the poster grid changes columns or row height, preserve the first visible
+  item and its offset within the row. Keep browser scroll anchoring disabled on
+  its scroll container so it does not fight the virtualized spacer adjustments.
+  Wait for the resized rows to be measured before restoring the anchor. Run
+  `npm test` in `gui/frontend` for the scroll-reflow regression tests.
 - `make gui-dev` deliberately builds `frontend/dist` and launches the app with
   `go run -tags dev ./gui`. The `dev` tag is required by Wails. Do not switch
   it to the external Vite 5 dev server: that

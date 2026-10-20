@@ -127,6 +127,8 @@ icon-enabled executable is installed under
 4. Open any title for details, then **Play**/**Resume** (MPV) or **Download**
    (rclone, with live progress in the Downloads panel). TV shows drill into
    Season → Episode with multi-select for playlist playback or batch downloads.
+   Opening or closing the details pane keeps the poster grid at the same titles.
+   Selecting **Downloads** or **Settings** under **Activity** closes the detail panel.
 5. Keep the library fresh from **Settings → Library**: **Update** (fetch only
    newly-added titles), **Reindex** (rebuild from scratch), or **Sync from LAN**
    (pull the cache from another computer running GoplexCLI — see below).

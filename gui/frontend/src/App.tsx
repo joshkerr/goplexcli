@@ -816,6 +816,7 @@ export default function App() {
         activeDownloads={activeDownloadList}
         onSelect={(key) => {
           setActive(key);
+          if (!isCategory(key)) setSelected(null);
           setQuery("");
           setSearchResults(null);
         }}

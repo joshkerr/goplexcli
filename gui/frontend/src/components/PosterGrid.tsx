@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
+import { reflowScrollTop, type GridLayout } from "../lib/gridScroll";
 import type { MediaCard } from "../lib/types";
 import { PosterCard } from "./PosterCard";
 
@@ -43,6 +44,7 @@ export function PosterGrid({ items, loading, emptyMessage, onSelect, favorites, 
   const [scrollTop, setScrollTop] = useState(0);
   const [measuredRowH, setMeasuredRowH] = useState(0);
   const rafRef = useRef<number | null>(null);
+  const layoutRef = useRef<(GridLayout & { width: number }) | null>(null);
 
   // Measure the scroll container; re-measure on resize.
   useLayoutEffect(() => {
@@ -59,9 +61,13 @@ export function PosterGrid({ items, loading, emptyMessage, onSelect, favorites, 
   // frame fires (not when scheduled) so a fast drag lands on the latest
   // position instead of a frame-stale one.
   const onScroll = () => {
-    if (!scrollEl || rafRef.current != null) return;
+    if (!scrollEl || rafRef.current != null ||
+      scrollEl.clientWidth !== layoutRef.current?.width) return;
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = null;
+      // A resize can temporarily clamp scrollTop before ResizeObserver has
+      // updated the virtual rows. Don't replace the old anchor with that clamp.
+      if (scrollEl.clientWidth !== layoutRef.current?.width) return;
       setScrollTop(scrollEl.scrollTop);
     });
   };
@@ -83,24 +89,47 @@ export function PosterGrid({ items, loading, emptyMessage, onSelect, favorites, 
   const estRowH = Math.round(cardW * 1.5) + LABEL_H + GAP_Y;
   const rowH = measuredRowH > 0 ? measuredRowH : estRowH;
 
+  // Reflow around the visible item before calculating the rendered window.
+  // Restoring just the old pixel offset would jump to different posters when
+  // the details pane changes the column count.
+  const previousLayout = layoutRef.current;
+  const layoutChanged = previousLayout !== null &&
+    (previousLayout.width !== dims.width ||
+      previousLayout.cols !== cols || previousLayout.rowH !== rowH);
+  const viewportTop = layoutChanged
+    ? reflowScrollTop(scrollTop, previousLayout, { cols, rowH }, PAD_Y)
+    : scrollTop;
+
+  useLayoutEffect(() => {
+    // Wait for the new columns' actual row height before committing the
+    // anchor. An intermediate layout can clamp scrolling near the bottom.
+    const card = gridRef.current?.children[0] as HTMLElement | undefined;
+    if (scrollEl?.clientWidth !== dims.width ||
+      (card && Math.abs(card.offsetHeight + GAP_Y - rowH) > 0.5)) return;
+    layoutRef.current = { cols, rowH, width: dims.width };
+    if (!scrollEl || !layoutChanged) return;
+    scrollEl.scrollTop = viewportTop;
+    setScrollTop(scrollEl.scrollTop);
+  }, [scrollEl, dims.width, cols, rowH, layoutChanged, viewportTop]);
+
   const rowCount = Math.ceil(items.length / cols);
   const firstRow = Math.max(
     0,
-    Math.floor((scrollTop - PAD_Y) / rowH) - OVERSCAN
+    Math.min(rowCount - 1, Math.floor((viewportTop - PAD_Y) / rowH) - OVERSCAN)
   );
   const lastRow = Math.min(
     rowCount - 1,
-    Math.floor((scrollTop - PAD_Y + dims.height) / rowH) + OVERSCAN
+    Math.floor((viewportTop - PAD_Y + dims.height) / rowH) + OVERSCAN
   );
 
   const ready = dims.width > 0 && !loading && items.length > 0;
   const startIdx = ready ? firstRow * cols : 0;
   const endIdx = ready ? Math.min(items.length - 1, (lastRow + 1) * cols - 1) : -1;
   const visible = ready ? items.slice(startIdx, endIdx + 1) : [];
-  const viewportFirstRow = Math.max(0, Math.floor((scrollTop - PAD_Y) / rowH));
+  const viewportFirstRow = Math.max(0, Math.floor((viewportTop - PAD_Y) / rowH));
   const viewportLastRow = Math.min(
     rowCount - 1,
-    Math.floor((scrollTop - PAD_Y + dims.height) / rowH)
+    Math.floor((viewportTop - PAD_Y + dims.height) / rowH)
   );
 
   // Once scrolling settles, warm the posters across the rendered window (plus a
@@ -136,14 +165,14 @@ export function PosterGrid({ items, loading, emptyMessage, onSelect, favorites, 
   // updates on a real change (prevents an update loop).
   useLayoutEffect(() => {
     const el = gridRef.current;
-    if (!el || el.children.length === 0) return;
+    if (!el || el.children.length === 0 || scrollEl?.clientWidth !== dims.width) return;
     const cardH = (el.children[0] as HTMLElement).offsetHeight;
     const stride = cardH + GAP_Y;
     setMeasuredRowH((prev) => (Math.abs(prev - stride) > 0.5 ? stride : prev));
   });
 
   return (
-    <div ref={setScrollEl} onScroll={onScroll} className="h-full overflow-y-auto">
+    <div ref={setScrollEl} onScroll={onScroll} className="h-full overflow-y-auto" style={{ overflowAnchor: "none" }}>
       {loading ? (
         <div className="px-8 py-6">
           <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-x-5 gap-y-7">
