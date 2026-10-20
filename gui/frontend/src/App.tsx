@@ -394,6 +394,23 @@ export default function App() {
     [toast]
   );
 
+  const cancelAllDownloads = useCallback(
+    async (ids: string[]) => {
+      const results = await Promise.allSettled(
+        ids.map((id) =>
+          id.includes("!") ? api.cancelRemoteDownload(id) : api.cancelDownload(id)
+        )
+      );
+      const failed = results.filter((r) => r.status === "rejected").length;
+      if (failed > 0) {
+        toast(`Failed to cancel ${failed} download${failed === 1 ? "" : "s"}`, "error");
+      } else {
+        toast(`Cancelled ${ids.length} download${ids.length === 1 ? "" : "s"}`);
+      }
+    },
+    [toast]
+  );
+
   const pauseDownload = useCallback(
     async (id: string) => {
       try {
@@ -909,6 +926,7 @@ export default function App() {
               <DownloadsPanel
                 downloads={downloadList}
                 onCancel={cancelDownload}
+                onCancelAll={cancelAllDownloads}
                 onPause={pauseDownload}
                 onResume={resumeDownload}
                 onClearHistory={clearDownloadHistory}

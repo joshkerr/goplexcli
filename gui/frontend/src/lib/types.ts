@@ -155,6 +155,12 @@ export interface DownloadProgress {
   origin?: string;
   // Plex media type; absent on entries recorded before the field existed.
   mediaType?: "movie" | "episode";
+  // Plex title (the show for episodes) and year, when the job was started
+  // from a library item.
+  title?: string;
+  year?: number;
+  // Destination path on the machine running the job.
+  dest?: string;
 }
 
 // A registered remote download server (a `goplexcli serve` daemon on another
