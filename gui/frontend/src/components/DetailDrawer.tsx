@@ -395,7 +395,7 @@ function ItemDrawer(props: Props) {
   // finishes. Reset when the panel swaps to another item.
   const [dlState, setDlState] = useState<"idle" | "queued" | "done">("idle");
   // Where the download runs: "" = this computer, else a remote server name.
-  const [target, setTarget] = useState("");
+  const [target, setTarget] = useDownloadTarget(remoteServers);
   // Destination files that already exist; non-null shows the conflict prompt.
   const [conflicts, setConflicts] = useState<DownloadConflict[] | null>(null);
   // Whether the inline "Fix match" TMDB search panel is open.
@@ -635,6 +635,30 @@ function ItemDrawer(props: Props) {
   );
 }
 
+const DOWNLOAD_TARGET_KEY = "goplex:downloadTarget";
+
+// Share the last destination across movie/episode/show panels and app launches.
+// Only user selections write it: the server list is initially empty while the
+// app loads, so falling back to this computer must not erase the preference.
+function useDownloadTarget(servers: string[]): [string, (target: string) => void] {
+  const [savedTarget, setSavedTarget] = useState(() => {
+    try {
+      return localStorage.getItem(DOWNLOAD_TARGET_KEY) ?? "";
+    } catch {
+      return "";
+    }
+  });
+  const selectTarget = (target: string) => {
+    setSavedTarget(target);
+    try {
+      localStorage.setItem(DOWNLOAD_TARGET_KEY, target);
+    } catch {
+      // Storage may be unavailable; the current selection still works.
+    }
+  };
+  return [servers.includes(savedTarget) ? savedTarget : "", selectTarget];
+}
+
 // TargetPicker chooses where a download runs: this computer or one of the
 // registered remote download servers. Only rendered when at least one remote
 // server is enabled; "" = this computer.
@@ -741,7 +765,7 @@ function ShowDrawer(props: Props) {
   // movie download button's press feedback.
   const [queued, setQueued] = useState(false);
   // Where the download runs: "" = this computer, else a remote server name.
-  const [target, setTarget] = useState("");
+  const [target, setTarget] = useDownloadTarget(remoteServers);
   // Destination files that already exist for the pending keys; non-null
   // shows the conflict prompt. keys captures the set at check time so the
   // choice applies to exactly the files the user was warned about.

@@ -129,6 +129,9 @@ icon-enabled executable is installed under
    Season → Episode with multi-select for playlist playback or batch downloads.
    Opening or closing the details pane keeps the poster grid at the same titles.
    Selecting **Downloads** or **Settings** under **Activity** closes the detail panel.
+   The download destination is remembered across titles and app launches for
+   movies and TV episodes. If that server is removed or disabled, the picker
+   falls back to **this computer**.
 5. Keep the library fresh from **Settings → Library**: **Update** (fetch only
    newly-added titles), **Reindex** (rebuild from scratch), or **Sync from LAN**
    (pull the cache from another computer running GoplexCLI — see below).

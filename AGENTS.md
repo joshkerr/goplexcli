@@ -833,6 +833,9 @@ Add feature for sorting media by rating
   its scroll container so it does not fight the virtualized spacer adjustments.
   Wait for the resized rows to be measured before restoring the anchor. Run
   `npm test` in `gui/frontend` for the scroll-reflow regression tests.
+- Movie and show details share the `goplex:downloadTarget` localStorage
+  preference. Persist explicit picker changes only; the remote-server list is
+  initially empty while loading and must not overwrite the remembered target.
 - `make gui-dev` deliberately builds `frontend/dist` and launches the app with
   `go run -tags dev ./gui`. The `dev` tag is required by Wails. Do not switch
   it to the external Vite 5 dev server: that
