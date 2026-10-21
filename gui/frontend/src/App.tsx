@@ -15,6 +15,7 @@ import type {
 import { Sidebar, type NavKey } from "./components/Sidebar";
 import { PosterGrid } from "./components/PosterGrid";
 import { DetailDrawer } from "./components/DetailDrawer";
+import { DRAWER_WIDTH } from "./components/DetailPanel";
 import { DownloadsPanel, isActive } from "./components/DownloadsPanel";
 import { Splash } from "./components/Splash";
 import { Toasts, type Toast } from "./components/Toasts";
@@ -36,6 +37,10 @@ const EMPTY_MESSAGES: Partial<Record<NavKey, string>> = {
 function isCategory(k: NavKey): k is Category {
   return k !== "downloads" && k !== "settings";
 }
+
+// Input types that don't take typing: Escape on one of these (an episode's
+// checkbox, the Hide foreign toggle) still closes the detail drawer.
+const NON_TEXT_INPUTS = new Set(["checkbox", "radio", "button", "submit", "reset", "range", "color", "file"]);
 
 function isFinished(d: DownloadProgress) {
   return (
@@ -174,7 +179,26 @@ export default function App() {
   const [browseCategory, setBrowseCategory] = useState<Category>("movies");
   const [items, setItems] = useState<MediaCard[]>([]);
   const [loadingGrid, setLoadingGrid] = useState(false);
+  // The latest grid load; an answer for an older one (a category switched
+  // away from, a refresh overtaken by another) is dropped.
+  const gridLoad = useRef(0);
+
+  // The title in the detail drawer. It's fetched by key, never taken from
+  // the grid, so a refresh that replaces the grid's cards leaves it alone;
+  // refreshDrawer reloads it by key instead.
   const [selected, setSelected] = useState<Media | null>(null);
+  // The key of the title the drawer shows, and of the one it was last asked
+  // to show (the same once that fetch lands). A fetch that lands for any
+  // other key is stale — another poster was clicked meanwhile, or the drawer
+  // was closed — and is dropped.
+  const shownKey = useRef<string | null>(null);
+  const wantedKey = useRef<string | null>(null);
+  const showInDrawer = useCallback((media: Media | null) => {
+    shownKey.current = media?.key ?? null;
+    wantedKey.current = media?.key ?? null;
+    setSelected(media);
+  }, []);
+  const closeDrawer = useCallback(() => showInDrawer(null), [showInDrawer]);
 
   // Grid controls: the genre filter (movie grids only, session-scoped), the
   // hide-foreign toggle (movie grids only, persisted), and the per-category
@@ -463,28 +487,38 @@ export default function App() {
   }, [active]);
 
   // Load the browse category whenever it (or its genre/sort options) changes.
+  // A quiet load refreshes the grid in place (a sync finishing, a favorite
+  // dropping out of Favorites): no skeleton, which would collapse the grid
+  // and lose its scroll position.
   const loadCategory = useCallback(
-    async (cat: Category) => {
-      setLoadingGrid(true);
+    async (cat: Category, opts?: { quiet?: boolean }) => {
+      const load = ++gridLoad.current;
+      if (!opts?.quiet) setLoadingGrid(true);
       try {
         const { sortField, desc } = sortPrefFor(cat);
         const data = await api.listCategory(cat, { genre, sortField, desc, hideForeign });
-        setItems(data);
+        if (load === gridLoad.current) setItems(data);
       } catch (e: any) {
+        if (load !== gridLoad.current) return;
         toast(String(e?.message ?? e), "error");
         setItems([]);
       } finally {
-        setLoadingGrid(false);
+        if (load === gridLoad.current) setLoadingGrid(false);
       }
     },
     [toast, genre, hideForeign, sortPrefFor]
   );
 
+  // Gated on status having loaded, not on the status object: every refresh
+  // (after a sync, say) replaces that, and reloading here on each one would
+  // flash the skeleton and lose the grid's scroll position. A library change
+  // reloads the grid itself, quietly (onLibraryChanged).
+  const statusLoaded = status !== null;
   useEffect(() => {
-    if (!status || needsSetup) return;
+    if (!statusLoaded || needsSetup) return;
     if (searchResults !== null) return;
     loadCategory(browseCategory);
-  }, [browseCategory, status, needsSetup, loadCategory, searchResults]);
+  }, [browseCategory, statusLoaded, needsSetup, loadCategory, searchResults]);
 
   // Populate the movie genre filter once the library is ready. Gated on
   // status (not just needsSetup, which is null while status is loading):
@@ -514,7 +548,7 @@ export default function App() {
         .then((keys) => setFavorites(new Set(keys)))
         .catch(() => {});
       if (browseCategory === "favorites-movies" || browseCategory === "favorites-tv") {
-        loadCategory(browseCategory);
+        loadCategory(browseCategory, { quiet: true });
       }
     });
     return off;
@@ -531,10 +565,13 @@ export default function App() {
           return next;
         });
         // A favorites grid changes membership on toggle; refresh it so the
-        // card appears/disappears in place (the grid stays mounted, so the
-        // scroll position is preserved).
+        // card appears/disappears in place (the grid stays mounted and the
+        // load is quiet, so the scroll position is preserved). A title
+        // unfavorited from its open drawer drops out of the grid but keeps
+        // the drawer — it's still a title, and its Favorite button undoes
+        // the click.
         if (browseCategory === "favorites-movies" || browseCategory === "favorites-tv") {
-          loadCategory(browseCategory);
+          loadCategory(browseCategory, { quiet: true });
         }
       } catch (e: any) {
         toast(String(e?.message ?? e), "error");
@@ -571,57 +608,99 @@ export default function App() {
     };
   }, [query, toast]);
 
-  // Cards carry only enough for the grid; fetch full details on open.
-  const handleSelect = useCallback(
-    async (card: MediaCard) => {
-      try {
-        const full = await api.getItem(card.key);
-        setSelected(full);
-      } catch (e: any) {
-        toast(String(e?.message ?? e), "error");
-      }
-    },
-    [toast]
-  );
-
-  // Reload the open detail modal with the item at `key` after its metadata
-  // changed (a TMDB match was fixed). The key may differ from the one that
-  // was open when the fix renamed a show.
-  const reopenItem = useCallback(
-    async (key: string) => {
+  // Open the drawer on the title at `key` (cards carry only enough for the
+  // grid, so the full details are fetched). Only the latest request lands.
+  // A failed fetch leaves the drawer on what it shows, or — closeOnError —
+  // closes it.
+  const openItem = useCallback(
+    async (key: string, closeOnError = false) => {
+      wantedKey.current = key;
       try {
         const full = await api.getItem(key);
-        setSelected(full);
+        if (wantedKey.current === key) showInDrawer(full);
       } catch (e: any) {
-        setSelected(null);
+        if (wantedKey.current !== key) return;
+        if (closeOnError) closeDrawer();
+        else wantedKey.current = shownKey.current;
         toast(String(e?.message ?? e), "error");
       }
     },
-    [toast]
+    [toast, showInDrawer, closeDrawer]
   );
 
-  // Escape closes the detail drawer (a Select's own list, the conflict
-  // prompt and the fix-match panel handle their keys before this).
+  // A poster (or a "More like this" card, or an episode's show link) swaps
+  // its title into the drawer. The open title's own poster again is a no-op,
+  // so it can't flicker the drawer.
+  const handleSelect = useCallback(
+    (card: MediaCard) => {
+      if (card.key === wantedKey.current) return;
+      void openItem(card.key);
+    },
+    [openItem]
+  );
+
+  // Reload the open detail drawer with the item at `key` after its metadata
+  // changed (a TMDB match was fixed). The key may differ from the one that
+  // was open when the fix renamed a show.
+  const reopenItem = useCallback((key: string) => void openItem(key, true), [openItem]);
+
+  // After the library changed (a sync, update or reindex; a fixed match),
+  // reload the drawer's title by key: it stays on that title with the fresh
+  // data, or closes when the title is gone from the library.
+  const refreshDrawer = useCallback(async () => {
+    const key = wantedKey.current;
+    if (!key) return;
+    try {
+      const full = await api.getItem(key);
+      if (wantedKey.current === key) showInDrawer(full);
+    } catch {
+      if (wantedKey.current === key) closeDrawer();
+    }
+  }, [showInDrawer, closeDrawer]);
+
+  // Escape closes the detail drawer. Whatever is open inside it goes first:
+  // a Select's list and the conflict prompt catch Escape on window in the
+  // capture phase, and the fix-match panel marks it handled (preventDefault).
+  // Escape typed into a text field (the sidebar search) stays with the field.
   useEffect(() => {
     if (!selected) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented) return;
       const el = e.target as HTMLElement | null;
-      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return;
-      setSelected(null);
+      if (el instanceof HTMLTextAreaElement) return;
+      if (el instanceof HTMLInputElement && !NON_TEXT_INPUTS.has(el.type)) return;
+      closeDrawer();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selected]);
+  }, [selected, closeDrawer]);
 
   // Run a field-scoped search (director/cast/genre click in the detail panel).
-  // Setting the query drives the existing debounced search effect; closing the
-  // modal reveals the results grid underneath. The query string doubles as the
-  // search-box contents, so it's visible and clearable like any other search.
+  // Setting the query drives the existing debounced search effect; the
+  // results fill the grid beside the drawer, which stays on its title (the
+  // grid is live, so a result swaps in with a click). The query string
+  // doubles as the search-box contents, so it's visible and clearable like
+  // any other search.
   const runFieldSearch = useCallback((q: string) => {
     setQuery(q);
-    setSelected(null);
   }, []);
+
+  // Downloads and Settings take the grid's place (they overlay it, inside
+  // the drawer's padding), so they put the drawer away — also when clearing
+  // a search uncovers one, since search results show over them.
+  const overlayShown = (active === "downloads" || active === "settings") && searchResults === null;
+  useEffect(() => {
+    if (overlayShown) closeDrawer();
+  }, [overlayShown, closeDrawer]);
+  const drawerMedia = overlayShown ? null : selected;
+
+  // Whether the drawer was open at the last commit. Only opening it slides
+  // it in; a title swapped into an open drawer (which remounts it, keyed by
+  // title) must not replay the slide and the scrim's fade.
+  const drawerWasOpen = useRef(false);
+  useEffect(() => {
+    drawerWasOpen.current = drawerMedia !== null;
+  });
 
   const onSetupReady = useCallback(async () => {
     setSetupDone(true);
@@ -629,22 +708,27 @@ export default function App() {
     if (s) loadCategory("movies");
   }, [refreshStatus, loadCategory]);
 
-  // After a reindex/update/sync the cache changed, so refresh both the status
-  // counts and the grid data (the grid stays mounted now, so it won't reload on
-  // its own when returning from the Settings overlay).
+  // After a reindex/update/sync the cache changed, so refresh the status
+  // counts, the grid data (the grid stays mounted now, so it won't reload on
+  // its own when returning from the Settings overlay; the load is quiet, so
+  // the grid keeps its place) and the drawer's title.
   const onLibraryChanged = useCallback(async () => {
     const s = await refreshStatus();
-    loadCategory(browseCategory);
+    loadCategory(browseCategory, { quiet: true });
+    void refreshDrawer();
     return s;
-  }, [refreshStatus, loadCategory, browseCategory]);
+  }, [refreshStatus, loadCategory, browseCategory, refreshDrawer]);
 
   // A single item's metadata changed (its TMDB match was fixed), possibly
   // under a new card key when a show was renamed. Refresh the grid and counts
-  // the same way a reindex does so the card updates in place; the detail
-  // modal reopens itself via onReopen.
+  // the same way a reindex does so the card updates in place. A drawer open
+  // on the old key follows the rename before the refresh reloads it, so it
+  // lands on the renamed title instead of closing on the vanished one (the
+  // fix-match panel's onReopen asks for the same key).
   useEffect(() => {
-    const off = onEvent<{ key: string; previous: string }>("media:changed", () => {
+    const off = onEvent<{ key: string; previous: string }>("media:changed", (d) => {
       if (needsSetup) return;
+      if (d.key && d.previous && wantedKey.current === d.previous) wantedKey.current = d.key;
       void onLibraryChanged();
     });
     return off;
@@ -815,14 +899,18 @@ export default function App() {
         downloadCount={activeDownloads}
         activeDownloads={activeDownloadList}
         onSelect={(key) => {
+          // Another category keeps the drawer on its title beside the new
+          // grid (it's still a title, and any poster swaps in); Downloads
+          // and Settings put it away (see overlayShown).
           setActive(key);
-          if (!isCategory(key)) setSelected(null);
+          if (!isCategory(key)) closeDrawer();
           setQuery("");
           setSearchResults(null);
         }}
         query={query}
         onQueryChange={setQuery}
-        searchHotkey={!selected}
+        // The drawer isn't modal: a search fills the grid beside it.
+        searchHotkey
         searchSummary={showSearch ? searchSummary(query, gridItems.length) : undefined}
         people={showSearch ? people : []}
         onPickPerson={(p) =>
@@ -911,8 +999,12 @@ export default function App() {
             it — so returning to the library preserves the scroll position. */}
         {/* The grid keeps clear of the detail drawer (and reflows) while
             one is open; it stays live, so another poster swaps the drawer's
-            title. */}
-        <div className={`relative min-h-0 flex-1 bg-ink-750 ${selected ? "pr-[32rem]" : ""}`}>
+            title. The padding is the drawer's own width, which narrows in a
+            small window so the grid keeps a column. */}
+        <div
+          className="relative min-h-0 flex-1 bg-ink-750"
+          style={drawerMedia ? { paddingRight: DRAWER_WIDTH } : undefined}
+        >
           <PosterGrid
             key={showSearch ? "search" : browseCategory}
             items={gridItems}
@@ -965,16 +1057,17 @@ export default function App() {
             </div>
           )}
         </div>
-        {selected && (
+        {drawerMedia && (
           <DetailDrawer
-            key={selected.key}
-            media={selected}
+            key={drawerMedia.key}
+            media={drawerMedia}
+            animateIn={!drawerWasOpen.current}
             mpvAvailable={status.mpvAvailable}
             rcloneAvailable={status.rcloneAvailable}
             remoteServers={enabledRemotes.map((r) => r.name)}
-            isFavorite={favorites.has(selected.key)}
+            isFavorite={favorites.has(drawerMedia.key)}
             onToggleFavorite={toggleFavorite}
-            onClose={() => setSelected(null)}
+            onClose={closeDrawer}
             onToast={toast}
             onSearch={runFieldSearch}
             onSelectSimilar={handleSelect}

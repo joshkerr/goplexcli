@@ -843,6 +843,25 @@ Add feature for sorting media by rating
 - Avoid using a globally installed Wails CLI for ordinary development; a newer
   CLI can silently upgrade the repository's Go and Wails versions.
 
+### GUI Detail Drawer
+
+- The drawer's title is fetched by key (`api.getItem`), never taken from the
+  grid's cards. `App.tsx` tracks the key it shows and the one last asked for
+  (`shownKey`/`wantedKey`) so a slow fetch can't overwrite a newer pick or
+  reopen a closed drawer. After any library change `refreshDrawer` reloads the
+  title by key (closing only if it's gone); `media:changed` remaps a renamed
+  show's key first.
+- Refresh the grid in the background with `loadCategory(cat, { quiet: true })`:
+  the skeleton collapses the grid and loses its scroll position. Don't make
+  the category-load effect depend on the `status` object (every status
+  refresh would reload the grid).
+- `DRAWER_WIDTH` (`DetailPanel.tsx`) sizes both the drawer and the grid's
+  right padding; it narrows so the grid keeps a poster column at the 800 px
+  minimum window width.
+- Controls inside the drawer take Escape before it: a window capture-phase
+  listener with `stopImmediatePropagation` (Select, ConflictModal) or
+  `preventDefault` (the fix-match panel); App's handler skips handled events.
+
 ### Color Codes (Lipgloss)
 - 205: Pink (titles)
 - 42: Green (success)

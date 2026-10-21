@@ -1,9 +1,10 @@
+import { useEffect, useRef } from "react";
 import type { DownloadConflict } from "../lib/types";
 
 // ConflictModal warns that some destination files already exist before a batch
 // of downloads starts, and asks how to proceed: replace them all, skip the
-// conflicting files, or cancel the whole batch. Rendered above DetailModal
-// (z-50), so it sits at z-[60].
+// conflicting files, or cancel the whole batch. Rendered from the detail
+// drawer (z-30) and over everything, at z-[60].
 export function ConflictModal({
   conflicts,
   onChoose,
@@ -12,6 +13,22 @@ export function ConflictModal({
   onChoose: (choice: "replace" | "skip" | "cancel") => void;
 }) {
   const many = conflicts.length > 1;
+
+  // Escape cancels the prompt, and only the prompt: caught on window in the
+  // capture phase, before the drawer's own Escape handler would close the
+  // drawer (and the prompt with it).
+  const choose = useRef(onChoose);
+  choose.current = onChoose;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      choose.current("cancel");
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
   return (
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center p-6 animate-fade-in"

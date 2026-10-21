@@ -14,6 +14,13 @@ export function dateLabel(iso: string): string {
   });
 }
 
+/** The drawer's width: 32rem, less in a narrow window so the grid beside it
+ * keeps 15rem — one full poster column and the grid's padding. A
+ * percentage of the main area, which the drawer (placed absolutely in it)
+ * and the grid's matching right padding (a block in it) both resolve
+ * against, so the two always agree. */
+export const DRAWER_WIDTH = "min(32rem, calc(100% - 15rem))";
+
 /** The panel every title gets: a drawer over the grid's right edge, with
  * the background art (or the poster, blurred) as a band across its top,
  * the title and facts line drawn over the bottom edge beside the poster,
@@ -23,6 +30,7 @@ export function dateLabel(iso: string): string {
  * panel away. The panel scrolls on its own. */
 export function DetailPanel({
   label,
+  animateIn = true,
   onClose,
   art,
   poster,
@@ -37,6 +45,9 @@ export function DetailPanel({
   children,
 }: {
   label: string;
+  /** Slide in (and fade the scrim in) on mount: opening the drawer, not a
+   *  title swapped into an open one. Read once, at mount. */
+  animateIn?: boolean;
   onClose: () => void;
   /** Widescreen background art; "" to fall back to the poster. */
   art: string;
@@ -62,6 +73,8 @@ export function DetailPanel({
   useEffect(() => {
     ref.current?.querySelector<HTMLElement>("[data-autofocus]:not([disabled])")?.focus({ preventScroll: true });
   }, []);
+  // Latched: the parent's re-renders mustn't drop the class mid-slide.
+  const [animate] = useState(animateIn);
 
   const parts = (meta ?? []).filter((p) => p !== false && p !== null && p !== undefined && p !== "") as ReactNode[];
   const band = art || (wideThumb ? poster : "");
@@ -69,14 +82,17 @@ export function DetailPanel({
 
   return (
     <div className="pointer-events-none absolute inset-0 z-30" role="presentation">
-      <div className="absolute inset-0 bg-black/25 animate-fade-in" aria-hidden />
+      <div className={`absolute inset-0 bg-black/25 ${animate ? "animate-fade-in" : ""}`} aria-hidden />
       <div
         ref={ref}
         data-detail-panel
         role="dialog"
         aria-modal="false"
         aria-label={label}
-        className="pointer-events-auto absolute inset-y-0 right-0 flex w-[32rem] max-w-[calc(100vw-14rem)] flex-col border-l border-white/10 bg-ink-800 shadow-[-24px_0_60px_rgba(0,0,0,0.55)] animate-slide-in"
+        style={{ width: DRAWER_WIDTH }}
+        className={`pointer-events-auto absolute inset-y-0 right-0 flex flex-col border-l border-white/10 bg-ink-800 shadow-[-24px_0_60px_rgba(0,0,0,0.55)] ${
+          animate ? "animate-slide-in" : ""
+        }`}
       >
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
           <div className="relative">

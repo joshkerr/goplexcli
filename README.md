@@ -128,7 +128,13 @@ icon-enabled executable is installed under
    (rclone, with live progress in the Downloads panel). TV shows drill into
    Season → Episode with multi-select for playlist playback or batch downloads.
    Opening or closing the details pane keeps the poster grid at the same titles.
-   Selecting **Downloads** or **Settings** under **Activity** closes the detail panel.
+   The pane stays on its title while the grid changes beside it: another
+   category, a search or a director/cast/genre link, a library sync (the title
+   reloads with the fresh data; the pane closes only if it left the library),
+   or a fixed match (it follows a renamed show). Selecting **Downloads** or
+   **Settings** under **Activity** closes the detail panel. Escape closes what
+   is open inside the pane first (a picker, the existing-files prompt, Fix
+   match), then the pane.
    The download destination is remembered across titles and app launches for
    movies and TV episodes. If that server is removed or disabled, the picker
    falls back to **this computer**.

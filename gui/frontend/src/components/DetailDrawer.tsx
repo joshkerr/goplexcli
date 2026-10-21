@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 import type {
   DownloadConflict,
@@ -34,6 +34,8 @@ import Select from "./Select";
 
 interface Props {
   media: Media;
+  // Slide the drawer in: it's opening, not taking a title swapped in.
+  animateIn?: boolean;
   rcloneAvailable: boolean;
   mpvAvailable: boolean;
   // Names of enabled remote download servers. When non-empty, a picker next
@@ -44,7 +46,8 @@ interface Props {
   onClose: () => void;
   onToast: (msg: string, kind?: "info" | "error") => void;
   // Run a field-scoped search (e.g. all movies by a director). Called when a
-  // director/cast/genre tag is clicked; the caller closes this panel.
+  // director/cast/genre tag is clicked; the results fill the grid beside
+  // this panel, which stays open.
   onSearch: (query: string) => void;
   // Open another item in the panel (a "More like this" card, an episode's
   // show); the caller swaps the panel's content to the new item.
@@ -158,7 +161,18 @@ function FixMatchPanel({
   };
 
   return (
-    <div className="rounded-xl border border-white/10 bg-ink-800/60 p-4">
+    <div
+      className="rounded-xl border border-white/10 bg-ink-800/60 p-4"
+      // Escape from anywhere in here (its inputs included) cancels the fix —
+      // not the drawer, whose handler skips an Escape marked handled. While
+      // a match applies it's swallowed: the drawer reopens on the result.
+      // The kind picker's own list, when open, takes Escape before this.
+      onKeyDown={(e) => {
+        if (e.key !== "Escape" || e.defaultPrevented) return;
+        e.preventDefault();
+        if (!applying) onClose();
+      }}
+    >
       <div className="flex items-center justify-between gap-3">
         <div className="text-xs font-semibold uppercase tracking-widest text-white/40">
           Fix match
@@ -486,6 +500,7 @@ function ItemDrawer(props: Props) {
   return (
     <DetailPanel
       label={media.title}
+      animateIn={props.animateIn}
       onClose={props.onClose}
       art={media.artURL}
       poster={media.thumbURL}
@@ -772,22 +787,61 @@ function ShowDrawer(props: Props) {
   const [conflicts, setConflicts] = useState<{ keys: string[]; files: DownloadConflict[] } | null>(null);
   // Whether the inline "Fix match" TMDB search panel is open.
   const [fixing, setFixing] = useState(false);
+  // The season whose episodes were last asked for: a slower answer for
+  // another (a tab clicked before the last one loaded) is dropped.
+  const wantedSeason = useRef<number | null>(null);
 
+  // Load the seasons on open — and again when the drawer is handed fresh
+  // data for this show (a library sync), staying on the season being looked
+  // at, with its ticks, while it still exists. (The drawer is keyed by
+  // title, so another show remounts this instead.)
   useEffect(() => {
-    setFixing(false);
-    setLoading(true);
-    api.getSeasons(media.title).then((s) => {
-      setSeasons(s);
-      setLoading(false);
-      if (s.length > 0) loadSeason(s[0].season);
-    });
+    let stale = false;
+    api
+      .getSeasons(media.title)
+      .then((list) => {
+        if (stale) return;
+        const s = list ?? [];
+        setSeasons(s);
+        setLoading(false);
+        const keep = wantedSeason.current;
+        const next = keep !== null && s.some((x) => x.season === keep) ? keep : s[0]?.season ?? null;
+        if (next === null) {
+          wantedSeason.current = null;
+          setSeason(null);
+          setEpisodes([]);
+          return;
+        }
+        loadSeason(next, next === keep);
+      })
+      .catch(() => {
+        if (!stale) setLoading(false);
+      });
+    return () => {
+      stale = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [media.title]);
+  }, [media]);
 
-  const loadSeason = (s: number) => {
+  const loadSeason = (s: number, keepTicks = false) => {
+    wantedSeason.current = s;
     setSeason(s);
-    setSelected(new Set());
-    api.getEpisodes(media.title, s).then(setEpisodes);
+    if (!keepTicks) setSelected(new Set());
+    api
+      .getEpisodes(media.title, s)
+      .then((list) => {
+        if (wantedSeason.current !== s) return;
+        const eps = list ?? [];
+        setEpisodes(eps);
+        if (!keepTicks) return;
+        // Drop ticks on episodes the refresh took away.
+        const present = new Set(eps.map((e) => e.key));
+        setSelected((prev) => {
+          const next = new Set([...prev].filter((k) => present.has(k)));
+          return next.size === prev.size ? prev : next;
+        });
+      })
+      .catch(() => {});
   };
 
   const toggle = (key: string) => {
@@ -846,10 +900,12 @@ function ShowDrawer(props: Props) {
   // startDownload runs the transfer with the chosen existing-file policy
   // (picked in ConflictModal when some destination files already exist).
   const startDownload = async (keys: string[], onExisting: OnExisting) => {
+    // Confirm the press now: a local download resolves only once every
+    // file has transferred, which can be long after the drawer moved on.
+    flashQueued();
     try {
       onToast(`Downloading ${keys.length} episode(s)…`);
       await api.download(keys, "", onExisting);
-      flashQueued();
     } catch (e: any) {
       onToast(String(e?.message ?? e), "error");
     }
@@ -865,6 +921,7 @@ function ShowDrawer(props: Props) {
   return (
     <DetailPanel
       label={media.title}
+      animateIn={props.animateIn}
       onClose={props.onClose}
       art={media.artURL}
       poster={media.thumbURL}
@@ -925,8 +982,8 @@ function ShowDrawer(props: Props) {
       footer={
         selected.size > 0 ? (
           <div className="flex shrink-0 items-center justify-between gap-3 border-t border-white/10 bg-ink-800/95 px-5 py-3">
-            <span className="text-sm text-white/60">{selected.size} selected</span>
-            <div className="flex gap-2">
+            <span className="min-w-0 truncate text-sm text-white/60">{selected.size} selected</span>
+            <div className="flex shrink-0 gap-2">
               <button
                 type="button"
                 onClick={() => playKeys(orderedSelection())}
