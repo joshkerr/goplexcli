@@ -503,7 +503,7 @@ export function Settings({
               </label>
               <button
                 onClick={() => testServer(i)}
-                className="rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/20"
+                className="touch-target relative rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/20"
               >
                 Test
               </button>
@@ -512,7 +512,7 @@ export function Settings({
                   setServers((prev) => prev.filter((_, j) => j !== i));
                   setTestResults({});
                 }}
-                className="rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-red-300 hover:bg-red-500/20"
+                className="touch-target relative rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-red-300 hover:bg-red-500/20"
               >
                 Remove
               </button>

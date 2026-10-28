@@ -1,3 +1,5 @@
+import { useRef } from "react";
+import { isTapOnHidden } from "../lib/touch";
 import type { MediaCard } from "../lib/types";
 import { FilmIcon, StarIcon, StarOutlineIcon, TvIcon } from "./icons";
 
@@ -15,6 +17,7 @@ interface Props {
 
 export function PosterCard({ media, onClick, posterHeight, priority = false, favorite = false, onToggleFavorite }: Props) {
   const isShow = media.type === "show";
+  const hiddenTap = useRef(false);
   const Placeholder = isShow ? TvIcon : FilmIcon;
   const subtitle =
     media.type === "show"
@@ -80,17 +83,23 @@ export function PosterCard({ media, onClick, posterHeight, priority = false, fav
         {/* Favorite star: always shown when favorited, revealed on hover
             otherwise. A span (not a nested button — the card itself is one)
             that swallows the click so toggling doesn't open the detail modal.
-            Episodes aren't favoritable; only movies and shows have a home in
-            the Favorites sections. */}
+            A finger can't hover, so a tap where the hidden star sits is for
+            the poster; the drawer has Favorite too. Episodes aren't
+            favoritable; only movies and shows have a home in the Favorites
+            sections. */}
         {media.type !== "episode" && onToggleFavorite && (
           <span
             role="button"
             title={favorite ? "Remove from favorites" : "Add to favorites"}
+            onPointerDown={(e) => {
+              hiddenTap.current = isTapOnHidden(e, getComputedStyle(e.currentTarget).opacity);
+            }}
             onClick={(e) => {
+              if (hiddenTap.current) return;
               e.stopPropagation();
               onToggleFavorite();
             }}
-            className={`absolute bottom-2 right-2 flex h-7 w-7 items-center justify-center rounded-full bg-black/50 shadow transition-opacity hover:bg-black/70 ${
+            className={`touch-target absolute bottom-2 right-2 flex h-7 w-7 items-center justify-center rounded-full bg-black/50 shadow transition-opacity hover:bg-black/70 ${
               favorite
                 ? "text-accent opacity-100"
                 : "text-white/80 opacity-0 group-hover:opacity-100"

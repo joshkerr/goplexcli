@@ -157,7 +157,7 @@ export function Sidebar({
             <button
               onClick={() => onQueryChange("")}
               title="Clear search"
-              className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md p-1 text-white/40 hover:bg-white/10 hover:text-white"
+              className="touch-target absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md p-1 text-white/40 hover:bg-white/10 hover:text-white"
             >
               <CloseIcon width={13} height={13} />
             </button>

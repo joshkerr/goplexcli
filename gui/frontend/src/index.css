@@ -47,3 +47,24 @@ button:not(:disabled):active {
   scale: 0.96;
   filter: brightness(1.25);
 }
+
+/* Touch (lib/touch.ts sets data-input). A double-tap is a double-click, not
+   a zoom. While a finger is in use, a small control's hit area grows to
+   Apple's 36pt touch target — the control itself doesn't change, and it
+   needs a position (relative or absolute) for the area to hang off — and
+   menus get taller rows, as macOS's own do when touch opens them. */
+html {
+  touch-action: manipulation;
+}
+html[data-input="touch"] .touch-target::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: max(100%, 36px);
+  height: max(100%, 36px);
+  transform: translate(-50%, -50%);
+}
+html[data-input="touch"] :is([role="menuitem"], [role="option"]) {
+  min-height: 36px;
+}

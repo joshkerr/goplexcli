@@ -1043,7 +1043,7 @@ function ShowDrawer(props: Props) {
                 role="tab"
                 aria-selected={season === s.season}
                 onClick={() => loadSeason(s.season)}
-                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                className={`touch-target relative rounded-full px-3 py-1 text-xs font-medium transition-colors ${
                   season === s.season
                     ? "bg-accent text-ink-900"
                     : "bg-white/5 text-white/60 hover:bg-white/10 hover:text-white"

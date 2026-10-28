@@ -98,7 +98,7 @@ export function LibraryList({ libraries, onChanged, onToast, compact }: Props) {
             onClick={() => remove(lib)}
             onBlur={() => setConfirming((c) => (c === lib.name ? null : c))}
             disabled={busy === lib.name}
-            className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${
+            className={`touch-target relative shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${
               confirming === lib.name
                 ? "bg-red-500/30 text-red-200 hover:bg-red-500/40"
                 : "bg-white/10 text-red-300 hover:bg-red-500/20"

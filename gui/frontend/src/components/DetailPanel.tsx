@@ -123,7 +123,7 @@ export function DetailPanel({
                 <button
                   type="button"
                   onClick={onClose}
-                  className="rounded-full bg-black/45 p-1.5 text-white/70 ring-1 ring-white/15 backdrop-blur transition hover:text-white"
+                  className="touch-target relative rounded-full bg-black/45 p-1.5 text-white/70 ring-1 ring-white/15 backdrop-blur transition hover:text-white"
                   title="Close (Escape)"
                   aria-label="Close"
                 >

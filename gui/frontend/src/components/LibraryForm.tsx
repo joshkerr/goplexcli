@@ -138,7 +138,7 @@ export function LibraryForm({ onAdded, onToast, rcloneRemotes, compact }: Props)
                   key={r}
                   type="button"
                   onClick={() => useRemote(r)}
-                  className="rounded-full bg-white/10 px-2.5 py-0.5 text-[11px] font-medium text-white/70 transition-colors hover:bg-white/20 hover:text-white"
+                  className="touch-target relative rounded-full bg-white/10 px-2.5 py-0.5 text-[11px] font-medium text-white/70 transition-colors hover:bg-white/20 hover:text-white"
                 >
                   {r}:
                 </button>

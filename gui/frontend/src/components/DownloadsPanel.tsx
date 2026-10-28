@@ -89,7 +89,7 @@ export function DownloadsPanel({
           {active.length > 0 && (
             <button
               onClick={() => onCancelAll(active.map((d) => d.id))}
-              className="flex items-center gap-1.5 rounded-lg border border-red-400/30 bg-red-500/10 px-3 py-1.5 text-xs font-semibold text-red-300 hover:border-red-400/60 hover:bg-red-500/20"
+              className="touch-target relative flex items-center gap-1.5 rounded-lg border border-red-400/30 bg-red-500/10 px-3 py-1.5 text-xs font-semibold text-red-300 hover:border-red-400/60 hover:bg-red-500/20"
             >
               <CloseIcon width={14} height={14} />
               Cancel all
@@ -98,7 +98,7 @@ export function DownloadsPanel({
           {hasFinished && (
             <button
               onClick={onClearHistory}
-              className="rounded-lg border border-white/10 bg-ink-700 px-3 py-1.5 text-xs font-semibold text-white/70 hover:border-accent/60 hover:text-white"
+              className="touch-target relative rounded-lg border border-white/10 bg-ink-700 px-3 py-1.5 text-xs font-semibold text-white/70 hover:border-accent/60 hover:text-white"
             >
               Clear finished
             </button>
@@ -245,7 +245,7 @@ function JobCard({
           <button
             onClick={() => onCancel(d.id)}
             title="Cancel download"
-            className="shrink-0 rounded-lg border border-red-400/30 bg-red-500/10 p-1.5 text-red-300 hover:border-red-400/60 hover:bg-red-500/20"
+            className="touch-target relative shrink-0 rounded-lg border border-red-400/30 bg-red-500/10 p-1.5 text-red-300 hover:border-red-400/60 hover:bg-red-500/20"
           >
             <CloseIcon width={14} height={14} />
           </button>
