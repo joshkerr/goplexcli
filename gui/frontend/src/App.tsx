@@ -23,6 +23,7 @@ import { Setup } from "./views/Setup";
 import { Settings } from "./views/Settings";
 import Select from "./components/Select";
 import { FilterMenu } from "./components/FilterMenu";
+import type { LibraryOp, SyncCardState } from "./components/SyncCard";
 
 // The content header's title for each grid.
 const TITLES: Record<Category, string> = {
@@ -133,12 +134,9 @@ const CONTROL =
   "rounded-lg border border-white/10 bg-ink-700 px-2.5 py-1.5 text-sm text-white outline-none focus:border-accent/60";
 const MENU_LABEL = "text-[10px] font-semibold uppercase tracking-widest text-white/40";
 
-// One toast tag shared by every message of a library sync/update/reindex run,
-// so progress updates replace the toast in place instead of stacking.
-const SYNC_TOAST = "library-sync";
-
-// syncDoneMessage builds the final toast for a finished update/reindex,
-// describing what changed by diffing the library counts from before the run.
+// syncDoneMessage builds the sync card's result line for a finished
+// update/reindex, describing what changed by diffing the library counts from
+// before the run. The card's heading already says it finished.
 function syncDoneMessage(
   d: { mode?: "reindex" | "update"; count: number; added?: number },
   before: Status | null,
@@ -146,9 +144,9 @@ function syncDoneMessage(
 ): string {
   const total = (after?.cacheCount ?? d.count).toLocaleString();
   if (d.mode === "reindex") {
-    return `Reindex complete — ${d.count.toLocaleString()} items in library`;
+    return `${d.count.toLocaleString()} items in library`;
   }
-  if (!d.added) return `Library up to date — no new items (${total} total)`;
+  if (!d.added) return `No new items · ${total} total`;
   if (before && after) {
     const parts: string[] = [];
     const movies = after.movieCount - before.movieCount;
@@ -158,21 +156,22 @@ function syncDoneMessage(
     if (shows > 0) parts.push(`${shows} show${shows === 1 ? "" : "s"}`);
     if (episodes > 0) parts.push(`${episodes} episode${episodes === 1 ? "" : "s"}`);
     if (parts.length) {
-      return `Sync complete — added ${parts.join(", ")} (${total} total)`;
+      return `Added ${parts.join(", ")} · ${total} total`;
     }
   }
-  return `Sync complete — ${d.added} new item${d.added === 1 ? "" : "s"} (${total} total)`;
+  return `${d.added} new item${d.added === 1 ? "" : "s"} · ${total} total`;
 }
 
-// lanSyncDoneMessage builds the final toast for a LAN sync, which replaces the
-// whole cache with the peer's — so counts can move in either direction.
+// lanSyncDoneMessage builds the sync card's result line for a LAN sync, which
+// replaces the whole cache with the peer's — so counts can move in either
+// direction.
 function lanSyncDoneMessage(
   d: { count?: number; source?: string },
   before: Status | null,
   after: Status | null
 ): string {
   const total = (after?.cacheCount ?? d.count ?? 0).toLocaleString();
-  const from = d.source ? ` from ${d.source}` : "";
+  const from = d.source ? `From ${d.source}: ` : "";
   if (before && after) {
     const parts: string[] = [];
     const diff = (n: number, label: string) => {
@@ -182,10 +181,10 @@ function lanSyncDoneMessage(
     diff(after.movieCount - before.movieCount, "movie");
     diff(after.showCount - before.showCount, "show");
     diff(after.episodeCount - before.episodeCount, "episode");
-    if (parts.length) return `Synced${from} — ${parts.join(", ")} (${total} total)`;
-    return `Synced${from} — no new items (${total} total)`;
+    if (parts.length) return `${from}${parts.join(", ")} · ${total} total`;
+    return `${from}no new items · ${total} total`;
   }
-  return `Synced ${d.count?.toLocaleString() ?? ""} items${from}`;
+  return `${from}${d.count?.toLocaleString() ?? ""} items`;
 }
 
 export default function App() {
@@ -757,24 +756,34 @@ export default function App() {
 
   // Library sync/update/reindex state, shared by the header sync button and the
   // Settings panel so either entry point disables both and feeds the same
-  // progress toast. The event listeners live here (not in Settings) so feedback
+  // sidebar card. The event listeners live here (not in Settings) so feedback
   // arrives no matter which view is showing.
-  const [indexing, setIndexing] = useState<null | "reindex" | "update" | "sync">(null);
+  const [indexing, setIndexing] = useState<null | LibraryOp>(null);
   const [indexProgress, setIndexProgress] = useState<ReindexProgress | null>(null);
   const [syncMsg, setSyncMsg] = useState("");
-  // Library counts captured when an op starts, diffed for the final toast.
+  // Library counts captured when an op starts, diffed for the result line.
   const preOpStatus = useRef<Status | null>(null);
+  // The sidebar's sync card: the run in flight, then its result. A finished
+  // run clears itself after a moment; a failed one keeps its error up until
+  // dismissed or the next run starts.
+  const [syncCard, setSyncCard] = useState<SyncCardState | null>(null);
+  const finishSyncCard = useCallback(
+    (phase: "done" | "failed", message: string, fallbackOp: LibraryOp) =>
+      setSyncCard((c) => ({ op: c?.op ?? fallbackOp, phase, message })),
+    []
+  );
+  useEffect(() => {
+    if (syncCard?.phase !== "done") return;
+    const id = window.setTimeout(() => setSyncCard(null), 8000);
+    return () => window.clearTimeout(id);
+  }, [syncCard]);
 
   useEffect(() => {
     const off = onEvent<ReindexProgress>("reindex:progress", (p) => {
       setIndexProgress(p);
       // During first-run setup the index step renders its own progress UI.
       if (needsSetup) return;
-      toast(
-        `Syncing library — ${p.server} · ${p.library} · ${p.items.toLocaleString()} items`,
-        "info",
-        { tag: SYNC_TOAST, sticky: true }
-      );
+      setSyncCard((c) => ({ op: c?.op ?? "update", phase: "running", message: "", progress: p }));
     });
     const offDone = onEvent<{
       mode?: "reindex" | "update";
@@ -786,24 +795,25 @@ export default function App() {
       setIndexProgress(null);
       const before = preOpStatus.current;
       preOpStatus.current = null;
-      if (needsSetup) return; // Setup toasts its own completion.
+      if (needsSetup) return; // Setup reports its own completion.
+      const op = d.mode ?? "update";
       if (d.error) {
-        toast(d.error, "error", { tag: SYNC_TOAST });
+        finishSyncCard("failed", d.error, op);
         return;
       }
       const after = await onLibraryChanged();
-      toast(syncDoneMessage(d, before, after), "info", { tag: SYNC_TOAST });
+      finishSyncCard("done", syncDoneMessage(d, before, after), op);
     });
     return () => {
       off();
       offDone();
     };
-  }, [needsSetup, toast, onLibraryChanged]);
+  }, [needsSetup, onLibraryChanged, finishSyncCard]);
 
   useEffect(() => {
     const off = onEvent<{ message: string }>("sync:progress", (d) => {
       setSyncMsg(d.message);
-      if (!needsSetup) toast(d.message, "info", { tag: SYNC_TOAST, sticky: true });
+      if (!needsSetup) setSyncCard({ op: "sync", phase: "running", message: d.message });
     });
     const offDone = onEvent<{
       updated?: boolean;
@@ -817,48 +827,49 @@ export default function App() {
       const before = preOpStatus.current;
       preOpStatus.current = null;
       if (needsSetup) return;
-      if (d.error) toast(d.error, "error", { tag: SYNC_TOAST });
+      if (d.error) finishSyncCard("failed", d.error, "sync");
       else if (d.upToDate) {
-        toast("Already up to date — no newer index found", "info", { tag: SYNC_TOAST });
+        finishSyncCard("done", "Already up to date — no newer index found", "sync");
       } else {
         const after = await onLibraryChanged();
-        toast(lanSyncDoneMessage(d, before, after), "info", { tag: SYNC_TOAST });
+        finishSyncCard("done", lanSyncDoneMessage(d, before, after), "sync");
       }
     });
     return () => {
       off();
       offDone();
     };
-  }, [needsSetup, toast, onLibraryChanged]);
+  }, [needsSetup, onLibraryChanged, finishSyncCard]);
 
   const startLibraryOp = useCallback(
-    async (op: "update" | "sync" | "reindex") => {
+    async (op: LibraryOp) => {
       setIndexing(op);
       setIndexProgress(null);
       preOpStatus.current = status;
       if (op === "sync") setSyncMsg("Looking for other computers…");
-      toast(
-        op === "sync"
-          ? "Looking for other computers…"
-          : op === "reindex"
-          ? "Reindexing library…"
-          : "Syncing library — checking for new items…",
-        "info",
-        { tag: SYNC_TOAST, sticky: true }
-      );
+      setSyncCard({
+        op,
+        phase: "running",
+        message:
+          op === "sync"
+            ? "Looking for other computers…"
+            : op === "reindex"
+            ? "Starting…"
+            : "Checking for new items…",
+      });
       try {
         if (op === "update") await api.update();
         else if (op === "sync") await api.syncFromLAN();
         else await api.reindex();
       } catch (e: any) {
-        // The done-event handler may have already reported this; the shared
-        // tag collapses both into one toast either way.
+        // The done-event handler may have already reported this; either way
+        // the card ends on the error.
         setIndexing(null);
         setSyncMsg("");
-        toast(String(e?.message ?? e), "error", { tag: SYNC_TOAST });
+        finishSyncCard("failed", String(e?.message ?? e), op);
       }
     },
-    [status, toast]
+    [status, finishSyncCard]
   );
 
   if (!status) {
@@ -945,6 +956,8 @@ export default function App() {
         }
         syncing={!!indexing}
         onSync={() => startLibraryOp("sync")}
+        syncCard={syncCard}
+        onDismissSyncCard={() => setSyncCard(null)}
       />
 
       <main className="relative flex min-w-0 flex-1 flex-col">

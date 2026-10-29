@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { Category, DownloadProgress, Person } from "../lib/types";
 import { TransferCard } from "./TransferCard";
+import { SyncCard, type SyncCardState } from "./SyncCard";
 import { isMac } from "../lib/api";
 import {
   BrandMark,
@@ -62,6 +63,10 @@ interface Props {
 
   syncing: boolean;
   onSync: () => void;
+  // The library sync/update/reindex in flight or just finished, shown as a
+  // card at the sidebar's foot above any download card.
+  syncCard: SyncCardState | null;
+  onDismissSyncCard: () => void;
 }
 
 export function Sidebar({
@@ -77,6 +82,8 @@ export function Sidebar({
   onPickPerson,
   syncing,
   onSync,
+  syncCard,
+  onDismissSyncCard,
 }: Props) {
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -216,8 +223,19 @@ export function Sidebar({
         })}
       </nav>
 
-      {activeDownloads.length > 0 && (
-        <TransferCard jobs={activeDownloads} onOpen={() => onSelect("downloads")} />
+      {(syncCard || activeDownloads.length > 0) && (
+        <div className="flex shrink-0 flex-col gap-2 px-3 pb-3">
+          {syncCard && (
+            <SyncCard
+              card={syncCard}
+              onOpen={() => onSelect("settings")}
+              onDismiss={onDismissSyncCard}
+            />
+          )}
+          {activeDownloads.length > 0 && (
+            <TransferCard jobs={activeDownloads} onOpen={() => onSelect("downloads")} />
+          )}
+        </div>
       )}
     </aside>
   );

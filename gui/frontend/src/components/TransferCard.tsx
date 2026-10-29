@@ -41,7 +41,7 @@ export function TransferCard({
       onClick={onOpen}
       title="Open Downloads"
       style={{ ["--wails-draggable" as any]: "no-drag" }}
-      className="mx-3 mb-1 shrink-0 animate-fade-in rounded-xl border border-white/[0.06] bg-gradient-to-b from-white/[0.05] to-white/[0.015] p-3 text-left shadow-card transition-colors hover:border-white/[0.12]"
+      className="shrink-0 animate-fade-in rounded-xl border border-white/[0.06] bg-gradient-to-b from-white/[0.05] to-white/[0.015] p-3 text-left shadow-card transition-colors hover:border-white/[0.12]"
     >
       <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-accent-soft">
         <DownloadIcon width={12} height={12} />
