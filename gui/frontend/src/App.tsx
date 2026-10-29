@@ -22,6 +22,18 @@ import { Toasts, type Toast } from "./components/Toasts";
 import { Setup } from "./views/Setup";
 import { Settings } from "./views/Settings";
 import Select from "./components/Select";
+import { FilterMenu } from "./components/FilterMenu";
+
+// The content header's title for each grid.
+const TITLES: Record<Category, string> = {
+  movies: "Movies",
+  "tv-shows": "TV Shows",
+  "continue-watching": "Continue Watching",
+  "favorites-movies": "Favorite Movies",
+  "favorites-tv": "Favorite TV Shows",
+  "recently-added-movies": "New Movies",
+  "recently-added-tv": "New Episodes",
+};
 
 const EMPTY_MESSAGES: Partial<Record<NavKey, string>> = {
   movies: "No movies in your library yet.",
@@ -81,6 +93,14 @@ const SORT_DEFAULTS: Partial<Record<Category, SortPref>> = {
 };
 const FALLBACK_SORT: SortPref = { sortField: "title", desc: false };
 
+function defaultSortFor(cat: Category): SortPref {
+  return SORT_DEFAULTS[cat] ?? FALLBACK_SORT;
+}
+
+function sameSort(a: SortPref, b: SortPref): boolean {
+  return a.sortField === b.sortField && a.desc === b.desc;
+}
+
 function loadSortPrefs(): Partial<Record<Category, SortPref>> {
   try {
     return JSON.parse(localStorage.getItem(SORT_STORAGE_KEY) ?? "{}");
@@ -108,9 +128,10 @@ function searchSummary(query: string, count: number): string {
   return `${label} · ${results}`;
 }
 
-// Shared look for the sidebar's genre/sort controls.
+// Shared look for the filter menu's genre/sort controls.
 const CONTROL =
   "rounded-lg border border-white/10 bg-ink-700 px-2.5 py-1.5 text-sm text-white outline-none focus:border-accent/60";
+const MENU_LABEL = "text-[10px] font-semibold uppercase tracking-widest text-white/40";
 
 // One toast tag shared by every message of a library sync/update/reindex run,
 // so progress updates replace the toast in place instead of stacking.
@@ -219,7 +240,7 @@ export default function App() {
 
   const sortPrefFor = useCallback(
     (cat: Category): SortPref => {
-      const p = sortPrefs[cat] ?? SORT_DEFAULTS[cat] ?? FALLBACK_SORT;
+      const p = sortPrefs[cat] ?? defaultSortFor(cat);
       // Clamp a stale stored value (e.g. "rating" on a TV grid) so the select
       // and the backend stay in agreement.
       if (TV_CATEGORIES.includes(cat) && !TV_SORT_FIELDS.includes(p.sortField)) {
@@ -891,6 +912,12 @@ export default function App() {
     !showSearch && isCategory(active) && SORTABLE_CATEGORIES.includes(active) ? active : null;
   const sortPref = sortCategory ? sortPrefFor(sortCategory) : null;
   const sortIsTv = sortCategory !== null && TV_CATEGORIES.includes(sortCategory);
+  // Filters hiding titles from the current grid; the genre and hide-foreign
+  // filters only apply to movie grids.
+  const activeFilters = sortCategory && !sortIsTv ? (genre ? 1 : 0) + (hideForeign ? 1 : 0) : 0;
+  // Grids get a header (title, count, filter menu); the Downloads and
+  // Settings panels have their own headings.
+  const showHeader = showSearch || isCategory(active);
 
   return (
     <div className="flex h-full overflow-hidden bg-ink-900 text-white">
@@ -918,80 +945,120 @@ export default function App() {
         }
         syncing={!!indexing}
         onSync={() => startLibraryOp("sync")}
-        controls={
-          sortCategory &&
-          sortPref && (
-            <div className="space-y-2">
-              {!sortIsTv && (
-                <Select
-                  value={genre}
-                  onChange={setGenre}
-                  options={[
-                    { value: "", label: "All Genres" },
-                    ...movieGenres.map((g) => ({ value: g, label: g })),
-                  ]}
-                  className={`w-full ${CONTROL}`}
-                  title="Filter by genre"
-                />
-              )}
-              <div className="flex gap-2">
-                <Select<SortField>
-                  value={sortPref.sortField}
-                  onChange={(sortField) =>
-                    updateSortPref(sortCategory, { ...sortPref, sortField })
-                  }
-                  options={[
-                    { value: "title", label: "Title" },
-                    { value: "year", label: "Year" },
-                    { value: "added", label: "Date Added" },
-                    ...(sortIsTv
-                      ? []
-                      : [
-                          { value: "rating" as const, label: "Rating" },
-                          { value: "duration" as const, label: "Duration" },
-                        ]),
-                  ]}
-                  className={`min-w-0 flex-1 ${CONTROL}`}
-                  title="Sort by"
-                />
-                <button
-                  onClick={() =>
-                    updateSortPref(sortCategory, { ...sortPref, desc: !sortPref.desc })
-                  }
-                  className={`px-3 hover:border-accent/60 ${CONTROL}`}
-                  title={sortPref.desc ? "Descending" : "Ascending"}
-                >
-                  {sortPref.desc ? "↓" : "↑"}
-                </button>
-              </div>
-              {!sortIsTv && (
-                <label
-                  className="flex cursor-pointer select-none items-center gap-2 px-1 pt-0.5 text-sm text-white/70 hover:text-white"
-                  title="Hide foreign-language films"
-                >
-                  <input
-                    type="checkbox"
-                    checked={hideForeign}
-                    onChange={(e) => updateHideForeign(e.target.checked)}
-                    className="accent-accent"
-                  />
-                  Hide foreign
-                </label>
-              )}
-            </div>
-          )
-        }
       />
 
       <main className="relative flex min-w-0 flex-1 flex-col">
-        {/* With the title bar hidden on macOS and no top bar of our own, keep a
-            thin invisible strip along the top edge so the window can still be
-            dragged from there. It sits inside the grid's top padding. */}
-        {isMac && (
+        {/* With the title bar hidden on macOS, the grids' header doubles as
+            the window's drag handle. Downloads and Settings have no header,
+            so keep a thin invisible strip along the top edge there instead;
+            it sits inside the panel's top padding. */}
+        {isMac && !showHeader && (
           <div
             className="absolute inset-x-0 top-0 z-10 h-5"
             style={{ ["--wails-draggable" as any]: "drag" }}
           />
+        )}
+
+        {/* The grid's header: its title and count, and the filter/sort menu
+            for the grids that have one. It keeps clear of the detail drawer
+            like the grid below it. */}
+        {showHeader && (
+          <header
+            className="flex h-12 shrink-0 items-end gap-3 bg-ink-750 px-8"
+            style={{
+              ["--wails-draggable" as any]: "drag",
+              ...(drawerMedia ? { paddingRight: `calc(${DRAWER_WIDTH} + 2rem)` } : {}),
+            }}
+          >
+            <div className="flex min-w-0 flex-1 items-baseline gap-2.5">
+              <h1 className="truncate text-[15px] font-semibold tracking-tight text-white">
+                {showSearch || !isCategory(active) ? "Search Results" : TITLES[active]}
+              </h1>
+              {(showSearch || !loadingGrid) && (
+                <span className="shrink-0 text-xs tabular-nums text-white/40">
+                  {gridItems.length.toLocaleString()} {gridItems.length === 1 ? "title" : "titles"}
+                </span>
+              )}
+            </div>
+            {sortCategory && sortPref && (
+              <FilterMenu
+                label={sortIsTv ? "Sort" : "Filters"}
+                active={activeFilters}
+                canReset={activeFilters > 0 || !sameSort(sortPref, defaultSortFor(sortCategory))}
+                onReset={() => {
+                  setGenre("");
+                  updateHideForeign(false);
+                  updateSortPref(sortCategory, defaultSortFor(sortCategory));
+                }}
+              >
+                <div className="space-y-3">
+                  {!sortIsTv && (
+                    <div className="space-y-2">
+                      <div className={MENU_LABEL}>Filter</div>
+                      <Select
+                        value={genre}
+                        onChange={setGenre}
+                        options={[
+                          { value: "", label: "All Genres" },
+                          ...movieGenres.map((g) => ({ value: g, label: g })),
+                        ]}
+                        className={`w-full ${CONTROL}`}
+                        title="Filter by genre"
+                        aria-label="Genre"
+                      />
+                      <label
+                        className="flex cursor-pointer select-none items-center gap-2 px-1 py-1 text-sm text-white/70 hover:text-white"
+                        title="Hide foreign-language films"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={hideForeign}
+                          onChange={(e) => updateHideForeign(e.target.checked)}
+                          className="h-4 w-4 accent-accent"
+                        />
+                        Hide foreign
+                      </label>
+                    </div>
+                  )}
+                  <div className="space-y-2">
+                    <div className={MENU_LABEL}>Sort</div>
+                    <div className="flex gap-2">
+                      <Select<SortField>
+                        value={sortPref.sortField}
+                        onChange={(sortField) =>
+                          updateSortPref(sortCategory, { ...sortPref, sortField })
+                        }
+                        options={[
+                          { value: "title", label: "Title" },
+                          { value: "year", label: "Year" },
+                          { value: "added", label: "Date Added" },
+                          ...(sortIsTv
+                            ? []
+                            : [
+                                { value: "rating" as const, label: "Rating" },
+                                { value: "duration" as const, label: "Duration" },
+                              ]),
+                        ]}
+                        className={`min-w-0 flex-1 ${CONTROL}`}
+                        title="Sort by"
+                        aria-label="Sort by"
+                      />
+                      <button
+                        onClick={() =>
+                          updateSortPref(sortCategory, { ...sortPref, desc: !sortPref.desc })
+                        }
+                        className={`touch-target relative px-3 hover:border-accent/60 ${CONTROL}`}
+                        title={sortPref.desc ? "Descending" : "Ascending"}
+                        aria-label={sortPref.desc ? "Descending" : "Ascending"}
+                      >
+                        {sortPref.desc ? "↓" : "↑"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </FilterMenu>
+            )}
+          </header>
         )}
 
         {/* Content. The poster grid owns its own scroll (it's virtualized) and

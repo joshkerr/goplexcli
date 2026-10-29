@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef } from "react";
 import type { Category, DownloadProgress, Person } from "../lib/types";
 import { TransferCard } from "./TransferCard";
 import { isMac } from "../lib/api";
@@ -45,7 +45,7 @@ interface Props {
   onSelect: (key: NavKey) => void;
   downloadCount: number;
   // The active downloads, local and remote, newest first; while any run a
-  // card above the view controls shows the one in flight.
+  // card at the sidebar's foot shows the one in flight.
   activeDownloads: DownloadProgress[];
 
   query: string;
@@ -62,10 +62,6 @@ interface Props {
 
   syncing: boolean;
   onSync: () => void;
-
-  // Genre/sort controls for the current grid, pinned to the sidebar's foot.
-  // Null when the current view has nothing to filter or sort.
-  controls?: ReactNode;
 }
 
 export function Sidebar({
@@ -81,7 +77,6 @@ export function Sidebar({
   onPickPerson,
   syncing,
   onSync,
-  controls,
 }: Props) {
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -223,13 +218,6 @@ export function Sidebar({
 
       {activeDownloads.length > 0 && (
         <TransferCard jobs={activeDownloads} onOpen={() => onSelect("downloads")} />
-      )}
-
-      {controls && (
-        <div className="shrink-0 border-t border-white/5 px-3 pb-4">
-          <div className={GROUP_LABEL}>View</div>
-          {controls}
-        </div>
       )}
     </aside>
   );
